@@ -161,8 +161,8 @@ const (
 	kNoWord      // нет / no
 
 	// nav hints
-	kSummaryHint // enter/esc — меню · клик по фиксу — описание · l — язык
-	kWikiHint    // esc — назад · l — язык
+	kSummaryHint // enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык
+	kWikiHint    // esc — назад · ↑↓ — прокрутка · l — язык
 
 	// --- wiki page (phaseWiki) -------------------------------------------
 	kWikiWhat  // ЧТО ДЕЛАЕТ
@@ -273,8 +273,8 @@ var tr = map[Lang]map[stringKey]string{
 		kYesWord:      "да",
 		kNoWord:       "нет",
 
-		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · l — язык",
-		kWikiHint:    "esc — назад · l — язык",
+		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
+		kWikiHint:    "esc — назад · ↑↓ — прокрутка · l — язык",
 
 		kWikiWhat:  "ЧТО ДЕЛАЕТ",
 		kWikiWhy:   "ЗАЧЕМ",
@@ -381,8 +381,8 @@ var tr = map[Lang]map[stringKey]string{
 		kYesWord:      "yes",
 		kNoWord:       "no",
 
-		kSummaryHint: "enter/esc — menu · click a fix for details · l — lang",
-		kWikiHint:    "esc — back · l — lang",
+		kSummaryHint: "enter/esc — menu · click a fix for details · ↑↓ — scroll · l — lang",
+		kWikiHint:    "esc — back · ↑↓ — scroll · l — lang",
 
 		kWikiWhat:  "WHAT IT DOES",
 		kWikiWhy:   "WHY",
