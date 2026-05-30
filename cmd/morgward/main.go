@@ -41,7 +41,7 @@ Flags:
   --key          existing private key path (skips key generation)
   --mode         soft | strict (default soft)
   --admin-user   non-root sudo user to create/verify (default vpsadmin)
-  --log-dir      directory for run log + checkpoint + key (default .)
+  --log-file     write a full run log to this file (default: no file written)
   --assume-yes   proceed on a brownfield box without prompting
 
 Examples:
@@ -131,7 +131,6 @@ func bindFlags(fs *flag.FlagSet, cfg *config.Config, modeStr *string) {
 	fs.StringVar(&cfg.KeyPath, "key", "", "existing private key path (skips key generation)")
 	fs.StringVar(modeStr, "mode", "soft", "hardening mode: soft | strict")
 	fs.StringVar(&cfg.AdminUser, "admin-user", "vpsadmin", "non-root sudo user to create/verify")
-	fs.StringVar(&cfg.LogDir, "log-dir", ".", "directory for run log + checkpoint")
 	fs.StringVar(&cfg.LogFile, "log-file", "", "write a full run log to this file (default: no file written)")
 	fs.BoolVar(&cfg.Assume, "assume-yes", false, "proceed on a brownfield box without prompting")
 }

@@ -615,13 +615,6 @@ func writeInventory(inv string) string {
 	return fmt.Sprintf("echo '%s' | base64 -d > /root/vps-inventory.md\n", b64)
 }
 
-func dirOf(d string) string {
-	if d == "" {
-		return "."
-	}
-	return d
-}
-
 // engineLang normalizes cfg.Lang into "ru" | "en", defaulting to "ru" (the CLI
 // leaves Lang empty; the TUI sets it from its active language). It is the single
 // language source for engine-streamed user-facing text, so the CLI and TUI share
@@ -655,17 +648,4 @@ func emitAuthHint(log *ui.Logger, cfg *config.Config, err error) {
 	log.Detail("  переподключитесь админ-пользователем %q с ключом, который показал morgward (передайте его через --key или сохраните PEM с экрана ключа / из вывода CLI).", admin)
 	log.Detail("Иначе проверьте хост/порт/пользователя/ключ либо включите вход по паролю / задайте пароль root в панели провайдера.")
 	log.Detail("исходная ошибка: %v", err)
-}
-
-func sanitize(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
-			out = append(out, c)
-		} else {
-			out = append(out, '_')
-		}
-	}
-	return string(out)
 }

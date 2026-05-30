@@ -85,14 +85,14 @@ const (
 	kVerifyTag // "verify" in the summary line
 
 	// loud "SSH password auth will be OFF" warning, shown pre-run (first log lines)
-	// and post-run (finished tail) in STRICT mode. kPwOffLogin carries two %s: the
-	// key path and the "user@host" login target.
+	// and post-run (finished tail) in STRICT mode. The key lives only in memory and
+	// is shown on the key screen — these strings reference no on-disk path.
 	kPwOffWarn  // strict header: "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН."
-	kPwOffLogin // strict body:   "После харденинга подключайтесь так:  ssh -i %s %s"
+	kPwOffLogin // strict body:   "пароль root отключён — подключайся сгенерированным ключом ..."
 
 	// soft-mode info: password login STAYS ON; a key is also generated so either
-	// works. kPwOnInfo carries two %s: the key path and the "user@host" login target.
-	kPwOnInfo // soft body: "вход по SSH: пароль ИЛИ ключ (ssh -i %s %s)"
+	// works.
+	kPwOnInfo // soft body: "вход по SSH: пароль ИЛИ сгенерированный ключ ..."
 
 	// finished tail (rendered below the viewport from m.lang each frame)
 	kFinishedOK
@@ -218,8 +218,8 @@ var tr = map[Lang]map[stringKey]string{
 		kVerifyTag: "проверка",
 
 		kPwOffWarn:  "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН (ключ обязателен).",
-		kPwOffLogin: "После харденинга подключайтесь так:  ssh -i %s %s",
-		kPwOnInfo:   "вход по SSH: пароль ИЛИ ключ (ssh -i %s %s)",
+		kPwOffLogin: "пароль root отключён — подключайся сгенерированным ключом (скопируй его на экране ключа)",
+		kPwOnInfo:   "вход по SSH: пароль ИЛИ сгенерированный ключ (скопируй его на экране ключа)",
 
 		kFinishedOK:  "запуск завершён",
 		kFinishedErr: "завершено с ошибкой: ",
@@ -326,8 +326,8 @@ var tr = map[Lang]map[stringKey]string{
 		kVerifyTag: "verify",
 
 		kPwOffWarn:  "⚠ WARNING: SSH password login will be DISABLED (key required).",
-		kPwOffLogin: "After hardening, connect like this:  ssh -i %s %s",
-		kPwOnInfo:   "SSH login: password OR key (ssh -i %s %s)",
+		kPwOffLogin: "root password disabled — connect with the generated key (copy it on the key screen)",
+		kPwOnInfo:   "SSH login: password OR the generated key (copy it on the key screen)",
 
 		kFinishedOK:  "run finished",
 		kFinishedErr: "finished with error: ",

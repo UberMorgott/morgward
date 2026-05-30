@@ -9,7 +9,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +29,6 @@ import (
 
 const (
 	defaultAdminUser = "vpsadmin"
-	defaultLogDir    = "runs"
 )
 
 var (
@@ -763,7 +761,6 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
 		Mode:      m.mode,
 		AdminUser: defaultAdminUser,
-		LogDir:    defaultLogDir,
 		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
 		Lang:      m.langCode(), // engine-streamed messages follow the active UI language
 	}
@@ -1896,45 +1893,17 @@ func (m model) finishedTail() string {
 	return tail
 }
 
-// pwOffWarning builds the localized SSH-login notice with the REAL admin user,
-// host, and generated key path substituted. Shared by the pre-run content (start)
-// and the post-run finished tail. MODE-AWARE: strict shows the loud two-line
-// "password login is now OFF, log in with the key" notice; soft shows a single
-// info line — password login STAYS ON, and a key is also generated so either works.
+// pwOffWarning builds the localized SSH-login notice. Shared by the pre-run
+// content (start) and the post-run finished tail. MODE-AWARE: strict shows the
+// loud two-line "password login is now OFF, connect with the generated key"
+// notice; soft shows a single info line — password login STAYS ON, and a key is
+// also generated so either works. The key lives only in memory and is shown on
+// the key screen; there is no on-disk path to reference.
 func (m model) pwOffWarning() string {
-	host := strings.TrimSpace(m.inputs[fHost].Value())
-	login := defaultAdminUser + "@" + host // AdminUser is fixed to vpsadmin at start()
-	keyPath := keyFileName(defaultLogDir, host)
 	if m.mode == config.ModeStrict {
-		return t(m.lang, kPwOffWarn) + "\n" +
-			fmt.Sprintf(t(m.lang, kPwOffLogin), keyPath, login)
+		return t(m.lang, kPwOffWarn) + "\n" + t(m.lang, kPwOffLogin)
 	}
-	return fmt.Sprintf(t(m.lang, kPwOnInfo), keyPath, login)
-}
-
-// keyFileName reproduces the SAME path the engine generates the bootstrap key at
-// (id_ed25519_<sanitized host> under logDir), using the identical sanitize rules,
-// so the warning points at the real on-disk file rather than a guessed name.
-func keyFileName(logDir, host string) string {
-	if logDir == "" {
-		logDir = "."
-	}
-	return filepath.Join(logDir, "id_ed25519_"+sanitizeHost(host))
-}
-
-// sanitizeHost mirrors engine.sanitize: keep [A-Za-z0-9-], replace every other
-// byte with '_'. Kept in sync so the displayed key path matches the generated one.
-func sanitizeHost(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
-			out = append(out, c)
-		} else {
-			out = append(out, '_')
-		}
-	}
-	return string(out)
+	return t(m.lang, kPwOnInfo)
 }
 
 // finishedTailRows is the number of content rows finishedTail occupies; runView
