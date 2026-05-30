@@ -31,11 +31,35 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	ctx.Log.Detail("pre-reboot gate: %s", firstLine(g.Stdout))
 
 	// Full upgrade.
+	//
+	// stdbuf on apt-get keeps apt's own progress line-buffered so it streams live.
+	// But stdbuf works via LD_PRELOAD=libstdbuf.so (+ _STDBUF_*), which apt would
+	// otherwise leak into every child it spawns (dpkg → maintainer postinst →
+	// update-initramfs / dracut). On rust-coreutils (uutils) boxes those children
+	// can't resolve libstdbuf.so in their context, so ld.so spams a harmless but
+	// alarming "object '…/libstdbuf.so' from LD_PRELOAD cannot be preloaded …
+	// ignored" for the whole upgrade.
+	//
+	// Fix: keep stdbuf on apt-get, but point apt at a tiny dpkg wrapper via
+	// Dir::Bin::dpkg (apt.conf: the location of the dpkg program apt execs — the
+	// same args, --status-fd/--configure/--unpack/…, are forwarded). The wrapper
+	// scrubs the stdbuf env vars before exec'ing the real dpkg, so dpkg and all
+	// maintainer scripts run without LD_PRELOAD → no spam. The wrapper lives in
+	// /usr/local/sbin (root-owned, exec-allowed) — never /tmp, which a hardened box
+	// may mount noexec. The earlier `apt-get update` keeps plain stdbuf: it spawns
+	// no postinst triggers, so it has no children to leak into.
+	const dpkgWrapper = "/usr/local/sbin/morgward-dpkg"
+	wrapperBody := "#!/bin/sh\n" +
+		`exec env -u LD_PRELOAD -u _STDBUF_O -u _STDBUF_E -u _STDBUF_I /usr/bin/dpkg "$@"` + "\n"
+
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
 	up := ctx.Cli.Sudo(`export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
-stdbuf -oL -eL apt-get update
-stdbuf -oL -eL apt-get full-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"`)
+` + putFile(dpkgWrapper, wrapperBody, "0755") + `stdbuf -oL -eL apt-get update
+stdbuf -oL -eL apt-get full-upgrade -y -o Dir::Bin::dpkg=` + dpkgWrapper + ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+__rc=$?
+rm -f ` + dpkgWrapper + `
+exit $__rc`)
 	if up.RC != 0 {
 		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
 	}
