@@ -52,6 +52,13 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	wrapperBody := "#!/bin/sh\n" +
 		`exec env -u LD_PRELOAD -u _STDBUF_O -u _STDBUF_E -u _STDBUF_I /usr/bin/dpkg "$@"` + "\n"
 
+	// Count the packages a full-upgrade WOULD install/upgrade, BEFORE running it
+	// (simulation; heredoc-free). `apt-get -s full-upgrade` lists each change as an
+	// "Inst <pkg> ..." line, so a grep -c is the upgrade count. Best-effort: a parse
+	// miss just yields an empty marker, which the engine treats as 0.
+	upCount := ctx.Cli.Sudo(
+		"DEBIAN_FRONTEND=noninteractive apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst' || echo 0").Out()
+
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
 	up := ctx.Cli.Sudo(`export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -88,7 +95,8 @@ exit $__rc`)
 	if fwOK != "ok" {
 		return StatusFail, "firewall not loaded after reboot (boot default-ACCEPT?)", fmt.Errorf("post-reboot firewall missing")
 	}
-	return StatusOK, fmt.Sprintf("rebooted (new boot_id %s, system %s), firewall reloaded", short(newID), health), nil
+	return StatusOK, fmt.Sprintf("rebooted (new boot_id %s, system %s), firewall reloaded UPGRADED_COUNT=%s",
+		short(newID), health, upCount), nil
 }
 
 func short(s string) string {

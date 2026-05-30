@@ -22,7 +22,10 @@ import (
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
+	"github.com/UberMorgott/morgward/internal/stats"
+	"github.com/UberMorgott/morgward/internal/steps"
 	"github.com/UberMorgott/morgward/internal/version"
+	"github.com/UberMorgott/morgward/internal/wiki"
 )
 
 const (
@@ -56,6 +59,8 @@ type phase int
 const (
 	phaseForm phase = iota
 	phaseRun
+	phaseSummary // post-finish stats summary + clickable fix list
+	phaseWiki    // a single fix's what/why/risk description
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -210,6 +215,11 @@ type model struct {
 	haveSummary  bool
 	progCh       chan engine.Progress
 
+	// wiki navigation: which step's description is shown (phaseWiki) and which
+	// phase to return to on esc (phaseSummary).
+	wikiStep   string
+	wikiReturn phase
+
 	finalErr error
 	finished bool
 	host     string    // target host, stashed at start() for window-title updates
@@ -318,12 +328,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.phase == phaseForm {
+		switch m.phase {
+		case phaseForm:
 			return m.formClick(mc.X, mc.Y)
-		}
-		// Run phase: only the "Back to main" button is clickable (when finished).
-		if m.backToMainAtClick(mc.X, mc.Y) {
-			return m.goBack()
+		case phaseSummary:
+			// A click on a fix row opens its wiki description.
+			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
+				m.wikiStep = id
+				m.wikiReturn = phaseSummary
+				m.phase = phaseWiki
+			}
+			return m, nil
+		case phaseRun:
+			// Only the "Back to main" button is clickable (when finished); it opens
+			// the summary the same way enter/esc does.
+			if m.backToMainAtClick(mc.X, mc.Y) {
+				if m.finished && m.haveSummary {
+					m.phase = phaseSummary
+					return m, nil
+				}
+				return m.goBack()
+			}
 		}
 		return m, nil
 
@@ -355,16 +380,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.phase == phaseForm {
 			return m.updateForm(msg)
 		}
-		// run/done phase
-		switch msg.String() {
-		case "ctrl+c", "q":
+		// ctrl+c / q quit on every post-form screen.
+		if s := msg.String(); s == "ctrl+c" || s == "q" {
 			m.stopSampler()
 			return m, tea.Quit
-		case "enter":
-			if m.finished {
+		}
+		switch m.phase {
+		case phaseWiki:
+			// Any "back" key returns to wherever the wiki was opened from (summary).
+			switch msg.String() {
+			case "enter", "esc", "b":
+				m.phase = m.wikiReturn
+			}
+			return m, nil
+		case phaseSummary:
+			// On the summary, "back" returns to the form/menu (stops the sampler).
+			switch msg.String() {
+			case "enter", "esc", "b":
 				return m.goBack()
 			}
-		case "esc", "b":
+			return m, nil
+		}
+		// run/done phase
+		switch msg.String() {
+		case "enter", "esc", "b":
+			// First advance from a FINISHED run opens the stats summary (the sampler
+			// keeps living so the monitor footer stays alive on the summary screen).
+			if m.finished && m.haveSummary {
+				m.phase = phaseSummary
+				return m, nil
+			}
 			if m.finished {
 				return m.goBack()
 			}
@@ -870,10 +915,16 @@ func (m model) windowTitle() string {
 // local strings.Builder), dispatching by phase. The clickable RU/EN switcher is
 // overlaid on the first content line by both branches via switcherLine.
 func (m model) viewString() string {
-	if m.phase == phaseRun {
+	switch m.phase {
+	case phaseRun:
 		return m.runView()
+	case phaseSummary:
+		return m.summaryView()
+	case phaseWiki:
+		return m.wikiView()
+	default:
+		return m.formView()
 	}
-	return m.formView()
 }
 
 // --- RU/EN language switcher ---------------------------------------------
@@ -1366,14 +1417,433 @@ func (m model) runView() string {
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')
 
-	// --- MONITOR BOX (bottom-most) ---
+	// --- MONITOR BOX (bottom-most) --- shared with the summary + wiki screens.
+	sb.WriteString(m.monitorBox(innerW))
+
+	return sb.String()
+}
+
+// monitorBox renders the bottom-most live monitor box (title + the full-width
+// CPU/RAM/DISK footer): top border, one content line, bottom border. Shared by the
+// run, summary, and wiki screens (every post-connect screen keeps the footer alive).
+// No trailing newline — it is the last block on the screen.
+func (m model) monitorBox(innerW int) string {
+	bw := m.boxWidth()
+	b := lipgloss.RoundedBorder()
+	var sb strings.Builder
 	sb.WriteString(titledTop(b, t(m.lang, kMonTitle), bw))
 	sb.WriteByte('\n')
 	sb.WriteString(contentLine(b, m.renderMonitor(innerW), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-
 	return sb.String()
+}
+
+// summaryBodyTopRow is the 0-based screen Y of the FIRST summary body line:
+// top border (row 0) + switcher (row 1) → body starts at row 2. Mirrors
+// formBodyTopRow; the fix-list hit-test derives each fix row's Y from this.
+const summaryBodyTopRow = 2
+
+// fixRowStyle renders a clickable fix-list row; a small status glyph + "[ID] title".
+var (
+	sumHeadStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true) // section headers
+	sumOKStyle   = monGreenStyle                                                    // OK glyph
+	sumFailStyle = monRedStyle                                                      // FAIL glyph
+	sumSkipStyle = monYellowStyle                                                   // SKIP glyph
+)
+
+// humanKB64 renders an int64 KB value via the float helper (engine snapshots use
+// int64; the monitor footer uses float64). Empty string when total is unknown is
+// handled by the caller — this always returns a value.
+func humanKB64(kb int64) string { return humanKB(float64(kb)) }
+
+// sumDelta renders "label  before → after" with the same suppression rules as the
+// engine's formatDelta: arrow only when both sides are known and differ; lone value
+// when one side is empty; "" when both are empty so the caller skips the row.
+func sumDelta(label, before, after string) string {
+	switch {
+	case before == "" && after == "":
+		return ""
+	case before == "":
+		return fmt.Sprintf("  %s  %s", label, after)
+	case after == "":
+		return fmt.Sprintf("  %s  %s", label, before)
+	case before == after:
+		return fmt.Sprintf("  %s  %s", label, before)
+	default:
+		return fmt.Sprintf("  %s  %s → %s", label, before, after)
+	}
+}
+
+// summaryHeader builds the localized one-line tally:
+// "applied X/Y · N skipped · N failed · reboots N · verify P/T".
+func (m model) summaryHeader() string {
+	s := m.summary
+	verifyTotal := s.VerifyPassed + s.VerifyFailed
+	return fmt.Sprintf("%s · %s · %s · %s · %s",
+		fmt.Sprintf(t(m.lang, kSumApplied), s.Applied(), s.Total()),
+		fmt.Sprintf(t(m.lang, kSumSkipped), s.Skip),
+		fmt.Sprintf(t(m.lang, kSumFailed), s.Fail),
+		fmt.Sprintf(t(m.lang, kSumReboots), s.Reboots),
+		fmt.Sprintf(t(m.lang, kSumVerify), s.VerifyPassed, verifyTotal),
+	)
+}
+
+// boolWordL renders a posture bool as the localized yes/no token.
+func (m model) boolWordL(v bool) string {
+	if v {
+		return t(m.lang, kYesWord)
+	}
+	return t(m.lang, kNoWord)
+}
+
+// summaryStatLines builds the four before/after metric blocks (packages/kernel,
+// disk/memory, network, security). Both snapshots may be nil — when both are nil
+// it returns nil so summaryView shows only the header + fix list. Mirrors the
+// engine's statsLines suppression: rows with unknown data are dropped.
+func (m model) summaryStatLines() []string {
+	s := m.summary
+	if s.Before == nil && s.After == nil {
+		return nil
+	}
+	b, a := s.Before, s.After
+	empty := stats0()
+	if b == nil {
+		b = empty
+	}
+	if a == nil {
+		a = empty
+	}
+
+	var out []string
+	add := func(line string) {
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	head := func(k stringKey) { out = append(out, sumHeadStyle.Render(t(m.lang, k))) }
+
+	// ПАКЕТЫ И ЯДРО.
+	head(kSecPkgKernel)
+	if s.UpgradedPkgs > 0 {
+		add(fmt.Sprintf("  %s  %d", t(m.lang, kRowUpgraded), s.UpgradedPkgs))
+	}
+	add(sumDelta(t(m.lang, kRowKernel), b.KernelVer, a.KernelVer))
+	if s.PurgedPkgs > 0 {
+		add(fmt.Sprintf("  %s  %d", t(m.lang, kRowPurged), s.PurgedPkgs))
+	}
+
+	// ДИСК И ПАМЯТЬ.
+	head(kSecDiskMem)
+	add(sumDelta(t(m.lang, kRowDiskUsed), sumDiskStr(b), sumDiskStr(a)))
+	if !b.ZramActive && a.ZramActive {
+		add(fmt.Sprintf("  %s  %s", t(m.lang, kRowZram), t(m.lang, kZramAdded)))
+	}
+
+	// СЕТЬ (whole block dropped when there is no speed/ping data on either side).
+	var net []string
+	if b.SpeedMBs > 0 || a.SpeedMBs > 0 {
+		if l := sumDelta(t(m.lang, kRowSpeed), sumSpeedStr(b.SpeedMBs), sumSpeedStr(a.SpeedMBs)); l != "" {
+			net = append(net, l)
+		}
+	}
+	if b.PingMs > 0 || a.PingMs > 0 {
+		if l := sumDelta(t(m.lang, kRowPing), sumSpeedStr(b.PingMs), sumSpeedStr(a.PingMs)); l != "" {
+			net = append(net, l)
+		}
+	}
+	if len(net) > 0 {
+		head(kSecNetwork)
+		out = append(out, net...)
+	}
+
+	// БЕЗОПАСНОСТЬ.
+	head(kSecSecurity)
+	add(sumDelta(t(m.lang, kRowPorts), sumPortsStr(b.OpenPorts), sumPortsStr(a.OpenPorts)))
+	add(sumDelta(t(m.lang, kRowRootLogin), b.RootLogin, a.RootLogin))
+	add(sumDelta(t(m.lang, kRowKeyOnly), m.boolWordL(b.KeyOnly), m.boolWordL(a.KeyOnly)))
+	add(sumDelta(t(m.lang, kRowFirewall), m.boolWordL(b.FirewallActive), m.boolWordL(a.FirewallActive)))
+	add(sumDelta(t(m.lang, kRowFail2ban), m.boolWordL(b.Fail2banActive), m.boolWordL(a.Fail2banActive)))
+
+	return out
+}
+
+// fixListLines builds one rendered line per applied fix in m.summary.Results order:
+// "<glyph> [ID] <localized title>". The slice index equals the fix's index in
+// Results, so fixAtClick can recover each row's Y deterministically.
+func (m model) fixListLines() []string {
+	out := make([]string, 0, len(m.summary.Results))
+	for _, r := range m.summary.Results {
+		out = append(out, "  "+fixGlyph(r.Status)+" "+m.fixRowText(r))
+	}
+	return out
+}
+
+// fixRowText is the (unstyled-glyph) "[ID] title" portion of a fix row: the wiki
+// doc title when present, else the localized short step title, else the engine Title.
+func (m model) fixRowText(r engine.StepResult) string {
+	var title string
+	if d, ok := wiki.Doc(wiki.Lang(int(m.lang)), r.ID); ok && d.Title != "" {
+		title = d.Title
+	} else {
+		title = localStepTitle(m.lang, r.ID, r.Title)
+	}
+	return fmt.Sprintf("[%s] %s", r.ID, title)
+}
+
+// fixGlyph returns a small colored status marker for a fix row.
+func fixGlyph(st steps.Status) string {
+	switch st {
+	case steps.StatusOK:
+		return sumOKStyle.Render("✓")
+	case steps.StatusFail:
+		return sumFailStyle.Render("✗")
+	case steps.StatusSkip:
+		return sumSkipStyle.Render("∅")
+	default:
+		return " "
+	}
+}
+
+// summaryView renders the post-finish stats summary + clickable fix list inside the
+// same bordered frame as runView. Layout (0-based screen rows):
+//
+//	row 0                 : main box top border
+//	row 1                 : RU/EN switcher
+//	rows 2..              : header, blank, stat blocks, blank, fix-list header,
+//	                        then one clickable row per fix (fixListBaseRow + i)
+//	...                   : pad, hint, bottom border, then the monitor box
+//
+// It renders directly (no viewport) so each fix row's screen Y is fixed by its slice
+// index — the hit-test in fixAtClick reproduces it exactly. The body is clamped to
+// the available height so it never overruns the monitor footer.
+func (m model) summaryView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.summaryBodyLines() // header + blocks + fix-list header + fix rows
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	// Budget: chrome rows reserved for the main box bottom + hint + monitor box.
+	// main box: hint(1) + bottom(1); monitor box: top(1) + content(1) + bottom(1).
+	// Already emitted: top(1) + switcher(1). So body+pad must fill h-2-2-3 rows.
+	avail := maxi(m.h-2-2-3, len(body))
+	lines := body
+	if len(lines) > avail {
+		lines = lines[:avail] // clamp (only on a very short terminal)
+	}
+	for _, ln := range lines {
+		sb.WriteString(contentLine(b, ln, innerW))
+		sb.WriteByte('\n')
+	}
+	for range maxi(avail-len(lines), 0) {
+		sb.WriteString(contentLine(b, "", innerW))
+		sb.WriteByte('\n')
+	}
+
+	// Hint + main box bottom border.
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kSummaryHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+
+	// Monitor box (kept alive — sampler still running on the summary screen).
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// summaryBodyLines builds the ordered body line slice (the single source of truth
+// for BOTH summaryView's render and fixAtClick's geometry): header, blank, stat
+// blocks (possibly empty), blank, fix-list header, then one row per fix.
+func (m model) summaryBodyLines() []string {
+	var body []string
+	body = append(body, m.summaryHeader())
+	if blocks := m.summaryStatLines(); len(blocks) > 0 {
+		body = append(body, "")
+		body = append(body, blocks...)
+	}
+	if len(m.summary.Results) > 0 {
+		body = append(body, "")
+		body = append(body, sumHeadStyle.Render(t(m.lang, kSecFixes)))
+		body = append(body, m.fixListLines()...)
+	}
+	return body
+}
+
+// fixListBaseRow is the 0-based screen Y of the FIRST fix row. It equals
+// summaryBodyTopRow plus the count of body lines that precede the fix rows (header +
+// stat blocks + their blanks + the fix-list section header), so it tracks layout
+// changes automatically rather than hard-coding an offset.
+func (m model) fixListBaseRow() int {
+	body := m.summaryBodyLines()
+	return summaryBodyTopRow + (len(body) - len(m.summary.Results))
+}
+
+// fixAtClick maps a click at (x,y) to a fix-list row's step ID. Rows render with no
+// scroll (summaryView is non-viewport), so row i is at screen Y = fixListBaseRow + i;
+// X must fall within the rendered row width. Returns ok=false on a miss.
+func (m model) fixAtClick(x, y int) (string, bool) {
+	if m.phase != phaseSummary || len(m.summary.Results) == 0 {
+		return "", false
+	}
+	base := m.fixListBaseRow()
+	idx := y - base
+	if idx < 0 || idx >= len(m.summary.Results) {
+		return "", false
+	}
+	// Clamp against the body so a click below the (possibly height-clamped) list
+	// can't resolve to an off-screen row.
+	if base+idx >= summaryBodyTopRow+maxi(m.h-2-2-3, len(m.summaryBodyLines())) {
+		return "", false
+	}
+	const contentX0 = 2 // borderLeft(1) + space(1)
+	row := "  " + fixGlyph(m.summary.Results[idx].Status) + " " + m.fixRowText(m.summary.Results[idx])
+	w := lipgloss.Width(truncDisplay(row, innerWidth(m.boxWidth())))
+	if x >= contentX0 && x < contentX0+w {
+		return m.summary.Results[idx].ID, true
+	}
+	return "", false
+}
+
+// stats0 returns a pointer to a zero Snapshot, used when one side is nil so the
+// delta helpers see "unknown" rather than dereferencing nil.
+func stats0() *stats.Snapshot { return &stats.Snapshot{} }
+
+func sumDiskStr(s *stats.Snapshot) string {
+	if s.DiskTotalKB <= 0 {
+		return ""
+	}
+	return humanKB64(s.DiskUsedKB) + "/" + humanKB64(s.DiskTotalKB)
+}
+
+func sumSpeedStr(v float64) string {
+	if v <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(v, 'f', 1, 64)
+}
+
+func sumPortsStr(p []string) string {
+	if len(p) == 0 {
+		return ""
+	}
+	return strconv.Itoa(len(p))
+}
+
+// wrap word-wraps s to at most w display cells per line (lipgloss.Width-aware so
+// multibyte Cyrillic wraps correctly), returning the lines. A single word longer
+// than w is hard-split. w<1 yields a single (unwrapped) line.
+func wrap(s string, w int) []string {
+	if w < 1 {
+		return []string{s}
+	}
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		cur := ""
+		for _, word := range words {
+			// Hard-split a word that alone exceeds the width.
+			for lipgloss.Width(word) > w {
+				head := truncDisplay(word, w)
+				if cur != "" {
+					lines = append(lines, cur)
+					cur = ""
+				}
+				lines = append(lines, head)
+				word = word[len(head):]
+			}
+			switch {
+			case cur == "":
+				cur = word
+			case lipgloss.Width(cur)+1+lipgloss.Width(word) <= w:
+				cur += " " + word
+			default:
+				lines = append(lines, cur)
+				cur = word
+			}
+		}
+		if cur != "" {
+			lines = append(lines, cur)
+		}
+	}
+	return lines
+}
+
+// wikiView renders one fix's what/why/risk description inside the run frame: a
+// "[ID] Title" header, then three word-wrapped labeled blocks (WHAT IT DOES / WHY /
+// WITHOUT IT). On an unknown step it shows the localized no-description line. The
+// monitor footer stays alive (sampler still running). Text reads m.lang every frame,
+// so the RU|EN toggle re-renders the description in the other language.
+func (m model) wikiView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.wikiBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	// Same vertical budget as summaryView: reserve hint(1)+bottom(1) for the main
+	// box and the 3-row monitor box below it.
+	avail := maxi(m.h-2-2-3, len(body))
+	lines := body
+	if len(lines) > avail {
+		lines = lines[:avail]
+	}
+	for _, ln := range lines {
+		sb.WriteString(contentLine(b, ln, innerW))
+		sb.WriteByte('\n')
+	}
+	for range maxi(avail-len(lines), 0) {
+		sb.WriteString(contentLine(b, "", innerW))
+		sb.WriteByte('\n')
+	}
+
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// wikiBodyLines builds the wiki page body: the "[ID] Title" header then the three
+// labeled, word-wrapped blocks. Falls back to the localized no-description line when
+// the step has no wiki entry.
+func (m model) wikiBodyLines(innerW int) []string {
+	doc, ok := wiki.Doc(wiki.Lang(int(m.lang)), m.wikiStep)
+	if !ok {
+		return []string{sumHeadStyle.Render("[" + m.wikiStep + "]"), "", t(m.lang, kWikiNoDoc)}
+	}
+	var body []string
+	body = append(body, sumHeadStyle.Render(fmt.Sprintf("[%s] %s", m.wikiStep, doc.Title)))
+
+	block := func(labelKey stringKey, text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		body = append(body, "")
+		body = append(body, monLabelStyle.Render(t(m.lang, labelKey)))
+		body = append(body, wrap(text, innerW)...)
+	}
+	block(kWikiWhat, doc.What)
+	block(kWikiWhy, doc.Why)
+	block(kWikiRisk, doc.RiskWithout)
+	return body
 }
 
 // finishedTail returns the localized completion banner shown below the viewport
@@ -1693,13 +2163,12 @@ func (m model) renderMonitor(width int) string {
 		pairKB(s.DiskUsedKB, s.DiskTotalKB),
 	}
 
-	const (
-		maxBars = 28 // wide bars: let them absorb most of the row
-		minBars = 3
-	)
-	// Try the richest layout first (with extras, widest bars), then drop extras, then
-	// shrink the bars. For each candidate, sum the FIXED (non-bar) cells of all three
-	// segments plus the two separators; the bars get whatever is left, split evenly.
+	const minBars = 3
+	// Try the richest layout first (with extras), then drop extras if too tight. For
+	// each candidate, sum the FIXED (non-bar) cells of all three segments plus the two
+	// separators; the bars consume ALL the remaining width so the row spans edge to
+	// edge. The remainder of the even split is handed to the leftmost segments (one
+	// extra cell each) so the total exactly fills width with no trailing void.
 	for _, withExtra := range []bool{true, false} {
 		fixed := 2 * monSepCells // the two " │ " separators
 		for i := range labels {
@@ -1713,15 +2182,17 @@ func (m model) renderMonitor(width int) string {
 		if barBudget < len(labels)*minBars {
 			continue // not even minimum bars fit at this richness — go leaner
 		}
-		bars := barBudget / len(labels)
-		if bars > maxBars {
-			bars = maxBars
-		}
+		base := barBudget / len(labels)
+		rem := barBudget % len(labels) // distribute leftover cells across segments
 		segs := make([]string, len(labels))
 		for i := range labels {
 			ex := ""
 			if withExtra {
 				ex = extras[i]
+			}
+			bars := base
+			if i < rem {
+				bars++ // leftmost segments absorb the remainder so the row fills width
 			}
 			segs[i] = monitorSeg(labels[i], pcts[i], bars, ex)
 		}
