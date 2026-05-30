@@ -173,13 +173,14 @@ const (
 	// --- SSH key screen (phaseKey) ---------------------------------------
 	// The generated private key lives ONLY in memory; this screen is the one
 	// place it is shown so the operator can copy it before it is lost.
-	kKeyTitle    // box title: "SSH key access"
-	kKeyWarn     // loud warning: the key is saved nowhere — copy it now
-	kKeyConnHint // label before the ssh command (the command is built in code)
-	kKeyCopyBtn  // clickable button label: "Copy key"
-	kKeyCopied   // status after a successful clipboard copy: "✓ copied"
-	kKeyCopyFail // status after a failed copy: "copy failed — select manually"
-	kKeyHint     // bottom control hint for the key screen
+	kKeyTitle      // box title: "SSH key access"
+	kKeyWarnSoft   // soft mode: password login is KEPT — the key is an optional extra
+	kKeyWarnStrict // strict mode: root password locked, key-only — copy it now or lose access
+	kKeyConnHint   // label before the ssh command (the command is built in code)
+	kKeyCopyBtn    // clickable button label: "Copy key"
+	kKeyCopied     // status after a successful clipboard copy: "✓ copied"
+	kKeyCopyFail   // status after a failed copy: "copy failed — select manually"
+	kKeyHint       // bottom control hint for the key screen
 
 	// --- main-menu "Save log to file" toggle -----------------------------
 	kSaveLogLabel // form toggle label: "Save log to file"
@@ -297,13 +298,14 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiRisk:  "БЕЗ ЭТОГО",
 		kWikiNoDoc: "нет описания для этого шага",
 
-		kKeyTitle:    "Доступ по SSH-ключу",
-		kKeyWarn:     "Ключ нигде не сохранён. Скопируй сейчас — иначе потеряешь доступ к серверу.",
-		kKeyConnHint: "Подключение:",
-		kKeyCopyBtn:  "Скопировать ключ",
-		kKeyCopied:   "✓ скопировано",
-		kKeyCopyFail: "не удалось скопировать — выдели вручную",
-		kKeyHint:     "esc — назад · c — копировать · l — язык",
+		kKeyTitle:      "Доступ по SSH-ключу",
+		kKeyWarnSoft:   "Режим новичка: вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
+		kKeyWarnStrict: "Режим профессионала: пароль root заблокирован, вход на сервер ТОЛЬКО по этому ключу. Скопируй его сейчас — иначе потеряешь доступ к серверу.",
+		kKeyConnHint:   "Подключение:",
+		kKeyCopyBtn:    "Скопировать ключ",
+		kKeyCopied:     "✓ скопировано",
+		kKeyCopyFail:   "не удалось скопировать — выдели вручную",
+		kKeyHint:       "esc — назад · c — копировать · l — язык",
 
 		kSaveLogLabel: "Сохранять лог в файл",
 		kSaveLogOn:    "да",
@@ -417,13 +419,14 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiRisk:  "WITHOUT IT",
 		kWikiNoDoc: "no description for this step",
 
-		kKeyTitle:    "SSH key access",
-		kKeyWarn:     "This key is saved nowhere. Copy it now — otherwise you will lose access to the server.",
-		kKeyConnHint: "Connect:",
-		kKeyCopyBtn:  "Copy key",
-		kKeyCopied:   "✓ copied",
-		kKeyCopyFail: "copy failed — select manually",
-		kKeyHint:     "esc — back · c — copy · l — lang",
+		kKeyTitle:      "SSH key access",
+		kKeyWarnSoft:   "Novice mode: password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
+		kKeyWarnStrict: "Professional mode: the root password is locked — server access is KEY-ONLY. Copy this key now, or you will lose access to the server.",
+		kKeyConnHint:   "Connect:",
+		kKeyCopyBtn:    "Copy key",
+		kKeyCopied:     "✓ copied",
+		kKeyCopyFail:   "copy failed — select manually",
+		kKeyHint:       "esc — back · c — copy · l — lang",
 
 		kSaveLogLabel: "Save log to file",
 		kSaveLogOn:    "yes",
