@@ -127,6 +127,49 @@ const (
 	kTitleHardened // success suffix after "Name · host"
 	kTitleFailed   // failure suffix after "Name · host"
 	kTitleWarding  // in-progress infix: "Name · <warding> host"
+
+	// --- summary screen (phaseSummary) -----------------------------------
+	// header line: "applied X/Y · N skipped · N failed · reboots N · verify P/T"
+	kSumApplied // "applied %d/%d"
+	kSumSkipped // "%d skipped"
+	kSumFailed  // "%d failed"
+	kSumReboots // "reboots %d"
+	kSumVerify  // "verify %d/%d"
+
+	// section headers
+	kSecPkgKernel // ПАКЕТЫ И ЯДРО
+	kSecDiskMem   // ДИСК И ПАМЯТЬ
+	kSecNetwork   // СЕТЬ
+	kSecSecurity  // БЕЗОПАСНОСТЬ
+	kSecFixes     // ПРИМЕНЁННЫЕ ФИКСЫ (клик — описание)
+
+	// row labels
+	kRowUpgraded // обновлено пакетов
+	kRowKernel   // ядро
+	kRowPurged   // удалено пакетов
+	kRowDiskUsed // диск занято
+	kRowZram     // zram
+	kRowSpeed    // скорость, MB/s
+	kRowPing     // ping, ms
+	kRowPorts    // открытых портов
+	kRowRootLogin
+	kRowKeyOnly   // ssh только по ключу
+	kRowFirewall  // файрвол
+	kRowFail2ban  // fail2ban
+	kZramAdded    // "добавлен" / "added" value for the zram row
+	kYesWord      // да / yes
+	kNoWord       // нет / no
+	kSpeedRatio   // "%.1f → %.1f MB/s (%.2fx)" speed row value (with ratio)
+
+	// nav hints
+	kSummaryHint // enter/esc — меню · клик по фиксу — описание · l — язык
+	kWikiHint    // esc — назад · l — язык
+
+	// --- wiki page (phaseWiki) -------------------------------------------
+	kWikiWhat    // ЧТО ДЕЛАЕТ
+	kWikiWhy     // ЗАЧЕМ
+	kWikiRisk    // БЕЗ ЭТОГО
+	kWikiNoDoc   // "нет описания" / "no description"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -202,6 +245,43 @@ var tr = map[Lang]map[stringKey]string{
 		kTitleHardened: "защищён",
 		kTitleFailed:   "сбой",
 		kTitleWarding:  "защита",
+
+		kSumApplied: "применено %d/%d",
+		kSumSkipped: "пропущено %d",
+		kSumFailed:  "ошибок %d",
+		kSumReboots: "перезагрузок %d",
+		kSumVerify:  "проверка %d/%d",
+
+		kSecPkgKernel: "ПАКЕТЫ И ЯДРО",
+		kSecDiskMem:   "ДИСК И ПАМЯТЬ",
+		kSecNetwork:   "СЕТЬ",
+		kSecSecurity:  "БЕЗОПАСНОСТЬ",
+		kSecFixes:     "ПРИМЕНЁННЫЕ ФИКСЫ (клик — описание)",
+
+		kRowUpgraded:  "обновлено пакетов",
+		kRowKernel:    "ядро",
+		kRowPurged:    "удалено пакетов",
+		kRowDiskUsed:  "диск занято",
+		kRowZram:      "zram",
+		kRowSpeed:     "скорость, MB/s",
+		kRowPing:      "ping, ms",
+		kRowPorts:     "открытых портов",
+		kRowRootLogin: "root-вход",
+		kRowKeyOnly:   "ssh только по ключу",
+		kRowFirewall:  "файрвол",
+		kRowFail2ban:  "fail2ban",
+		kZramAdded:    "добавлен",
+		kYesWord:      "да",
+		kNoWord:       "нет",
+		kSpeedRatio:   "%.1f → %.1f MB/s (%.2fx)",
+
+		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · l — язык",
+		kWikiHint:    "esc — назад · l — язык",
+
+		kWikiWhat:  "ЧТО ДЕЛАЕТ",
+		kWikiWhy:   "ЗАЧЕМ",
+		kWikiRisk:  "БЕЗ ЭТОГО",
+		kWikiNoDoc: "нет описания для этого шага",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -274,6 +354,43 @@ var tr = map[Lang]map[stringKey]string{
 		kTitleHardened: "hardened",
 		kTitleFailed:   "failed",
 		kTitleWarding:  "warding",
+
+		kSumApplied: "applied %d/%d",
+		kSumSkipped: "%d skipped",
+		kSumFailed:  "%d failed",
+		kSumReboots: "reboots %d",
+		kSumVerify:  "verify %d/%d",
+
+		kSecPkgKernel: "PACKAGES & KERNEL",
+		kSecDiskMem:   "DISK & MEMORY",
+		kSecNetwork:   "NETWORK",
+		kSecSecurity:  "SECURITY",
+		kSecFixes:     "APPLIED FIXES (click for details)",
+
+		kRowUpgraded:  "upgraded pkgs",
+		kRowKernel:    "kernel",
+		kRowPurged:    "purged pkgs",
+		kRowDiskUsed:  "disk used",
+		kRowZram:      "zram",
+		kRowSpeed:     "speed, MB/s",
+		kRowPing:      "ping, ms",
+		kRowPorts:     "open ports",
+		kRowRootLogin: "root login",
+		kRowKeyOnly:   "ssh key-only",
+		kRowFirewall:  "firewall",
+		kRowFail2ban:  "fail2ban",
+		kZramAdded:    "added",
+		kYesWord:      "yes",
+		kNoWord:       "no",
+		kSpeedRatio:   "%.1f → %.1f MB/s (%.2fx)",
+
+		kSummaryHint: "enter/esc — menu · click a fix for details · l — lang",
+		kWikiHint:    "esc — back · l — lang",
+
+		kWikiWhat:  "WHAT IT DOES",
+		kWikiWhy:   "WHY",
+		kWikiRisk:  "WITHOUT IT",
+		kWikiNoDoc: "no description for this step",
 	},
 }
 
