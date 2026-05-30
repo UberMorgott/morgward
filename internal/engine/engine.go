@@ -136,10 +136,7 @@ type counts struct {
 // the log (optionally streaming lines to h.Sink), then dispatches to the command.
 // All hook fields may be nil (only the TUI sets them).
 func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
-	log, err := ui.New(cfg.LogDir)
-	if err != nil {
-		return fmt.Errorf("open log: %w", err)
-	}
+	log := ui.New(cfg.LogFile)
 	defer log.Close()
 	if h.Sink != nil {
 		log.SetSink(h.Sink)
@@ -172,7 +169,9 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	cleanup := func() {}
 
 	log.Banner(fmt.Sprintf("morgward — %s@%s:%d  mode=%s", cfg.User, cfg.Host, cfg.Port, cfg.Mode))
-	log.Info("log file: %s", log.Path())
+	if p := log.Path(); p != "" {
+		log.Info("log file: %s", p)
+	}
 
 	// 1. Bootstrap connection (key wins; else password).
 	var keyPEM []byte
@@ -356,7 +355,11 @@ func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 		s.log.Fail("a lockout-capable verification failed — review before trusting the box")
 		return fmt.Errorf("verification matrix reported a lockout-capable failure")
 	}
-	s.log.OK("hardening run complete — log: %s", s.log.Path())
+	if p := s.log.Path(); p != "" {
+		s.log.OK("hardening run complete — log: %s", p)
+	} else {
+		s.log.OK("hardening run complete")
+	}
 	return nil
 }
 
