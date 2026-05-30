@@ -220,13 +220,13 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		}
 		cfg.Password = "" // bootstrap secret no longer needed
 		log.OK("ephemeral SSH key generated (held in memory — copy it from the key screen or CLI output)")
-		notifyConnect(h.OnConnect, cfg, keyPEM)
+		notifyConnect(h.OnConnect, cfg, keyPEM, true)
 	} else {
 		authLine, err = sshx.PublicLineFromPEM(keyPEM, "morgward@"+cfg.Host)
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("derive public key: %w", err)
 		}
-		notifyConnect(h.OnConnect, cfg, keyPEM)
+		notifyConnect(h.OnConnect, cfg, keyPEM, false)
 	}
 
 	// 3. Detection + §0.5 inventory.
@@ -293,16 +293,17 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 
 // notifyConnect fires the onConnect callback (if set) with the monitor's
 // connection info, right after key auth becomes active.
-func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM []byte) {
+func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM []byte, generated bool) {
 	if onConnect == nil {
 		return
 	}
 	onConnect(monitor.ConnInfo{
-		Host:      cfg.Host,
-		Port:      cfg.Port,
-		User:      cfg.User,
-		AdminUser: cfg.AdminUser,
-		KeyPEM:    keyPEM,
+		Host:         cfg.Host,
+		Port:         cfg.Port,
+		User:         cfg.User,
+		AdminUser:    cfg.AdminUser,
+		KeyPEM:       keyPEM,
+		KeyGenerated: generated,
 	})
 }
 

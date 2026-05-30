@@ -27,6 +27,10 @@ type ConnInfo struct {
 	User      string
 	AdminUser string
 	KeyPEM    []byte
+	// KeyGenerated is true only when KeyPEM is a freshly generated ephemeral key
+	// (password path). With a user-supplied --key it is false, so consumers can
+	// avoid showing the operator their own private key.
+	KeyGenerated bool
 }
 
 // Sample is one instantaneous snapshot. Percent fields are 0..100; -1 means

@@ -531,12 +531,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stopSample = cancel
 		m.sampler = monitor.New(monitor.ConnInfo(msg))
 		go m.sampler.Run(ctx, m.statsCh)
-		// The engine hands over the freshly generated private-key PEM here (only the
-		// password path generates one; with --key it is empty). Stash it and, the
-		// FIRST time we see a non-empty key, auto-route to the key screen so the
-		// operator copies it before it is lost (it is saved nowhere on disk).
+		// The engine hands over the private-key PEM here. Stash it for other screens,
+		// but auto-route to the key screen ONLY for a freshly GENERATED ephemeral key
+		// (password path). With a user-supplied --key, KeyGenerated is false and we
+		// must NOT flash the operator their own private key.
 		m.keyPEM = string(msg.KeyPEM)
-		if m.keyPEM != "" && !m.keyShown {
+		if msg.KeyGenerated && m.keyPEM != "" && !m.keyShown {
 			m.keyShown = true
 			m.keyReturn = m.phase
 			m.phase = phaseKey

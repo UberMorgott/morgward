@@ -86,13 +86,14 @@ morgward --host 1.2.3.4 --user root --key ~/.ssh/id_ed25519 --mode strict
 
 ```sh
 morgward detect --host 1.2.3.4 --user root --password XXX     # inspect first
-morgward verify --host 1.2.3.4 --key ./id_ed25519_1-2-3-4     # checks only
-morgward step A4 A5 --host 1.2.3.4 --key ./id_ed25519_1-2-3-4 # re-tweak BBR+kernel
+morgward verify --host 1.2.3.4 --key ./my_saved_key          # checks only
+morgward step A4 A5 --host 1.2.3.4 --key ./my_saved_key      # re-tweak BBR+kernel
 ```
 
-Step IDs: `PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10`. After the first
-`run`, reuse the generated key (`./id_ed25519_<host>`) via `--key` for targeted
-`step`/`verify` invocations.
+Step IDs: `PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10`. The ephemeral key
+generated during a `run` is held in memory and shown on the key screen / printed
+to the CLI — it is **never written to disk**. Save it yourself, then pass it via
+`--key` to reuse it for targeted `step`/`verify` invocations.
 
 ### Flags
 
@@ -105,7 +106,7 @@ Step IDs: `PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10`. After the first
 | `--key` | — | existing private key path (skips key generation) |
 | `--mode` | `soft` | `soft` (console password fallback) or `strict` (root locked) |
 | `--admin-user` | `vpsadmin` | non-root sudo user to create/verify |
-| `--log-dir` | `.` | directory for the run log + checkpoint + generated key |
+| `--log-file` | — | write a full run log to this file (default: no file written) |
 | `--assume-yes` | `false` | proceed on a brownfield box (NOT recommended) |
 
 **soft vs strict:** `soft` keeps `PermitRootLogin prohibit-password` and an admin
