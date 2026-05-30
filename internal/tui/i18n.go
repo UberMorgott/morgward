@@ -85,14 +85,14 @@ const (
 	kVerifyTag // "verify" in the summary line
 
 	// loud "SSH password auth will be OFF" warning, shown pre-run (first log lines)
-	// and post-run (finished tail) in STRICT mode. kPwOffLogin carries two %s: the
-	// key path and the "user@host" login target.
+	// and post-run (finished tail) in STRICT mode. The key lives only in memory and
+	// is shown on the key screen — these strings reference no on-disk path.
 	kPwOffWarn  // strict header: "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН."
-	kPwOffLogin // strict body:   "После харденинга подключайтесь так:  ssh -i %s %s"
+	kPwOffLogin // strict body:   "пароль root отключён — подключайся сгенерированным ключом ..."
 
 	// soft-mode info: password login STAYS ON; a key is also generated so either
-	// works. kPwOnInfo carries two %s: the key path and the "user@host" login target.
-	kPwOnInfo // soft body: "вход по SSH: пароль ИЛИ ключ (ssh -i %s %s)"
+	// works.
+	kPwOnInfo // soft body: "вход по SSH: пароль ИЛИ сгенерированный ключ ..."
 
 	// finished tail (rendered below the viewport from m.lang each frame)
 	kFinishedOK
@@ -161,14 +161,30 @@ const (
 	kNoWord      // нет / no
 
 	// nav hints
-	kSummaryHint // enter/esc — меню · клик по фиксу — описание · l — язык
-	kWikiHint    // esc — назад · l — язык
+	kSummaryHint // enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык
+	kWikiHint    // esc — назад · ↑↓ — прокрутка · l — язык
 
 	// --- wiki page (phaseWiki) -------------------------------------------
 	kWikiWhat  // ЧТО ДЕЛАЕТ
 	kWikiWhy   // ЗАЧЕМ
 	kWikiRisk  // БЕЗ ЭТОГО
 	kWikiNoDoc // "нет описания" / "no description"
+
+	// --- SSH key screen (phaseKey) ---------------------------------------
+	// The generated private key lives ONLY in memory; this screen is the one
+	// place it is shown so the operator can copy it before it is lost.
+	kKeyTitle    // box title: "SSH key access"
+	kKeyWarn     // loud warning: the key is saved nowhere — copy it now
+	kKeyConnHint // label before the ssh command (the command is built in code)
+	kKeyCopyBtn  // clickable button label: "Copy key"
+	kKeyCopied   // status after a successful clipboard copy: "✓ copied"
+	kKeyCopyFail // status after a failed copy: "copy failed — select manually"
+	kKeyHint     // bottom control hint for the key screen
+
+	// --- main-menu "Save log to file" toggle -----------------------------
+	kSaveLogLabel // form toggle label: "Save log to file"
+	kSaveLogOn    // on state word (reuses yes/no semantics)
+	kSaveLogOff   // off state word
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -218,8 +234,8 @@ var tr = map[Lang]map[stringKey]string{
 		kVerifyTag: "проверка",
 
 		kPwOffWarn:  "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН (ключ обязателен).",
-		kPwOffLogin: "После харденинга подключайтесь так:  ssh -i %s %s",
-		kPwOnInfo:   "вход по SSH: пароль ИЛИ ключ (ssh -i %s %s)",
+		kPwOffLogin: "пароль root отключён — подключайся сгенерированным ключом (скопируй его на экране ключа)",
+		kPwOnInfo:   "вход по SSH: пароль ИЛИ сгенерированный ключ (скопируй его на экране ключа)",
 
 		kFinishedOK:  "запуск завершён",
 		kFinishedErr: "завершено с ошибкой: ",
@@ -273,13 +289,25 @@ var tr = map[Lang]map[stringKey]string{
 		kYesWord:      "да",
 		kNoWord:       "нет",
 
-		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · l — язык",
-		kWikiHint:    "esc — назад · l — язык",
+		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
+		kWikiHint:    "esc — назад · ↑↓ — прокрутка · l — язык",
 
 		kWikiWhat:  "ЧТО ДЕЛАЕТ",
 		kWikiWhy:   "ЗАЧЕМ",
 		kWikiRisk:  "БЕЗ ЭТОГО",
 		kWikiNoDoc: "нет описания для этого шага",
+
+		kKeyTitle:    "Доступ по SSH-ключу",
+		kKeyWarn:     "Ключ нигде не сохранён. Скопируй сейчас — иначе потеряешь доступ к серверу.",
+		kKeyConnHint: "Подключение:",
+		kKeyCopyBtn:  "Скопировать ключ",
+		kKeyCopied:   "✓ скопировано",
+		kKeyCopyFail: "не удалось скопировать — выдели вручную",
+		kKeyHint:     "esc — назад · c — копировать · l — язык",
+
+		kSaveLogLabel: "Сохранять лог в файл",
+		kSaveLogOn:    "да",
+		kSaveLogOff:   "нет",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -326,8 +354,8 @@ var tr = map[Lang]map[stringKey]string{
 		kVerifyTag: "verify",
 
 		kPwOffWarn:  "⚠ WARNING: SSH password login will be DISABLED (key required).",
-		kPwOffLogin: "After hardening, connect like this:  ssh -i %s %s",
-		kPwOnInfo:   "SSH login: password OR key (ssh -i %s %s)",
+		kPwOffLogin: "root password disabled — connect with the generated key (copy it on the key screen)",
+		kPwOnInfo:   "SSH login: password OR the generated key (copy it on the key screen)",
 
 		kFinishedOK:  "run finished",
 		kFinishedErr: "finished with error: ",
@@ -381,13 +409,25 @@ var tr = map[Lang]map[stringKey]string{
 		kYesWord:      "yes",
 		kNoWord:       "no",
 
-		kSummaryHint: "enter/esc — menu · click a fix for details · l — lang",
-		kWikiHint:    "esc — back · l — lang",
+		kSummaryHint: "enter/esc — menu · click a fix for details · ↑↓ — scroll · l — lang",
+		kWikiHint:    "esc — back · ↑↓ — scroll · l — lang",
 
 		kWikiWhat:  "WHAT IT DOES",
 		kWikiWhy:   "WHY",
 		kWikiRisk:  "WITHOUT IT",
 		kWikiNoDoc: "no description for this step",
+
+		kKeyTitle:    "SSH key access",
+		kKeyWarn:     "This key is saved nowhere. Copy it now — otherwise you will lose access to the server.",
+		kKeyConnHint: "Connect:",
+		kKeyCopyBtn:  "Copy key",
+		kKeyCopied:   "✓ copied",
+		kKeyCopyFail: "copy failed — select manually",
+		kKeyHint:     "esc — back · c — copy · l — lang",
+
+		kSaveLogLabel: "Save log to file",
+		kSaveLogOn:    "yes",
+		kSaveLogOff:   "no",
 	},
 }
 

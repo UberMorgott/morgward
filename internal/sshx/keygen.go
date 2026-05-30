@@ -5,21 +5,21 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
-	"os"
 
 	"golang.org/x/crypto/ssh"
 )
 
-// KeyPair is a generated ed25519 SSH key pair.
+// KeyPair is a generated ed25519 SSH key pair. The private key is held only in
+// memory (PrivatePEM) and is never written to disk by this package.
 type KeyPair struct {
-	PrivatePEM     []byte // OpenSSH-format private key
+	PrivatePEM     []byte // OpenSSH-format private key (in-memory only)
 	AuthorizedLine string // single-line authorized_keys entry (no trailing newline)
-	PrivatePath    string // where the private key was written
 }
 
-// GenerateKeyPair creates an ed25519 key pair and writes the private key to
-// privPath with 0600 perms (the public line is returned for push to the box).
-func GenerateKeyPair(privPath, comment string) (*KeyPair, error) {
+// GenerateKeyPair creates an ed25519 key pair and returns it in memory: the
+// private key PEM and the authorized_keys line for push to the box. Nothing is
+// written to disk.
+func GenerateKeyPair(comment string) (*KeyPair, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("ed25519 keygen: %w", err)
@@ -43,11 +43,7 @@ func GenerateKeyPair(privPath, comment string) (*KeyPair, error) {
 		authLine = trimNL(authLine)
 	}
 
-	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
-		return nil, fmt.Errorf("write private key %s: %w", privPath, err)
-	}
-
-	return &KeyPair{PrivatePEM: privPEM, AuthorizedLine: authLine, PrivatePath: privPath}, nil
+	return &KeyPair{PrivatePEM: privPEM, AuthorizedLine: authLine}, nil
 }
 
 // PublicLineFromPEM derives the authorized_keys line from a private key PEM

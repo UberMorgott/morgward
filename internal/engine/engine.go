@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +56,7 @@ type Hooks struct {
 	Sink       func(string)           // streams each log line to the caller
 	OnConnect  func(monitor.ConnInfo) // fires once after key auth is active
 	OnProgress func(Progress)         // fires per step and once at the end
+	OnKey      func(pem string)       // fires once with the generated ed25519 PEM (password path only; never via the logger)
 }
 
 // Progress is a single step lifecycle event (or, with Done set, the run's final
@@ -136,10 +136,7 @@ type counts struct {
 // the log (optionally streaming lines to h.Sink), then dispatches to the command.
 // All hook fields may be nil (only the TUI sets them).
 func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
-	log, err := ui.New(cfg.LogDir)
-	if err != nil {
-		return fmt.Errorf("open log: %w", err)
-	}
+	log := ui.New(cfg.LogFile)
 	defer log.Close()
 	if h.Sink != nil {
 		log.SetSink(h.Sink)
@@ -158,13 +155,6 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 	}
 }
 
-// staleCheckpoint reports whether a loaded checkpoint claiming completed steps
-// can't be trusted: the box carries no hardening markers (alreadyHardened ==
-// false) yet the checkpoint records prior progress — the box was reinstalled.
-func staleCheckpoint(completedCount int, alreadyHardened bool) bool {
-	return completedCount > 0 && !alreadyHardened
-}
-
 // prepare connects, bootstraps the key, detects the box, and (unless
 // allowBrownfield) gates a non-greenfield/hardened box. The returned cleanup
 // closes the connection (the caller owns the log).
@@ -172,7 +162,9 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	cleanup := func() {}
 
 	log.Banner(fmt.Sprintf("morgward — %s@%s:%d  mode=%s", cfg.User, cfg.Host, cfg.Port, cfg.Mode))
-	log.Info("log file: %s", log.Path())
+	if p := log.Path(); p != "" {
+		log.Info("log file: %s", p)
+	}
 
 	// 1. Bootstrap connection (key wins; else password).
 	var keyPEM []byte
@@ -207,13 +199,15 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	var authLine string
 	if keyPEM == nil {
 		log.Step("KEY", "Generate ed25519 key and switch to key auth")
-		kpPath := filepath.Join(dirOf(cfg.LogDir), fmt.Sprintf("id_ed25519_%s", sanitize(cfg.Host)))
-		kp, gerr := sshx.GenerateKeyPair(kpPath, "morgward@"+cfg.Host)
+		kp, gerr := sshx.GenerateKeyPair("morgward@" + cfg.Host)
 		if gerr != nil {
 			return nil, cleanup, fmt.Errorf("keygen: %w", gerr)
 		}
 		authLine = kp.AuthorizedLine
 		keyPEM = kp.PrivatePEM
+		if h.OnKey != nil {
+			h.OnKey(string(kp.PrivatePEM))
+		}
 
 		push := "mkdir -p /root/.ssh && chmod 700 /root/.ssh\n" +
 			pushAuthLine("/root/.ssh/authorized_keys", authLine) +
@@ -225,14 +219,14 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 			return nil, cleanup, fmt.Errorf("switch to key auth: %w", err)
 		}
 		cfg.Password = "" // bootstrap secret no longer needed
-		log.OK("key generated (%s) and key auth active", kp.PrivatePath)
-		notifyConnect(h.OnConnect, cfg, keyPEM)
+		log.OK("ephemeral SSH key generated (held in memory — copy it from the key screen or CLI output)")
+		notifyConnect(h.OnConnect, cfg, keyPEM, true)
 	} else {
 		authLine, err = sshx.PublicLineFromPEM(keyPEM, "morgward@"+cfg.Host)
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("derive public key: %w", err)
 		}
-		notifyConnect(h.OnConnect, cfg, keyPEM)
+		notifyConnect(h.OnConnect, cfg, keyPEM, false)
 	}
 
 	// 3. Detection + §0.5 inventory.
@@ -284,14 +278,9 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		}
 	}
 
-	chk := state.Load(filepath.Join(dirOf(cfg.LogDir), "morgward-"+sanitize(cfg.Host)+".state.json"))
-	if staleCheckpoint(len(chk.Completed), facts.AlreadyHardened) {
-		log.Warn("stale checkpoint: box shows no hardening markers but checkpoint claims %d completed step(s) — discarding (box likely reinstalled)", len(chk.Completed))
-		chk.Reset()
-	}
+	chk := state.Load("")
 	chk.Host = cfg.Host
 	chk.Mode = string(cfg.Mode)
-	chk.KeyPath = filepath.Join(dirOf(cfg.LogDir), fmt.Sprintf("id_ed25519_%s", sanitize(cfg.Host)))
 	chk.Greenfield = facts.Greenfield
 	chk.Save()
 
@@ -304,16 +293,17 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 
 // notifyConnect fires the onConnect callback (if set) with the monitor's
 // connection info, right after key auth becomes active.
-func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM []byte) {
+func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM []byte, generated bool) {
 	if onConnect == nil {
 		return
 	}
 	onConnect(monitor.ConnInfo{
-		Host:      cfg.Host,
-		Port:      cfg.Port,
-		User:      cfg.User,
-		AdminUser: cfg.AdminUser,
-		KeyPEM:    keyPEM,
+		Host:         cfg.Host,
+		Port:         cfg.Port,
+		User:         cfg.User,
+		AdminUser:    cfg.AdminUser,
+		KeyPEM:       keyPEM,
+		KeyGenerated: generated,
 	})
 }
 
@@ -356,7 +346,11 @@ func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 		s.log.Fail("a lockout-capable verification failed — review before trusting the box")
 		return fmt.Errorf("verification matrix reported a lockout-capable failure")
 	}
-	s.log.OK("hardening run complete — log: %s", s.log.Path())
+	if p := s.log.Path(); p != "" {
+		s.log.OK("hardening run complete — log: %s", p)
+	} else {
+		s.log.OK("hardening run complete")
+	}
 	return nil
 }
 
@@ -626,13 +620,6 @@ func writeInventory(inv string) string {
 	return fmt.Sprintf("echo '%s' | base64 -d > /root/vps-inventory.md\n", b64)
 }
 
-func dirOf(d string) string {
-	if d == "" {
-		return "."
-	}
-	return d
-}
-
 // engineLang normalizes cfg.Lang into "ru" | "en", defaulting to "ru" (the CLI
 // leaves Lang empty; the TUI sets it from its active language). It is the single
 // language source for engine-streamed user-facing text, so the CLI and TUI share
@@ -644,47 +631,26 @@ func engineLang(cfg *config.Config) string {
 	return "ru"
 }
 
-// keyPathFor reproduces the SAME generated key path the bootstrap uses
-// (id_ed25519_<sanitized host> under the log dir) so user-facing hints point at
-// the real file, not a guessed name.
-func keyPathFor(cfg *config.Config) string {
-	return filepath.Join(dirOf(cfg.LogDir), fmt.Sprintf("id_ed25519_%s", sanitize(cfg.Host)))
-}
-
 // emitAuthHint prints the localized, actionable hint shown when the server
 // accepted none of the offered auth methods. Localized ru/en via engineLang so
 // both the CLI (ru default) and the TUI (its active language) get a correct
-// message; the key path/admin user are substituted from the real config.
+// message; the admin user is substituted from the real config.
 func emitAuthHint(log *ui.Logger, cfg *config.Config, err error) {
 	admin := cfg.AdminUser
 	if admin == "" {
 		admin = "vpsadmin"
 	}
-	keyPath := keyPathFor(cfg)
 	if engineLang(cfg) == "en" {
 		log.Fail("could not authenticate to %s: the server accepted none of the offered auth methods (no password and no working SSH key).", cfg.Host)
 		log.Detail("If this box is ALREADY hardened, root SSH is blocked by `AllowGroups sshusers` —")
-		log.Detail("  connect as the admin user with its generated key, e.g.:  ssh -i %s %s@%s", keyPath, admin, cfg.Host)
+		log.Detail("  reconnect as the admin user %q with the key shown by morgward (pass it via --key, or save the PEM from the key screen / CLI output).", admin)
 		log.Detail("Otherwise check host/port/user/key, or enable password login / set a root password in your provider panel.")
 		log.Detail("raw error: %v", err)
 		return
 	}
 	log.Fail("не удалось аутентифицироваться на %s: сервер не принял ни один из предложенных методов (нет пароля и нет рабочего SSH-ключа).", cfg.Host)
 	log.Detail("Если машина УЖЕ защищена, вход root по SSH заблокирован `AllowGroups sshusers` —")
-	log.Detail("  подключайтесь админ-пользователем с его сгенерированным ключом, например:  ssh -i %s %s@%s", keyPath, admin, cfg.Host)
+	log.Detail("  переподключитесь админ-пользователем %q с ключом, который показал morgward (передайте его через --key или сохраните PEM с экрана ключа / из вывода CLI).", admin)
 	log.Detail("Иначе проверьте хост/порт/пользователя/ключ либо включите вход по паролю / задайте пароль root в панели провайдера.")
 	log.Detail("исходная ошибка: %v", err)
-}
-
-func sanitize(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
-			out = append(out, c)
-		} else {
-			out = append(out, '_')
-		}
-	}
-	return string(out)
 }

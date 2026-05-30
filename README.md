@@ -19,10 +19,14 @@ fresh Ubuntu **24.04 / 26.04** VPS over an embedded SSH client (no external `ssh
 - **Reboot handling** — A8 polls SSH until reconnect and confirms `boot_id` changed.
 - **Brownfield detection** — a non-empty box stops the run and prints the inventory.
 - **Network benchmark** — throughput sampled before and after BBR/buffer tuning.
-- **Idempotent** — local JSON checkpoint + per-step skip-if; safe to re-run.
-- **Progress + log** — colored `[OK]/[SKIP]/[FAIL]` to terminal, mirrored to
-  `morgward-YYYYMMDD-HHMMSS.log`. Secrets (console password) shown once on the
-  terminal only, never written to the log.
+- **Idempotent** — every step is skip-if-already-applied on the box; safe to re-run.
+  No local checkpoint file is written (run state is held in memory for the session).
+- **Zero local footprint** — by default the program creates no files next to the exe:
+  no checkpoint, no key file, no log. The generated SSH key is shown on a copyable
+  key screen (TUI) / printed to stdout (CLI) and stored nowhere — save it yourself.
+- **Progress + optional log** — colored `[OK]/[SKIP]/[FAIL]` to terminal; pass
+  `--log-file <path>` (or the TUI "save log" toggle) to also write a full run log.
+  Secrets (console password / key) are shown once on the terminal, never in the log.
 - **Interactive TUI** — run the bare binary (no subcommand) for a terminal form
   (Host/Port/User/Password-or-Key + Action/Mode), then a live streaming view with a
   per-step progress bar, host monitor footer, and the §V verification matrix.
@@ -86,13 +90,14 @@ morgward --host 1.2.3.4 --user root --key ~/.ssh/id_ed25519 --mode strict
 
 ```sh
 morgward detect --host 1.2.3.4 --user root --password XXX     # inspect first
-morgward verify --host 1.2.3.4 --key ./id_ed25519_1-2-3-4     # checks only
-morgward step A4 A5 --host 1.2.3.4 --key ./id_ed25519_1-2-3-4 # re-tweak BBR+kernel
+morgward verify --host 1.2.3.4 --key ./my_saved_key          # checks only
+morgward step A4 A5 --host 1.2.3.4 --key ./my_saved_key      # re-tweak BBR+kernel
 ```
 
-Step IDs: `PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10`. After the first
-`run`, reuse the generated key (`./id_ed25519_<host>`) via `--key` for targeted
-`step`/`verify` invocations.
+Step IDs: `PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10`. The ephemeral key
+generated during a `run` is held in memory and shown on the key screen / printed
+to the CLI — it is **never written to disk**. Save it yourself, then pass it via
+`--key` to reuse it for targeted `step`/`verify` invocations.
 
 ### Flags
 
@@ -105,7 +110,7 @@ Step IDs: `PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10`. After the first
 | `--key` | — | existing private key path (skips key generation) |
 | `--mode` | `soft` | `soft` (console password fallback) or `strict` (root locked) |
 | `--admin-user` | `vpsadmin` | non-root sudo user to create/verify |
-| `--log-dir` | `.` | directory for the run log + checkpoint + generated key |
+| `--log-file` | — | write a full run log to this file (default: no file written) |
 | `--assume-yes` | `false` | proceed on a brownfield box (NOT recommended) |
 
 **soft vs strict:** `soft` keeps `PermitRootLogin prohibit-password` and an admin
@@ -135,7 +140,7 @@ cmd/morgward/   CLI entry point (flags + interactive prompts)
 internal/config/    resolved run configuration
 internal/ui/        colored terminal + file logger, step status
 internal/sshx/      SSH client wrapper, ed25519 keygen, reboot polling
-internal/state/     local checkpoint (idempotency)
+internal/state/     in-memory run checkpoint (idempotency; not persisted)
 internal/detect/    §0.5/§2 discovery, greenfield/brownfield classification
 internal/steps/     one file per runbook block (a1_firewall.go … a10_detection.go)
 internal/verify/    §V verification matrix runner

@@ -37,7 +37,7 @@ type Config struct {
 	KeyPath   string // path to an existing private key; empty => generate one
 	Mode      Mode   // soft | strict
 	AdminUser string // non-root sudo user to create/verify (default: vpsadmin)
-	LogDir    string // directory for the run log + checkpoint
+	LogFile   string // file path for the full run log; empty => no file written
 	Assume    bool   // non-interactive: proceed on brownfield / prompts using defaults
 	Lang      string // UI language for engine-streamed messages: "ru" | "en" (empty => "ru"); set by the TUI from its active language, left empty by the CLI
 }

@@ -9,7 +9,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/engine"
@@ -30,7 +30,6 @@ import (
 
 const (
 	defaultAdminUser = "vpsadmin"
-	defaultLogDir    = "runs"
 )
 
 var (
@@ -61,6 +60,7 @@ const (
 	phaseRun
 	phaseSummary // post-finish stats summary + clickable fix list
 	phaseWiki    // a single fix's what/why/risk description
+	phaseKey     // shows the generated SSH private key + a clipboard "Copy key" button
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -84,7 +84,7 @@ const (
 func (m model) labelColW() int {
 	keys := []stringKey{
 		kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey,
-		kLabelMode, kLabelAction,
+		kLabelMode, kLabelAction, kSaveLogLabel,
 	}
 	w := 0
 	for _, k := range keys {
@@ -104,6 +104,15 @@ func padLabel(label string, colW int) string {
 	return label
 }
 
+// saveLogToken maps the save-log bool to the canonical pill token ("on"/"off")
+// renderToggle matches against, mirroring how mode/command use their string tokens.
+func saveLogToken(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
 // field indices in the form.
 const (
 	fHost = iota
@@ -118,8 +127,9 @@ const (
 const (
 	rowMode    = nInputs     // soft/strict toggle
 	rowCommand = nInputs + 1 // run/detect/verify toggle
-	rowStart   = nInputs + 2 // start button
-	nRows      = nInputs + 3
+	rowLog     = nInputs + 2 // save-log-to-file toggle
+	rowStart   = nInputs + 3 // start button
+	nRows      = nInputs + 4
 )
 
 // focusableRows returns the ordered list of currently-focusable row indices.
@@ -135,6 +145,7 @@ func (m model) focusableRows() []int {
 	if m.command != "detect" {
 		rows = append(rows, rowMode)
 	}
+	rows = append(rows, rowLog)
 	rows = append(rows, rowStart)
 	return rows
 }
@@ -186,6 +197,7 @@ type model struct {
 	command string
 	cmds    []string
 	errMsg  string
+	saveLog bool // form toggle: write the full run log to a file (sets cfg.LogFile)
 
 	logs    chan string
 	done    chan error
@@ -219,6 +231,23 @@ type model struct {
 	// phase to return to on esc (phaseSummary).
 	wikiStep   string
 	wikiReturn phase
+
+	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
+	// memory; never logged), the copy-to-clipboard status, where esc returns to,
+	// and whether the auto-route to this screen has already fired once. All plain
+	// copyable types — the model is copied by value every Update.
+	keyPEM        string
+	keyCopied     bool
+	keyCopyFailed bool
+	keyReturn     phase
+	keyShown      bool
+
+	// scroll offsets for the directly-rendered summary + wiki screens (the run
+	// screen scrolls its own m.vp instead). They are clamped to the current body
+	// length and middle-region height on every use (clampScroll), so growing the
+	// window auto-reduces the offset and the monitor footer stays pinned.
+	sumScroll  int
+	wikiScroll int
 
 	finalErr error
 	finished bool
@@ -336,6 +365,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
 				m.wikiStep = id
 				m.wikiReturn = phaseSummary
+				m.wikiScroll = 0 // fresh page starts at the top
 				m.phase = phaseWiki
 			}
 			return m, nil
@@ -349,22 +379,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.goBack()
 			}
+		case phaseKey:
+			// The "Copy key" button is the only click target on this screen.
+			if m.keyCopyAtClick(mc.X, mc.Y) {
+				m = m.copyKey()
+			}
+			return m, nil
 		}
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		// Mouse-wheel scrolls the run-view log viewport (run phase only); the form
-		// has no scrollable region. v2 delivers wheel events as MouseWheelMsg with a
-		// MouseWheelUp/Down button (mouse.go), distinct from MouseClickMsg.
-		if m.phase != phaseRun {
-			return m, nil
-		}
+		// Mouse-wheel scrolls the scrollable region of the current screen: the run
+		// log viewport in phaseRun, the directly-rendered body in phaseSummary/phaseWiki
+		// (the form has no scrollable region). v2 delivers wheel events as MouseWheelMsg
+		// with a MouseWheelUp/Down button (mouse.go), distinct from MouseClickMsg.
 		const wheelStep = 3
-		switch msg.Mouse().Button {
-		case tea.MouseWheelUp:
-			m.vp.ScrollUp(wheelStep)
-		case tea.MouseWheelDown:
-			m.vp.ScrollDown(wheelStep)
+		up := msg.Mouse().Button == tea.MouseWheelUp
+		down := msg.Mouse().Button == tea.MouseWheelDown
+		switch m.phase {
+		case phaseRun:
+			if up {
+				m.vp.ScrollUp(wheelStep)
+			} else if down {
+				m.vp.ScrollDown(wheelStep)
+			}
+		case phaseSummary:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.sumScroll = clampScroll(m.sumScroll+d, len(m.summaryBodyLines()), m.bodyViewH())
+		case phaseWiki:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.wikiScroll = clampScroll(m.wikiScroll+d, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 		}
 		return m, nil
 
@@ -387,17 +441,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.phase {
 		case phaseWiki:
-			// Any "back" key returns to wherever the wiki was opened from (summary).
+			// Any "back" key returns to wherever the wiki was opened from (summary);
+			// ↑↓/k/j scroll the description when it overflows the middle region.
 			switch msg.String() {
 			case "enter", "esc", "b":
 				m.phase = m.wikiReturn
+			case "up", "k":
+				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			case "down", "j":
+				m.wikiScroll = clampScroll(m.wikiScroll+1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			}
 			return m, nil
 		case phaseSummary:
-			// On the summary, "back" returns to the form/menu (stops the sampler).
+			// On the summary, "back" returns to the form/menu (stops the sampler);
+			// ↑↓/k/j scroll the stats + fix list when it overflows the middle region.
 			switch msg.String() {
 			case "enter", "esc", "b":
 				return m.goBack()
+			case "up", "k":
+				m.sumScroll = clampScroll(m.sumScroll-1, len(m.summaryBodyLines()), m.bodyViewH())
+			case "down", "j":
+				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.bodyViewH())
+			}
+			return m, nil
+		case phaseKey:
+			// 'c' copies the key to the system clipboard; any "back" key returns to
+			// wherever the key screen was opened from (the run, or the summary).
+			switch msg.String() {
+			case "c":
+				m = m.copyKey()
+			case "enter", "esc", "b":
+				m.phase = m.keyReturn
 			}
 			return m, nil
 		}
@@ -457,6 +531,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stopSample = cancel
 		m.sampler = monitor.New(monitor.ConnInfo(msg))
 		go m.sampler.Run(ctx, m.statsCh)
+		// The engine hands over the private-key PEM here. Stash it for other screens,
+		// but auto-route to the key screen ONLY for a freshly GENERATED ephemeral key
+		// (password path). With a user-supplied --key, KeyGenerated is false and we
+		// must NOT flash the operator their own private key.
+		m.keyPEM = string(msg.KeyPEM)
+		if msg.KeyGenerated && m.keyPEM != "" && !m.keyShown {
+			m.keyShown = true
+			m.keyReturn = m.phase
+			m.phase = phaseKey
+		}
 		return m, m.listenStats()
 
 	case statMsg:
@@ -535,6 +619,8 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.mode = config.ModeSoft
 			}
+		case rowLog:
+			m.saveLog = !m.saveLog
 		case rowCommand:
 			i := indexOf(m.cmds, m.command)
 			if msg.String() == "right" {
@@ -701,6 +787,8 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.elapsed = 0
 	m.spin = 0
 	m.vp.SetContent("")
+	m.sumScroll = 0
+	m.wikiScroll = 0
 	m.titleK = titleIdle
 	return m, m.refocus()
 }
@@ -725,7 +813,6 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
 		Mode:      m.mode,
 		AdminUser: defaultAdminUser,
-		LogDir:    defaultLogDir,
 		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
 		Lang:      m.langCode(), // engine-streamed messages follow the active UI language
 	}
@@ -746,6 +833,13 @@ func (m model) start() (tea.Model, tea.Cmd) {
 
 	host := strings.TrimSpace(m.inputs[fHost].Value())
 	m.host = host
+	// Save-log toggle (default off): point cfg.LogFile at a per-host timestamped
+	// file so the engine's ui.Logger writes the full run log there; empty disables it.
+	if m.saveLog {
+		cfg.LogFile = fmt.Sprintf("morgward-%s-%s.log", fsSafeHost(host), time.Now().Format("20060102-150405"))
+	} else {
+		cfg.LogFile = ""
+	}
 	m.phase = phaseRun
 	m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
 	// A full `run` changes SSH auth policy — show the operator a mode-aware notice up
@@ -922,6 +1016,8 @@ func (m model) viewString() string {
 		return m.summaryView()
 	case phaseWiki:
 		return m.wikiView()
+	case phaseKey:
+		return m.keyView()
 	default:
 		return m.formView()
 	}
@@ -1008,6 +1104,7 @@ type formHit struct {
 	field int    // frInput: input index
 	mode  string // frMode: "soft"/"strict"
 	cmd   string // frAction: "run"/"detect"/"verify"
+	log   bool   // frLog: true=on (save log), false=off
 	pill  int    // frStart: 0=Start, 1=Cancel
 	ok    bool
 }
@@ -1039,6 +1136,11 @@ func (m model) formHitAtClick(x, y int) formHit {
 		names := []string{t(m.lang, kOptRun), t(m.lang, kOptDetect), t(m.lang, kOptVerify)}
 		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
 			return formHit{kind: frAction, cmd: m.cmds[i], ok: true}
+		}
+	case frLog:
+		names := []string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)}
+		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
+			return formHit{kind: frLog, log: i == 0, ok: true} // pill 0 = on
 		}
 	case frStart:
 		// Start + Cancel share this line; pillRanges uses the same labels the render
@@ -1120,6 +1222,10 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 		// satisfied unconditionally here.
 		m.focus = rowCommand
 		return m, nil
+	case frLog:
+		m.saveLog = hit.log
+		m.focus = rowLog
+		return m, nil
 	case frStart:
 		if hit.pill == 1 { // Cancel
 			return m, tea.Quit
@@ -1139,6 +1245,7 @@ const (
 	frBlank                     // spacer line (kept in the slice so Y math stays exact)
 	frMode                      // soft/strict pill row
 	frAction                    // run/detect/verify pill row
+	frLog                       // save-log-to-file on/off pill row
 	frHelp                      // contextual toggle-help line
 	frStart                     // Start + Cancel button line
 	frErr                       // validation error line
@@ -1198,6 +1305,12 @@ func (m model) formRows() []formRow {
 			[]string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)},
 			string(m.mode), m.focus == rowMode, colW)})
 	}
+	// Save-log-to-file toggle: writes the full run log to a file (cfg.LogFile) when
+	// on, off by default. Canonical tokens on/off; localized yes/no pill names.
+	rows = append(rows, formRow{kind: frLog, text: renderToggle(t(m.lang, kSaveLogLabel),
+		[]string{"on", "off"},
+		[]string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)},
+		saveLogToken(m.saveLog), m.focus == rowLog, colW)})
 	// Contextual toggle help: accent-tinted/italic (tipStyle) so it reads as form
 	// body, distinct from the gray bottom control hint. Indented to the value column.
 	rows = append(rows, formRow{kind: frHelp, text: indent + tipStyle.Render(m.toggleHelp())})
@@ -1610,13 +1723,16 @@ func fixGlyph(st steps.Status) string {
 //
 //	row 0                 : main box top border
 //	row 1                 : RU/EN switcher
-//	rows 2..              : header, blank, stat blocks, blank, fix-list header,
-//	                        then one clickable row per fix (fixListBaseRow + i)
-//	...                   : pad, hint, bottom border, then the monitor box
+//	rows 2..2+viewH-1     : the scrollable middle region — header, blank, stat blocks,
+//	                        blank, fix-list header, then one clickable row per fix,
+//	                        windowed to body[sumScroll : sumScroll+viewH]
+//	...                   : hint, bottom border, then the 3-row monitor box (pinned)
 //
-// It renders directly (no viewport) so each fix row's screen Y is fixed by its slice
-// index — the hit-test in fixAtClick reproduces it exactly. The body is clamped to
-// the available height so it never overruns the monitor footer.
+// The middle region always emits exactly viewH rows (blank-padded when the body is
+// shorter), so the monitor footer is ALWAYS pinned to the bottom regardless of the
+// terminal size. When the body overflows viewH a scrollbar is drawn in the right
+// border (renderScrollRegion) and the wheel / ↑↓ scroll it; fixAtClick reproduces the
+// windowed geometry so clicks stay accurate.
 func (m model) summaryView() string {
 	bw := m.boxWidth()
 	innerW := innerWidth(bw)
@@ -1630,22 +1746,11 @@ func (m model) summaryView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	// Budget: chrome rows reserved for the main box bottom + hint + monitor box.
-	// main box: hint(1) + bottom(1); monitor box: top(1) + content(1) + bottom(1).
-	// Already emitted: top(1) + switcher(1). So body+pad must fill h-2-2-3 rows.
-	avail := maxi(m.h-2-2-3, len(body))
-	lines := body
-	if len(lines) > avail {
-		lines = lines[:avail] // clamp (only on a very short terminal)
-	}
-	for _, ln := range lines {
-		sb.WriteString(contentLine(b, ln, innerW))
-		sb.WriteByte('\n')
-	}
-	for range maxi(avail-len(lines), 0) {
-		sb.WriteString(contentLine(b, "", innerW))
-		sb.WriteByte('\n')
-	}
+	// Scrollable middle region (the only resizable part); the chrome above (2 rows)
+	// and below (hint + bottom + 3-row monitor) is fixed, so the footer never moves.
+	viewH := m.bodyViewH()
+	off := clampScroll(m.sumScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
 	// Hint + main box bottom border.
 	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kSummaryHint)), innerW))
@@ -1676,30 +1781,27 @@ func (m model) summaryBodyLines() []string {
 	return body
 }
 
-// fixListBaseRow is the 0-based screen Y of the FIRST fix row. It equals
-// summaryBodyTopRow plus the count of body lines that precede the fix rows (header +
-// stat blocks + their blanks + the fix-list section header), so it tracks layout
-// changes automatically rather than hard-coding an offset.
-func (m model) fixListBaseRow() int {
-	body := m.summaryBodyLines()
-	return summaryBodyTopRow + (len(body) - len(m.summary.Results))
-}
-
-// fixAtClick maps a click at (x,y) to a fix-list row's step ID. Rows render with no
-// scroll (summaryView is non-viewport), so row i is at screen Y = fixListBaseRow + i;
-// X must fall within the rendered row width. Returns ok=false on a miss.
+// fixAtClick maps a click at (x,y) to a fix-list row's step ID, accounting for the
+// scroll offset. The middle region occupies screen rows [summaryBodyTopRow,
+// summaryBodyTopRow+viewH); a click there maps to body index sumScroll+(y-top), and
+// the fix rows are the tail of the body (after the header + stat blocks + fix-list
+// header). X must fall within the rendered row width. Returns ok=false on a miss.
 func (m model) fixAtClick(x, y int) (string, bool) {
 	if m.phase != phaseSummary || len(m.summary.Results) == 0 {
 		return "", false
 	}
-	base := m.fixListBaseRow()
-	idx := y - base
-	if idx < 0 || idx >= len(m.summary.Results) {
-		return "", false
+	body := m.summaryBodyLines()
+	viewH := m.bodyViewH()
+	off := clampScroll(m.sumScroll, len(body), viewH)
+
+	rowInRegion := y - summaryBodyTopRow
+	if rowInRegion < 0 || rowInRegion >= viewH {
+		return "", false // click is in the chrome (switcher/hint/border/monitor), not the body
 	}
-	// Clamp against the body so a click below the (possibly height-clamped) list
-	// can't resolve to an off-screen row.
-	if base+idx >= summaryBodyTopRow+maxi(m.h-2-2-3, len(m.summaryBodyLines())) {
+	bodyIdx := off + rowInRegion
+	fixStart := len(body) - len(m.summary.Results) // fix rows are the body tail
+	idx := bodyIdx - fixStart
+	if idx < 0 || idx >= len(m.summary.Results) {
 		return "", false
 	}
 	const contentX0 = 2 // borderLeft(1) + space(1)
@@ -1797,21 +1899,12 @@ func (m model) wikiView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	// Same vertical budget as summaryView: reserve hint(1)+bottom(1) for the main
-	// box and the 3-row monitor box below it.
-	avail := maxi(m.h-2-2-3, len(body))
-	lines := body
-	if len(lines) > avail {
-		lines = lines[:avail]
-	}
-	for _, ln := range lines {
-		sb.WriteString(contentLine(b, ln, innerW))
-		sb.WriteByte('\n')
-	}
-	for range maxi(avail-len(lines), 0) {
-		sb.WriteString(contentLine(b, "", innerW))
-		sb.WriteByte('\n')
-	}
+	// Same fixed-chrome layout as summaryView: a scrollable middle region of exactly
+	// bodyViewH rows (scrollbar drawn on overflow), then the hint + bottom border +
+	// the 3-row monitor box, so the footer stays pinned at any terminal size.
+	viewH := m.bodyViewH()
+	off := clampScroll(m.wikiScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
 	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
 	sb.WriteByte('\n')
@@ -1878,45 +1971,135 @@ func (m model) finishedTail() string {
 	return tail
 }
 
-// pwOffWarning builds the localized SSH-login notice with the REAL admin user,
-// host, and generated key path substituted. Shared by the pre-run content (start)
-// and the post-run finished tail. MODE-AWARE: strict shows the loud two-line
-// "password login is now OFF, log in with the key" notice; soft shows a single
-// info line — password login STAYS ON, and a key is also generated so either works.
+// pwOffWarning builds the localized SSH-login notice. Shared by the pre-run
+// content (start) and the post-run finished tail. MODE-AWARE: strict shows the
+// loud two-line "password login is now OFF, connect with the generated key"
+// notice; soft shows a single info line — password login STAYS ON, and a key is
+// also generated so either works. The key lives only in memory and is shown on
+// the key screen; there is no on-disk path to reference.
 func (m model) pwOffWarning() string {
-	host := strings.TrimSpace(m.inputs[fHost].Value())
-	login := defaultAdminUser + "@" + host // AdminUser is fixed to vpsadmin at start()
-	keyPath := keyFileName(defaultLogDir, host)
 	if m.mode == config.ModeStrict {
-		return t(m.lang, kPwOffWarn) + "\n" +
-			fmt.Sprintf(t(m.lang, kPwOffLogin), keyPath, login)
+		return t(m.lang, kPwOffWarn) + "\n" + t(m.lang, kPwOffLogin)
 	}
-	return fmt.Sprintf(t(m.lang, kPwOnInfo), keyPath, login)
+	return t(m.lang, kPwOnInfo)
 }
 
-// keyFileName reproduces the SAME path the engine generates the bootstrap key at
-// (id_ed25519_<sanitized host> under logDir), using the identical sanitize rules,
-// so the warning points at the real on-disk file rather than a guessed name.
-func keyFileName(logDir, host string) string {
-	if logDir == "" {
-		logDir = "."
+// --- SSH key screen (phaseKey) ------------------------------------------------
+//
+// Shows the generated private-key PEM (in memory only — never logged) so the
+// operator can copy it before it is lost, with a clickable "Copy key" button and
+// a `c` hotkey. Built in the same bordered frame as runView/wikiView, with the
+// monitor footer pinned at the bottom (every post-connect screen keeps it alive).
+
+const keyBodyTopRow = 2 // top border (0) + switcher (1) → body starts at row 2
+
+// keyButtonLabel returns the rendered "Copy key" button text (with brackets), the
+// SINGLE source shared by keyView (render) and keyCopyAtClick (hit-test) so their
+// geometry cannot drift.
+func (m model) keyButtonLabel() string { return "[ " + t(m.lang, kKeyCopyBtn) + " ]" }
+
+// keyConnLine builds the localized connect hint: the label + an ssh command that
+// uses the admin user the executor switched to (root SSH is blocked post-harden).
+// The "<key-file>" is a placeholder — the key is saved nowhere, so the operator
+// chooses a path when they paste the copied PEM.
+func (m model) keyConnLine() string {
+	host := m.host
+	if host == "" {
+		host = strings.TrimSpace(m.inputs[fHost].Value())
 	}
-	return filepath.Join(logDir, "id_ed25519_"+sanitizeHost(host))
+	return t(m.lang, kKeyConnHint) + " ssh -i <key-file> " + defaultAdminUser + "@" + host
 }
 
-// sanitizeHost mirrors engine.sanitize: keep [A-Za-z0-9-], replace every other
-// byte with '_'. Kept in sync so the displayed key path matches the generated one.
-func sanitizeHost(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
-			out = append(out, c)
-		} else {
-			out = append(out, '_')
-		}
+// keyBodyLines builds the ordered key-screen body (warning, PEM, connect hint,
+// button, status) wrapped/clipped to innerW, and returns the slice index of the
+// button line so keyCopyAtClick can recover its screen Y. Every PEM line is
+// rendered (the OpenSSH PEM is multi-line, ~400 chars); long lines are clipped to
+// innerW so they never cross the border.
+func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
+	lines = append(lines, wrap(errStyle.Render(t(m.lang, kKeyWarn)), innerW)...)
+	lines = append(lines, "")
+	for _, ln := range strings.Split(strings.TrimRight(m.keyPEM, "\n"), "\n") {
+		lines = append(lines, truncDisplay(ln, innerW))
 	}
-	return string(out)
+	lines = append(lines, "")
+	lines = append(lines, wrap(m.keyConnLine(), innerW)...)
+	lines = append(lines, "")
+	buttonIdx = len(lines)
+	lines = append(lines, pillOnStyle.Render(m.keyButtonLabel()))
+	switch {
+	case m.keyCopied:
+		lines = append(lines, monGreenStyle.Render(t(m.lang, kKeyCopied)))
+	case m.keyCopyFailed:
+		lines = append(lines, errStyle.Render(t(m.lang, kKeyCopyFail)))
+	default:
+		lines = append(lines, "")
+	}
+	return lines, buttonIdx
+}
+
+// keyView renders the SSH key screen inside the shared bordered frame, then the
+// localized control hint and the live monitor box. Layout (0-based screen rows):
+//
+//	row 0              : main box top border
+//	row 1              : RU/EN switcher
+//	rows 2..2+viewH-1  : scrollable body (warning, PEM, connect hint, button, status)
+//	...                : hint, bottom border, then the 3-row monitor box (pinned)
+func (m model) keyView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body, _ := m.keyBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+t(m.lang, kKeyTitle)+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	// Same fixed-chrome layout as summaryView/wikiView: a scrollable middle region of
+	// exactly bodyViewH rows (no scroll state here — the PEM almost always fits, but
+	// renderScrollRegion keeps the footer pinned regardless), then hint + bottom
+	// border + the 3-row monitor box.
+	viewH := m.bodyViewH()
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, 0)
+
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kKeyHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// copyKey copies the private-key PEM to the system clipboard, recording success or
+// failure for the on-screen status line. Pure value-receiver (model copied by value).
+func (m model) copyKey() model {
+	if err := clipboard.WriteAll(m.keyPEM); err != nil {
+		m.keyCopied = false
+		m.keyCopyFailed = true
+		return m
+	}
+	m.keyCopied = true
+	m.keyCopyFailed = false
+	return m
+}
+
+// keyCopyAtClick reports whether the click at (x,y) hit the "Copy key" button. It
+// derives the button's screen row from the SAME body layout keyView renders
+// (keyBodyTopRow + buttonIdx) and the X range from the rendered button width, so
+// the hit-test matches the draw exactly.
+func (m model) keyCopyAtClick(x, y int) bool {
+	if m.phase != phaseKey {
+		return false
+	}
+	_, buttonIdx := m.keyBodyLines(innerWidth(m.boxWidth()))
+	if y != keyBodyTopRow+buttonIdx {
+		return false
+	}
+	const contentX0 = 2 // borderLeft(1) + space(1)
+	w := lipgloss.Width(m.keyButtonLabel())
+	return x >= contentX0 && x < contentX0+w
 }
 
 // finishedTailRows is the number of content rows finishedTail occupies; runView
@@ -2102,6 +2285,14 @@ func borderLine(left, mid, right string, w int) string {
 // contentLine wraps one content line in the box: Left + " " + padded line + " " +
 // Right, where the line is truncated/padded to exactly innerW display cells.
 func contentLine(b lipgloss.Border, line string, innerW int) string {
+	return contentLineR(b, line, innerW, borderStyle.Render(b.Right))
+}
+
+// contentLineR is contentLine with an explicit right-border cell, so a scrollable
+// region can substitute a scrollbar thumb/track glyph there (see renderScrollRegion)
+// while every other row keeps the plain border. right must be exactly one display
+// cell wide (already styled).
+func contentLineR(b lipgloss.Border, line string, innerW int, right string) string {
 	if innerW < 0 {
 		innerW = 0
 	}
@@ -2109,7 +2300,77 @@ func contentLine(b lipgloss.Border, line string, innerW int) string {
 	if pad := innerW - lipgloss.Width(line); pad > 0 {
 		line += strings.Repeat(" ", pad)
 	}
-	return borderStyle.Render(b.Left) + " " + line + " " + borderStyle.Render(b.Right)
+	return borderStyle.Render(b.Left) + " " + line + " " + right
+}
+
+// bodyViewH is the height (in rows) of the scrollable middle region on the summary
+// and wiki screens: the terminal height minus the fixed chrome — top border +
+// switcher (2) + hint + main-box bottom (2) + the 3-row monitor box = 7 — floored at
+// 1 so the region never vanishes on a tiny terminal.
+func (m model) bodyViewH() int { return max(m.h-7, 1) }
+
+// clampScroll bounds a scroll offset to [0, max(0,total-viewH)] so it can never
+// scroll past the end (or before the start). Recomputed on every use, so a resize
+// that grows the window (raising viewH) automatically pulls the offset back.
+func clampScroll(off, total, viewH int) int {
+	maxOff := total - viewH
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if off < 0 {
+		return 0
+	}
+	if off > maxOff {
+		return maxOff
+	}
+	return off
+}
+
+// renderScrollRegion emits exactly viewH box content rows showing body[off:off+viewH]
+// (blank-padded when the body is shorter), so the caller's footer stays pinned. When
+// the body overflows viewH it draws a proportional scrollbar in the RIGHT border —
+// a bright thumb (█) over a dim track (│) whose size and position reflect viewH/total
+// and off — so the user sees there is hidden content and where they are; when it all
+// fits the plain border is drawn and there is no scrollbar. off is assumed already
+// clamped (clampScroll).
+func (m model) renderScrollRegion(sb *strings.Builder, b lipgloss.Border, body []string, innerW, viewH, off int) {
+	total := len(body)
+	overflow := total > viewH
+
+	// Thumb extent in region rows [thumbStart, thumbEnd).
+	thumbStart, thumbEnd := 0, 0
+	if overflow {
+		thumb := max(viewH*viewH/total, 1) // proportion of content visible, ≥1 cell
+		maxOff := total - viewH
+		pos := 0
+		if maxOff > 0 {
+			pos = off * (viewH - thumb) / maxOff
+		}
+		if pos < 0 {
+			pos = 0
+		}
+		if pos > viewH-thumb {
+			pos = viewH - thumb
+		}
+		thumbStart, thumbEnd = pos, pos+thumb
+	}
+
+	for i := range viewH {
+		var line string
+		if off+i < total {
+			line = body[off+i]
+		}
+		right := borderStyle.Render(b.Right)
+		if overflow {
+			if i >= thumbStart && i < thumbEnd {
+				right = borderStyle.Render("█") // thumb
+			} else {
+				right = monDimStyle.Render("│") // track
+			}
+		}
+		sb.WriteString(contentLineR(b, line, innerW, right))
+		sb.WriteByte('\n')
+	}
 }
 
 // truncDisplay truncates s to at most w display cells (ANSI/Unicode-safe). w<=0
@@ -2369,6 +2630,13 @@ func validHost(h string) bool {
 		}
 	}
 	return true
+}
+
+// fsSafeHost makes a host string safe for use in a log filename: the form already
+// restricts Host to [0-9a-zA-Z.-] (sanitizeField), so only the dot needs replacing;
+// colon is handled too for defensiveness (e.g. a future IPv6 literal).
+func fsSafeHost(h string) string {
+	return strings.NewReplacer(".", "_", ":", "_").Replace(h)
 }
 
 func atoiDefault(s string, def int) int {

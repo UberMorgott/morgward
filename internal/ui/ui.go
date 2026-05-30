@@ -30,22 +30,29 @@ type Logger struct {
 	sink  func(string) // when set, terminal lines go here instead of stdout
 }
 
-// New opens a log file named morgward-YYYYMMDD-HHMMSS.log in dir.
-func New(dir string) (*Logger, error) {
-	if dir == "" {
-		dir = "."
+// New returns a Logger. If path is empty, no file is created and output goes
+// only to stdout (or the sink). If path is non-empty, the run log is written to
+// that file; on failure to open it, a warning is printed and the Logger
+// continues without a file (it never panics or fails the program).
+func New(path string) *Logger {
+	l := &Logger{color: true}
+	if path == "" {
+		return l
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cannot create log directory %q: %v (continuing without a log file)\n", dir, err)
+			return l
+		}
 	}
-	name := fmt.Sprintf("morgward-%s.log", time.Now().Format("20060102-150405"))
-	f, err := os.Create(filepath.Join(dir, name))
+	f, err := os.Create(path)
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(os.Stderr, "warning: cannot create log file %q: %v (continuing without a log file)\n", path, err)
+		return l
 	}
-	l := &Logger{file: f, color: true}
+	l.file = f
 	l.raw(fmt.Sprintf("# morgward run log — %s\n", time.Now().Format(time.RFC3339)))
-	return l, nil
+	return l
 }
 
 // SetSink redirects terminal output to fn (one call per line, colored). When a
