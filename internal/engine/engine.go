@@ -495,6 +495,13 @@ func logBenchAndSkips(log *ui.Logger, sum Summary) {
 	if sum.BenchOK {
 		log.Info("internet: %.1f → %.1f MB/s (%.2fx)", sum.BenchPreMBs, sum.BenchPostMBs, sum.BenchRatio)
 	}
+	// Before/after stats block (CLI text path). statsLines returns nil when both
+	// snapshots are absent (detect/verify/step), so this is a no-op there. The TUI
+	// renders the same data from its own summary screen; these lines land only in
+	// the scrolling log pane, which is acceptable (separate surfaces).
+	for _, line := range sum.statsLines() {
+		log.Info("%s", line)
+	}
 }
 
 // emitDone fires the one final Done progress event (if a progress hook is set).
