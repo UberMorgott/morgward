@@ -55,5 +55,5 @@ echo "PURGED_COUNT=$(wc -l < "$LOG" 2>/dev/null || echo 0)"
 	r := ctx.Cli.Sudo(script)
 	count := extractMarker(r.Stdout, "PURGED_COUNT=")
 	failed := ctx.Cli.Sudo("systemctl --failed --no-legend 2>/dev/null | wc -l").Out()
-	return StatusOK, "bloatware purged (" + count + " pkgs logged to /root/vps-purged-packages.log), failed units=" + failed, nil
+	return StatusOK, "bloatware purged (" + count + " pkgs logged to /root/vps-purged-packages.log), failed units=" + failed + " PURGED_COUNT=" + count, nil
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/state"
+	"github.com/UberMorgott/morgward/internal/stats"
 	"github.com/UberMorgott/morgward/internal/steps"
 	"github.com/UberMorgott/morgward/internal/ui"
 	"github.com/UberMorgott/morgward/internal/verify"
@@ -43,9 +45,10 @@ func orderedSteps() []steps.Step {
 
 // session is the shared connected state produced by prepare().
 type session struct {
-	log *ui.Logger
-	cli *sshx.Client
-	ctx *steps.Context
+	log    *ui.Logger
+	cli    *sshx.Client
+	ctx    *steps.Context
+	before *stats.Snapshot // best-effort pre-run snapshot (may be nil/partial)
 }
 
 // Hooks bundles the optional callbacks the TUI uses to observe a run. Any field
@@ -66,11 +69,31 @@ type Progress struct {
 	Summary      Summary
 }
 
+// StepResult is the outcome of a single step, accumulated in apply order so the
+// CLI/TUI can render a per-step table in the summary, not just aggregate counts.
+type StepResult struct {
+	ID, Title string
+	Status    steps.Status
+	Detail    string
+}
+
 // Summary is the aggregate run outcome carried by the final Done progress event.
 type Summary struct {
 	OK, Skip, Fail             int
 	VerifyPassed, VerifyFailed int
 	Elapsed                    time.Duration
+
+	// Results carries every step's outcome in apply order (ID/Title/Status/Detail).
+	Results []StepResult
+
+	// Before/After are best-effort system snapshots captured right after detection
+	// and right after the last step; either may be nil (capture failed) and the
+	// renderers hide unknown fields. Snapshots are cosmetic — never run-fatal.
+	Before, After *stats.Snapshot
+
+	// UpgradedPkgs/PurgedPkgs/Reboots are parsed from A8/A7 step markers (and A8's
+	// OK status) for the summary's change tally.
+	UpgradedPkgs, PurgedPkgs, Reboots int
 
 	// Skips carries the per-skip reasons (the detail string each SKIPPED step
 	// returned), so the CLI/TUI can show WHY a step was skipped, not just a count.
@@ -83,6 +106,20 @@ type Summary struct {
 	BenchOK                               bool
 }
 
+// Applied is the count of steps that finished StatusOK (actually applied work).
+func (s Summary) Applied() int {
+	n := 0
+	for _, r := range s.Results {
+		if r.Status == steps.StatusOK {
+			n++
+		}
+	}
+	return n
+}
+
+// Total is the number of steps attempted (rows in the per-step table).
+func (s Summary) Total() int { return len(s.Results) }
+
 // SkipReason pairs a skipped step's ID with the human reason it returned.
 type SkipReason struct {
 	ID, Reason string
@@ -92,6 +129,7 @@ type SkipReason struct {
 type counts struct {
 	ok, skip, fail int
 	skips          []SkipReason // per-skip ID + reason, in apply order
+	results        []StepResult // every step's outcome, in apply order
 }
 
 // Execute is the single entrypoint used by both the CLI and the TUI: it opens
@@ -204,6 +242,13 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		return nil, cleanup, fmt.Errorf("egress interface detection failed (got %q) — aborting per §2", facts.EgressIface)
 	}
 
+	// Best-effort "before" snapshot for the run summary. A capture error is
+	// cosmetic — log it and keep whatever partial snapshot we got; NEVER abort.
+	before, serr := stats.Capture(cli)
+	if serr != nil {
+		log.Warn("before snapshot incomplete: %v", serr)
+	}
+
 	// 4a. Already-hardened gate — refuse to re-run Phase A blind on a box this
 	// runbook already processed (read-only commands pass through).
 	if facts.AlreadyHardened {
@@ -243,7 +288,7 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		Cli: cli, Log: log, Cfg: cfg, State: chk, Facts: facts,
 		AuthLine: authLine, KeyPEM: keyPEM,
 	}
-	return &session{log: log, cli: cli, ctx: ctx}, cleanup, nil
+	return &session{log: log, cli: cli, ctx: ctx, before: before}, cleanup, nil
 }
 
 // notifyConnect fires the onConnect callback (if set) with the monitor's
@@ -273,6 +318,13 @@ func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 	if err != nil {
 		return err
 	}
+
+	// Best-effort "after" snapshot — cosmetic, never run-fatal.
+	after, serr := stats.Capture(s.cli)
+	if serr != nil {
+		s.log.Warn("after snapshot incomplete: %v", serr)
+	}
+
 	res := verify.Run(s.cli, s.log, cfg.Port, string(cfg.Mode))
 	s.log.Banner("SUMMARY")
 	s.log.Info("verify: %d passed, %d failed", res.Passed, res.Failed)
@@ -280,8 +332,12 @@ func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 		OK: cnt.ok, Skip: cnt.skip, Fail: cnt.fail,
 		VerifyPassed: res.Passed, VerifyFailed: res.Failed,
 		Elapsed: time.Since(start),
-		Skips:   cnt.skips,
+		Results: cnt.results,
+		Before:  s.before, After: after,
+		Skips: cnt.skips,
 	}
+	applyResultMarkers(&sum)
+	applySnapshotBench(&sum, s.ctx.Bench)
 	applyBench(&sum, s.ctx.Bench)
 	logBenchAndSkips(s.log, sum)
 	emitDone(h, sum)
@@ -315,7 +371,8 @@ func RunSteps(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 	if err != nil {
 		return err
 	}
-	sum := Summary{OK: cnt.ok, Skip: cnt.skip, Fail: cnt.fail, Elapsed: time.Since(start), Skips: cnt.skips}
+	sum := Summary{OK: cnt.ok, Skip: cnt.skip, Fail: cnt.fail, Elapsed: time.Since(start), Skips: cnt.skips, Results: cnt.results}
+	applyResultMarkers(&sum)
 	applyBench(&sum, s.ctx.Bench)
 	logBenchAndSkips(s.log, sum)
 	emitDone(h, sum)
@@ -354,6 +411,65 @@ func DetectOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 	}
 	emitDone(h, Summary{Elapsed: time.Since(start)})
 	return nil
+}
+
+// applyResultMarkers derives the change tally from step result details: the
+// UPGRADED_COUNT marker A8 emits, the PURGED_COUNT marker A7 emits, and a reboot
+// count (1 when A8 finished OK — A8 reboots). Markers are embedded in the detail
+// string via the same key=value convention extractMarker reads on the box.
+func applyResultMarkers(sum *Summary) {
+	for _, r := range sum.Results {
+		switch r.ID {
+		case "A8":
+			if n, ok := markerInt(r.Detail, "UPGRADED_COUNT="); ok {
+				sum.UpgradedPkgs = n
+			}
+			if r.Status == steps.StatusOK {
+				sum.Reboots++
+			}
+		case "A7":
+			if n, ok := markerInt(r.Detail, "PURGED_COUNT="); ok {
+				sum.PurgedPkgs = n
+			}
+		}
+	}
+}
+
+// markerInt scans detail for "<marker><int>" (whitespace-delimited) and returns
+// the parsed int. ok is false when the marker is absent or unparseable.
+func markerInt(detail, marker string) (int, bool) {
+	i := strings.Index(detail, marker)
+	if i < 0 {
+		return 0, false
+	}
+	rest := detail[i+len(marker):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// applySnapshotBench folds the §A4 internet benchmark into the before/after
+// snapshots' SpeedMBs (which the snapshot script cannot measure itself) so the
+// summary's throughput delta lines up with the rest of the snapshot.
+func applySnapshotBench(sum *Summary, b *steps.BenchResult) {
+	if b == nil || !b.OK {
+		return
+	}
+	if sum.Before != nil {
+		sum.Before.SpeedMBs = b.PreMBs
+	}
+	if sum.After != nil {
+		sum.After.SpeedMBs = b.PostMBs
+	}
 }
 
 // applyBench copies a step BenchResult (if present and valid) into the Summary's
@@ -410,6 +526,10 @@ func runStepList(s *session, list []steps.Step, honorCheckpoint bool, h Hooks) (
 			s.log.Skip("%s — already completed (checkpoint)", st.ID())
 			c.skip++
 			c.skips = append(c.skips, SkipReason{ID: st.ID(), Reason: "already completed (checkpoint)"})
+			c.results = append(c.results, StepResult{
+				ID: st.ID(), Title: st.Title(), Status: steps.StatusSkip,
+				Detail: "already completed (checkpoint)",
+			})
 			// Checkpoint-skipped steps still emit with their final status.
 			emit(st, i, steps.StatusSkip.String())
 			continue
@@ -419,6 +539,9 @@ func runStepList(s *session, list []steps.Step, honorCheckpoint bool, h Hooks) (
 		start := time.Now()
 		status, detail, herr := st.Run(s.ctx)
 		dur := time.Since(start).Round(time.Second)
+		c.results = append(c.results, StepResult{
+			ID: st.ID(), Title: st.Title(), Status: status, Detail: detail,
+		})
 		switch status {
 		case steps.StatusOK:
 			c.ok++
