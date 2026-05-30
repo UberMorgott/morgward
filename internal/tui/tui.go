@@ -220,6 +220,13 @@ type model struct {
 	wikiStep   string
 	wikiReturn phase
 
+	// scroll offsets for the directly-rendered summary + wiki screens (the run
+	// screen scrolls its own m.vp instead). They are clamped to the current body
+	// length and middle-region height on every use (clampScroll), so growing the
+	// window auto-reduces the offset and the monitor footer stays pinned.
+	sumScroll  int
+	wikiScroll int
+
 	finalErr error
 	finished bool
 	host     string    // target host, stashed at start() for window-title updates
@@ -336,6 +343,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
 				m.wikiStep = id
 				m.wikiReturn = phaseSummary
+				m.wikiScroll = 0 // fresh page starts at the top
 				m.phase = phaseWiki
 			}
 			return m, nil
@@ -353,18 +361,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		// Mouse-wheel scrolls the run-view log viewport (run phase only); the form
-		// has no scrollable region. v2 delivers wheel events as MouseWheelMsg with a
-		// MouseWheelUp/Down button (mouse.go), distinct from MouseClickMsg.
-		if m.phase != phaseRun {
-			return m, nil
-		}
+		// Mouse-wheel scrolls the scrollable region of the current screen: the run
+		// log viewport in phaseRun, the directly-rendered body in phaseSummary/phaseWiki
+		// (the form has no scrollable region). v2 delivers wheel events as MouseWheelMsg
+		// with a MouseWheelUp/Down button (mouse.go), distinct from MouseClickMsg.
 		const wheelStep = 3
-		switch msg.Mouse().Button {
-		case tea.MouseWheelUp:
-			m.vp.ScrollUp(wheelStep)
-		case tea.MouseWheelDown:
-			m.vp.ScrollDown(wheelStep)
+		up := msg.Mouse().Button == tea.MouseWheelUp
+		down := msg.Mouse().Button == tea.MouseWheelDown
+		switch m.phase {
+		case phaseRun:
+			if up {
+				m.vp.ScrollUp(wheelStep)
+			} else if down {
+				m.vp.ScrollDown(wheelStep)
+			}
+		case phaseSummary:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.sumScroll = clampScroll(m.sumScroll+d, len(m.summaryBodyLines()), m.bodyViewH())
+		case phaseWiki:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.wikiScroll = clampScroll(m.wikiScroll+d, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 		}
 		return m, nil
 
@@ -387,17 +413,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.phase {
 		case phaseWiki:
-			// Any "back" key returns to wherever the wiki was opened from (summary).
+			// Any "back" key returns to wherever the wiki was opened from (summary);
+			// ↑↓/k/j scroll the description when it overflows the middle region.
 			switch msg.String() {
 			case "enter", "esc", "b":
 				m.phase = m.wikiReturn
+			case "up", "k":
+				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			case "down", "j":
+				m.wikiScroll = clampScroll(m.wikiScroll+1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			}
 			return m, nil
 		case phaseSummary:
-			// On the summary, "back" returns to the form/menu (stops the sampler).
+			// On the summary, "back" returns to the form/menu (stops the sampler);
+			// ↑↓/k/j scroll the stats + fix list when it overflows the middle region.
 			switch msg.String() {
 			case "enter", "esc", "b":
 				return m.goBack()
+			case "up", "k":
+				m.sumScroll = clampScroll(m.sumScroll-1, len(m.summaryBodyLines()), m.bodyViewH())
+			case "down", "j":
+				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.bodyViewH())
 			}
 			return m, nil
 		}
@@ -701,6 +737,8 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.elapsed = 0
 	m.spin = 0
 	m.vp.SetContent("")
+	m.sumScroll = 0
+	m.wikiScroll = 0
 	m.titleK = titleIdle
 	return m, m.refocus()
 }
@@ -1610,13 +1648,16 @@ func fixGlyph(st steps.Status) string {
 //
 //	row 0                 : main box top border
 //	row 1                 : RU/EN switcher
-//	rows 2..              : header, blank, stat blocks, blank, fix-list header,
-//	                        then one clickable row per fix (fixListBaseRow + i)
-//	...                   : pad, hint, bottom border, then the monitor box
+//	rows 2..2+viewH-1     : the scrollable middle region — header, blank, stat blocks,
+//	                        blank, fix-list header, then one clickable row per fix,
+//	                        windowed to body[sumScroll : sumScroll+viewH]
+//	...                   : hint, bottom border, then the 3-row monitor box (pinned)
 //
-// It renders directly (no viewport) so each fix row's screen Y is fixed by its slice
-// index — the hit-test in fixAtClick reproduces it exactly. The body is clamped to
-// the available height so it never overruns the monitor footer.
+// The middle region always emits exactly viewH rows (blank-padded when the body is
+// shorter), so the monitor footer is ALWAYS pinned to the bottom regardless of the
+// terminal size. When the body overflows viewH a scrollbar is drawn in the right
+// border (renderScrollRegion) and the wheel / ↑↓ scroll it; fixAtClick reproduces the
+// windowed geometry so clicks stay accurate.
 func (m model) summaryView() string {
 	bw := m.boxWidth()
 	innerW := innerWidth(bw)
@@ -1630,22 +1671,11 @@ func (m model) summaryView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	// Budget: chrome rows reserved for the main box bottom + hint + monitor box.
-	// main box: hint(1) + bottom(1); monitor box: top(1) + content(1) + bottom(1).
-	// Already emitted: top(1) + switcher(1). So body+pad must fill h-2-2-3 rows.
-	avail := maxi(m.h-2-2-3, len(body))
-	lines := body
-	if len(lines) > avail {
-		lines = lines[:avail] // clamp (only on a very short terminal)
-	}
-	for _, ln := range lines {
-		sb.WriteString(contentLine(b, ln, innerW))
-		sb.WriteByte('\n')
-	}
-	for range maxi(avail-len(lines), 0) {
-		sb.WriteString(contentLine(b, "", innerW))
-		sb.WriteByte('\n')
-	}
+	// Scrollable middle region (the only resizable part); the chrome above (2 rows)
+	// and below (hint + bottom + 3-row monitor) is fixed, so the footer never moves.
+	viewH := m.bodyViewH()
+	off := clampScroll(m.sumScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
 	// Hint + main box bottom border.
 	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kSummaryHint)), innerW))
@@ -1676,30 +1706,27 @@ func (m model) summaryBodyLines() []string {
 	return body
 }
 
-// fixListBaseRow is the 0-based screen Y of the FIRST fix row. It equals
-// summaryBodyTopRow plus the count of body lines that precede the fix rows (header +
-// stat blocks + their blanks + the fix-list section header), so it tracks layout
-// changes automatically rather than hard-coding an offset.
-func (m model) fixListBaseRow() int {
-	body := m.summaryBodyLines()
-	return summaryBodyTopRow + (len(body) - len(m.summary.Results))
-}
-
-// fixAtClick maps a click at (x,y) to a fix-list row's step ID. Rows render with no
-// scroll (summaryView is non-viewport), so row i is at screen Y = fixListBaseRow + i;
-// X must fall within the rendered row width. Returns ok=false on a miss.
+// fixAtClick maps a click at (x,y) to a fix-list row's step ID, accounting for the
+// scroll offset. The middle region occupies screen rows [summaryBodyTopRow,
+// summaryBodyTopRow+viewH); a click there maps to body index sumScroll+(y-top), and
+// the fix rows are the tail of the body (after the header + stat blocks + fix-list
+// header). X must fall within the rendered row width. Returns ok=false on a miss.
 func (m model) fixAtClick(x, y int) (string, bool) {
 	if m.phase != phaseSummary || len(m.summary.Results) == 0 {
 		return "", false
 	}
-	base := m.fixListBaseRow()
-	idx := y - base
-	if idx < 0 || idx >= len(m.summary.Results) {
-		return "", false
+	body := m.summaryBodyLines()
+	viewH := m.bodyViewH()
+	off := clampScroll(m.sumScroll, len(body), viewH)
+
+	rowInRegion := y - summaryBodyTopRow
+	if rowInRegion < 0 || rowInRegion >= viewH {
+		return "", false // click is in the chrome (switcher/hint/border/monitor), not the body
 	}
-	// Clamp against the body so a click below the (possibly height-clamped) list
-	// can't resolve to an off-screen row.
-	if base+idx >= summaryBodyTopRow+maxi(m.h-2-2-3, len(m.summaryBodyLines())) {
+	bodyIdx := off + rowInRegion
+	fixStart := len(body) - len(m.summary.Results) // fix rows are the body tail
+	idx := bodyIdx - fixStart
+	if idx < 0 || idx >= len(m.summary.Results) {
 		return "", false
 	}
 	const contentX0 = 2 // borderLeft(1) + space(1)
@@ -1797,21 +1824,12 @@ func (m model) wikiView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	// Same vertical budget as summaryView: reserve hint(1)+bottom(1) for the main
-	// box and the 3-row monitor box below it.
-	avail := maxi(m.h-2-2-3, len(body))
-	lines := body
-	if len(lines) > avail {
-		lines = lines[:avail]
-	}
-	for _, ln := range lines {
-		sb.WriteString(contentLine(b, ln, innerW))
-		sb.WriteByte('\n')
-	}
-	for range maxi(avail-len(lines), 0) {
-		sb.WriteString(contentLine(b, "", innerW))
-		sb.WriteByte('\n')
-	}
+	// Same fixed-chrome layout as summaryView: a scrollable middle region of exactly
+	// bodyViewH rows (scrollbar drawn on overflow), then the hint + bottom border +
+	// the 3-row monitor box, so the footer stays pinned at any terminal size.
+	viewH := m.bodyViewH()
+	off := clampScroll(m.wikiScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
 	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
 	sb.WriteByte('\n')
@@ -2102,6 +2120,14 @@ func borderLine(left, mid, right string, w int) string {
 // contentLine wraps one content line in the box: Left + " " + padded line + " " +
 // Right, where the line is truncated/padded to exactly innerW display cells.
 func contentLine(b lipgloss.Border, line string, innerW int) string {
+	return contentLineR(b, line, innerW, borderStyle.Render(b.Right))
+}
+
+// contentLineR is contentLine with an explicit right-border cell, so a scrollable
+// region can substitute a scrollbar thumb/track glyph there (see renderScrollRegion)
+// while every other row keeps the plain border. right must be exactly one display
+// cell wide (already styled).
+func contentLineR(b lipgloss.Border, line string, innerW int, right string) string {
 	if innerW < 0 {
 		innerW = 0
 	}
@@ -2109,7 +2135,77 @@ func contentLine(b lipgloss.Border, line string, innerW int) string {
 	if pad := innerW - lipgloss.Width(line); pad > 0 {
 		line += strings.Repeat(" ", pad)
 	}
-	return borderStyle.Render(b.Left) + " " + line + " " + borderStyle.Render(b.Right)
+	return borderStyle.Render(b.Left) + " " + line + " " + right
+}
+
+// bodyViewH is the height (in rows) of the scrollable middle region on the summary
+// and wiki screens: the terminal height minus the fixed chrome — top border +
+// switcher (2) + hint + main-box bottom (2) + the 3-row monitor box = 7 — floored at
+// 1 so the region never vanishes on a tiny terminal.
+func (m model) bodyViewH() int { return max(m.h-7, 1) }
+
+// clampScroll bounds a scroll offset to [0, max(0,total-viewH)] so it can never
+// scroll past the end (or before the start). Recomputed on every use, so a resize
+// that grows the window (raising viewH) automatically pulls the offset back.
+func clampScroll(off, total, viewH int) int {
+	maxOff := total - viewH
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if off < 0 {
+		return 0
+	}
+	if off > maxOff {
+		return maxOff
+	}
+	return off
+}
+
+// renderScrollRegion emits exactly viewH box content rows showing body[off:off+viewH]
+// (blank-padded when the body is shorter), so the caller's footer stays pinned. When
+// the body overflows viewH it draws a proportional scrollbar in the RIGHT border —
+// a bright thumb (█) over a dim track (│) whose size and position reflect viewH/total
+// and off — so the user sees there is hidden content and where they are; when it all
+// fits the plain border is drawn and there is no scrollbar. off is assumed already
+// clamped (clampScroll).
+func (m model) renderScrollRegion(sb *strings.Builder, b lipgloss.Border, body []string, innerW, viewH, off int) {
+	total := len(body)
+	overflow := total > viewH
+
+	// Thumb extent in region rows [thumbStart, thumbEnd).
+	thumbStart, thumbEnd := 0, 0
+	if overflow {
+		thumb := max(viewH*viewH/total, 1) // proportion of content visible, ≥1 cell
+		maxOff := total - viewH
+		pos := 0
+		if maxOff > 0 {
+			pos = off * (viewH - thumb) / maxOff
+		}
+		if pos < 0 {
+			pos = 0
+		}
+		if pos > viewH-thumb {
+			pos = viewH - thumb
+		}
+		thumbStart, thumbEnd = pos, pos+thumb
+	}
+
+	for i := range viewH {
+		var line string
+		if off+i < total {
+			line = body[off+i]
+		}
+		right := borderStyle.Render(b.Right)
+		if overflow {
+			if i >= thumbStart && i < thumbEnd {
+				right = borderStyle.Render("█") // thumb
+			} else {
+				right = monDimStyle.Render("│") // track
+			}
+		}
+		sb.WriteString(contentLineR(b, line, innerW, right))
+		sb.WriteByte('\n')
+	}
 }
 
 // truncDisplay truncates s to at most w display cells (ANSI/Unicode-safe). w<=0
