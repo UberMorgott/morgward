@@ -169,6 +169,22 @@ const (
 	kWikiWhy   // ЗАЧЕМ
 	kWikiRisk  // БЕЗ ЭТОГО
 	kWikiNoDoc // "нет описания" / "no description"
+
+	// --- SSH key screen (phaseKey) ---------------------------------------
+	// The generated private key lives ONLY in memory; this screen is the one
+	// place it is shown so the operator can copy it before it is lost.
+	kKeyTitle    // box title: "SSH key access"
+	kKeyWarn     // loud warning: the key is saved nowhere — copy it now
+	kKeyConnHint // label before the ssh command (the command is built in code)
+	kKeyCopyBtn  // clickable button label: "Copy key"
+	kKeyCopied   // status after a successful clipboard copy: "✓ copied"
+	kKeyCopyFail // status after a failed copy: "copy failed — select manually"
+	kKeyHint     // bottom control hint for the key screen
+
+	// --- main-menu "Save log to file" toggle -----------------------------
+	kSaveLogLabel // form toggle label: "Save log to file"
+	kSaveLogOn    // on state word (reuses yes/no semantics)
+	kSaveLogOff   // off state word
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -280,6 +296,18 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiWhy:   "ЗАЧЕМ",
 		kWikiRisk:  "БЕЗ ЭТОГО",
 		kWikiNoDoc: "нет описания для этого шага",
+
+		kKeyTitle:    "Доступ по SSH-ключу",
+		kKeyWarn:     "Ключ нигде не сохранён. Скопируй сейчас — иначе потеряешь доступ к серверу.",
+		kKeyConnHint: "Подключение:",
+		kKeyCopyBtn:  "Скопировать ключ",
+		kKeyCopied:   "✓ скопировано",
+		kKeyCopyFail: "не удалось скопировать — выдели вручную",
+		kKeyHint:     "esc — назад · c — копировать · l — язык",
+
+		kSaveLogLabel: "Сохранять лог в файл",
+		kSaveLogOn:    "да",
+		kSaveLogOff:   "нет",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -388,6 +416,18 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiWhy:   "WHY",
 		kWikiRisk:  "WITHOUT IT",
 		kWikiNoDoc: "no description for this step",
+
+		kKeyTitle:    "SSH key access",
+		kKeyWarn:     "This key is saved nowhere. Copy it now — otherwise you will lose access to the server.",
+		kKeyConnHint: "Connect:",
+		kKeyCopyBtn:  "Copy key",
+		kKeyCopied:   "✓ copied",
+		kKeyCopyFail: "copy failed — select manually",
+		kKeyHint:     "esc — back · c — copy · l — lang",
+
+		kSaveLogLabel: "Save log to file",
+		kSaveLogOn:    "yes",
+		kSaveLogOff:   "no",
 	},
 }
 
