@@ -17,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/engine"
@@ -59,6 +60,7 @@ const (
 	phaseRun
 	phaseSummary // post-finish stats summary + clickable fix list
 	phaseWiki    // a single fix's what/why/risk description
+	phaseKey     // shows the generated SSH private key + a clipboard "Copy key" button
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -184,6 +186,7 @@ type model struct {
 	command string
 	cmds    []string
 	errMsg  string
+	saveLog bool // form toggle: write the full run log to a file (sets cfg.LogFile)
 
 	logs    chan string
 	done    chan error
@@ -217,6 +220,16 @@ type model struct {
 	// phase to return to on esc (phaseSummary).
 	wikiStep   string
 	wikiReturn phase
+
+	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
+	// memory; never logged), the copy-to-clipboard status, where esc returns to,
+	// and whether the auto-route to this screen has already fired once. All plain
+	// copyable types — the model is copied by value every Update.
+	keyPEM        string
+	keyCopied     bool
+	keyCopyFailed bool
+	keyReturn     phase
+	keyShown      bool
 
 	// scroll offsets for the directly-rendered summary + wiki screens (the run
 	// screen scrolls its own m.vp instead). They are clamped to the current body
@@ -355,6 +368,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.goBack()
 			}
+		case phaseKey:
+			// The "Copy key" button is the only click target on this screen.
+			if m.keyCopyAtClick(mc.X, mc.Y) {
+				m = m.copyKey()
+			}
+			return m, nil
 		}
 		return m, nil
 
@@ -434,6 +453,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.bodyViewH())
 			}
 			return m, nil
+		case phaseKey:
+			// 'c' copies the key to the system clipboard; any "back" key returns to
+			// wherever the key screen was opened from (the run, or the summary).
+			switch msg.String() {
+			case "c":
+				m = m.copyKey()
+			case "enter", "esc", "b":
+				m.phase = m.keyReturn
+			}
+			return m, nil
 		}
 		// run/done phase
 		switch msg.String() {
@@ -491,6 +520,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stopSample = cancel
 		m.sampler = monitor.New(monitor.ConnInfo(msg))
 		go m.sampler.Run(ctx, m.statsCh)
+		// The engine hands over the freshly generated private-key PEM here (only the
+		// password path generates one; with --key it is empty). Stash it and, the
+		// FIRST time we see a non-empty key, auto-route to the key screen so the
+		// operator copies it before it is lost (it is saved nowhere on disk).
+		m.keyPEM = string(msg.KeyPEM)
+		if m.keyPEM != "" && !m.keyShown {
+			m.keyShown = true
+			m.keyReturn = m.phase
+			m.phase = phaseKey
+		}
 		return m, m.listenStats()
 
 	case statMsg:
@@ -957,6 +996,8 @@ func (m model) viewString() string {
 		return m.summaryView()
 	case phaseWiki:
 		return m.wikiView()
+	case phaseKey:
+		return m.keyView()
 	default:
 		return m.formView()
 	}
@@ -1904,6 +1945,124 @@ func (m model) pwOffWarning() string {
 		return t(m.lang, kPwOffWarn) + "\n" + t(m.lang, kPwOffLogin)
 	}
 	return t(m.lang, kPwOnInfo)
+}
+
+// --- SSH key screen (phaseKey) ------------------------------------------------
+//
+// Shows the generated private-key PEM (in memory only — never logged) so the
+// operator can copy it before it is lost, with a clickable "Copy key" button and
+// a `c` hotkey. Built in the same bordered frame as runView/wikiView, with the
+// monitor footer pinned at the bottom (every post-connect screen keeps it alive).
+
+const keyBodyTopRow = 2 // top border (0) + switcher (1) → body starts at row 2
+
+// keyButtonLabel returns the rendered "Copy key" button text (with brackets), the
+// SINGLE source shared by keyView (render) and keyCopyAtClick (hit-test) so their
+// geometry cannot drift.
+func (m model) keyButtonLabel() string { return "[ " + t(m.lang, kKeyCopyBtn) + " ]" }
+
+// keyConnLine builds the localized connect hint: the label + an ssh command that
+// uses the admin user the executor switched to (root SSH is blocked post-harden).
+// The "<key-file>" is a placeholder — the key is saved nowhere, so the operator
+// chooses a path when they paste the copied PEM.
+func (m model) keyConnLine() string {
+	host := m.host
+	if host == "" {
+		host = strings.TrimSpace(m.inputs[fHost].Value())
+	}
+	return t(m.lang, kKeyConnHint) + " ssh -i <key-file> " + defaultAdminUser + "@" + host
+}
+
+// keyBodyLines builds the ordered key-screen body (warning, PEM, connect hint,
+// button, status) wrapped/clipped to innerW, and returns the slice index of the
+// button line so keyCopyAtClick can recover its screen Y. Every PEM line is
+// rendered (the OpenSSH PEM is multi-line, ~400 chars); long lines are clipped to
+// innerW so they never cross the border.
+func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
+	lines = append(lines, wrap(errStyle.Render(t(m.lang, kKeyWarn)), innerW)...)
+	lines = append(lines, "")
+	for _, ln := range strings.Split(strings.TrimRight(m.keyPEM, "\n"), "\n") {
+		lines = append(lines, truncDisplay(ln, innerW))
+	}
+	lines = append(lines, "")
+	lines = append(lines, wrap(m.keyConnLine(), innerW)...)
+	lines = append(lines, "")
+	buttonIdx = len(lines)
+	lines = append(lines, pillOnStyle.Render(m.keyButtonLabel()))
+	switch {
+	case m.keyCopied:
+		lines = append(lines, monGreenStyle.Render(t(m.lang, kKeyCopied)))
+	case m.keyCopyFailed:
+		lines = append(lines, errStyle.Render(t(m.lang, kKeyCopyFail)))
+	default:
+		lines = append(lines, "")
+	}
+	return lines, buttonIdx
+}
+
+// keyView renders the SSH key screen inside the shared bordered frame, then the
+// localized control hint and the live monitor box. Layout (0-based screen rows):
+//
+//	row 0              : main box top border
+//	row 1              : RU/EN switcher
+//	rows 2..2+viewH-1  : scrollable body (warning, PEM, connect hint, button, status)
+//	...                : hint, bottom border, then the 3-row monitor box (pinned)
+func (m model) keyView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body, _ := m.keyBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+t(m.lang, kKeyTitle)+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	// Same fixed-chrome layout as summaryView/wikiView: a scrollable middle region of
+	// exactly bodyViewH rows (no scroll state here — the PEM almost always fits, but
+	// renderScrollRegion keeps the footer pinned regardless), then hint + bottom
+	// border + the 3-row monitor box.
+	viewH := m.bodyViewH()
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, 0)
+
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kKeyHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// copyKey copies the private-key PEM to the system clipboard, recording success or
+// failure for the on-screen status line. Pure value-receiver (model copied by value).
+func (m model) copyKey() model {
+	if err := clipboard.WriteAll(m.keyPEM); err != nil {
+		m.keyCopied = false
+		m.keyCopyFailed = true
+		return m
+	}
+	m.keyCopied = true
+	m.keyCopyFailed = false
+	return m
+}
+
+// keyCopyAtClick reports whether the click at (x,y) hit the "Copy key" button. It
+// derives the button's screen row from the SAME body layout keyView renders
+// (keyBodyTopRow + buttonIdx) and the X range from the rendered button width, so
+// the hit-test matches the draw exactly.
+func (m model) keyCopyAtClick(x, y int) bool {
+	if m.phase != phaseKey {
+		return false
+	}
+	_, buttonIdx := m.keyBodyLines(innerWidth(m.boxWidth()))
+	if y != keyBodyTopRow+buttonIdx {
+		return false
+	}
+	const contentX0 = 2 // borderLeft(1) + space(1)
+	w := lipgloss.Width(m.keyButtonLabel())
+	return x >= contentX0 && x < contentX0+w
 }
 
 // finishedTailRows is the number of content rows finishedTail occupies; runView
