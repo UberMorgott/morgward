@@ -140,6 +140,14 @@ type connMsg monitor.ConnInfo
 type statMsg monitor.Sample
 type progMsg engine.Progress
 type tickMsg time.Time
+type resizeTickMsg time.Time
+
+// statMissThreshold is how many CONSECUTIVE disconnected monitor samples must
+// arrive before the footer treats the box as genuinely gone (reboot) and shows
+// the "reconnecting…" line. The sampler emits one sample per second
+// (monitor.sampleInterval), so 3 ≈ 3s of real outage — long enough to ride out a
+// single slow/failed sample without blanking the footer on jitter.
+const statMissThreshold = 3
 
 // spinnerFrames is the small braille spinner shown in the progress line while a
 // run is in flight; it advances once per tick.
@@ -148,6 +156,21 @@ var spinnerFrames = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧
 // tickEvery is the 1s heartbeat that drives the live elapsed timer + spinner.
 func tickEvery() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+// resizeTickInterval is how often we re-poll the terminal size. Bubble Tea v2 on
+// Windows has no SIGWINCH (listenForResize is a no-op there), so a WindowSizeMsg
+// arrives only ONCE at startup and a maximize/resize would otherwise never be
+// picked up. We poll RequestWindowSize on this cadence in EVERY phase so the UI
+// re-stretches within ~0.5s of a resize.
+const resizeTickInterval = 500 * time.Millisecond
+
+// resizeTick schedules the next resize-poll. It is issued from Init() and
+// re-issued from its own handler regardless of phase/finished, so size polling
+// runs for the whole program lifetime (unlike the spinner tick, which stops on
+// finish).
+func resizeTick() tea.Cmd {
+	return tea.Tick(resizeTickInterval, func(t time.Time) tea.Msg { return resizeTickMsg(t) })
 }
 
 type model struct {
@@ -168,6 +191,11 @@ type model struct {
 	// live monitor: own sshx connection sampled on the bubbletea loop.
 	sample     monitor.Sample
 	haveSample bool
+	// statMiss counts CONSECUTIVE disconnected samples (Connected==false). The
+	// footer keeps showing the last-good metrics until statMiss reaches
+	// statMissThreshold (a genuine outage, e.g. a reboot), so a single slow/failed
+	// sample no longer blanks the footer on transient jitter.
+	statMiss   int
 	statsCh    chan monitor.Sample
 	connCh     chan monitor.ConnInfo
 	sampler    *monitor.Sampler
@@ -256,15 +284,23 @@ func (m *model) toggleLang() {
 func (m model) Init() tea.Cmd {
 	// v2 has no tea.SetWindowTitle Cmd; the window title is a tea.View field built
 	// per-frame in View() from m.titleK + m.lang (see windowTitle).
-	return textinput.Blink
+	// Start the always-on resize poll (Windows has no SIGWINCH — see resizeTick).
+	return tea.Batch(textinput.Blink, resizeTick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// The resize poll (resizeTickMsg) delivers this every ~0.5s even when the
+		// size is unchanged; rebuilding the viewport each time would needlessly
+		// reset the scroll position. Only react when the size actually changed.
+		if msg.Width == m.w && msg.Height == m.h {
+			return m, nil
+		}
 		m.w, m.h = msg.Width, msg.Height
 		m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
 		m.vp.SetContent(m.wrapped())
+		m.vp.GotoBottom()
 		return m, nil
 
 	case tea.MouseClickMsg:
@@ -379,8 +415,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenStats()
 
 	case statMsg:
-		m.sample = monitor.Sample(msg)
-		m.haveSample = true
+		s := monitor.Sample(msg)
+		if s.Connected {
+			// Good sample: store it as the last-good metrics and reset the miss run.
+			m.sample = s
+			m.haveSample = true
+			m.statMiss = 0
+		} else {
+			// Transient miss (slow/failed sample or a reconnect attempt): do NOT
+			// discard the last-good metrics — just count the miss. The footer keeps
+			// rendering the held sample until statMiss reaches the threshold (see
+			// renderMonitor), so jitter no longer blanks it.
+			m.statMiss++
+		}
 		return m, m.listenStats()
 
 	case progMsg:
@@ -407,6 +454,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.elapsed = time.Since(m.runStart)
 		m.spin = (m.spin + 1) % len(spinnerFrames)
 		return m, tickEvery()
+
+	case resizeTickMsg:
+		// Poll the terminal size and re-schedule, in EVERY phase and after finish.
+		// On Windows v2 delivers no resize events, so this is the only way a
+		// maximize is noticed; the delivered WindowSizeMsg rebuilds the viewport in
+		// its own handler above. tea.RequestWindowSize is a func() Msg (a tea.Cmd).
+		return m, tea.Batch(tea.RequestWindowSize, resizeTick())
 	}
 
 	// pass other messages to the focused input during the form phase
@@ -649,7 +703,8 @@ func (m model) start() (tea.Model, tea.Cmd) {
 	m.host = host
 	m.phase = phaseRun
 	m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
-	// A full `run` makes SSH key-only in BOTH modes — warn the operator up front
+	// A full `run` changes SSH auth policy — show the operator a mode-aware notice up
+	// front (strict: password login OFF, key-only; soft: password stays ON + key added)
 	// (and again in the finished tail) how to log in afterward. detect/verify don't
 	// change auth, so the warning would be misleading there.
 	if m.command == "run" {
@@ -778,6 +833,7 @@ func (m *model) stopSampler() {
 	m.statsCh = nil
 	m.haveSample = false
 	m.sample = monitor.Sample{}
+	m.statMiss = 0
 }
 
 // View renders the UI as a tea.View (v2: View returns a value, not a string),
@@ -1329,9 +1385,9 @@ func (m model) finishedTail() string {
 	if m.finalErr != nil {
 		return "❌ " + t(m.lang, kFinishedErr) + m.finalErr.Error()
 	}
-	// Successful run → repeat the loud "password is now OFF, log in like this" notice
-	// so the last thing the operator sees is how to reconnect. Only a full `run`
-	// disables password auth; detect/verify leave it untouched.
+	// Successful run → repeat the mode-aware SSH-login notice so the last thing the
+	// operator sees is how to reconnect (strict: key-only; soft: password OR key).
+	// Only a full `run` touches auth policy; detect/verify leave it untouched.
 	tail := "✅ " + t(m.lang, kFinishedOK)
 	// Internet benchmark (Feature G): only when A4 produced a comparable PRE→POST
 	// pair (BenchOK); omitted cleanly for detect/verify or a skipped/no-sample A4.
@@ -1352,15 +1408,20 @@ func (m model) finishedTail() string {
 	return tail
 }
 
-// pwOffWarning builds the loud, localized two-line "SSH password login will be
-// OFF" notice with the REAL admin user, host, and generated key path substituted.
-// Shared by the pre-run content (start) and the post-run finished tail.
+// pwOffWarning builds the localized SSH-login notice with the REAL admin user,
+// host, and generated key path substituted. Shared by the pre-run content (start)
+// and the post-run finished tail. MODE-AWARE: strict shows the loud two-line
+// "password login is now OFF, log in with the key" notice; soft shows a single
+// info line — password login STAYS ON, and a key is also generated so either works.
 func (m model) pwOffWarning() string {
 	host := strings.TrimSpace(m.inputs[fHost].Value())
 	login := defaultAdminUser + "@" + host // AdminUser is fixed to vpsadmin at start()
 	keyPath := keyFileName(defaultLogDir, host)
-	return t(m.lang, kPwOffWarn) + "\n" +
-		fmt.Sprintf(t(m.lang, kPwOffLogin), keyPath, login)
+	if m.mode == config.ModeStrict {
+		return t(m.lang, kPwOffWarn) + "\n" +
+			fmt.Sprintf(t(m.lang, kPwOffLogin), keyPath, login)
+	}
+	return fmt.Sprintf(t(m.lang, kPwOnInfo), keyPath, login)
 }
 
 // keyFileName reproduces the SAME path the engine generates the bootstrap key at
@@ -1613,7 +1674,13 @@ func (m model) renderMonitor(width int) string {
 	if width < 1 {
 		width = 1
 	}
-	if !m.haveSample || !m.sample.Connected {
+	// Blank to "reconnecting…" ONLY on a genuine outage: either we never got a
+	// first sample, or we've seen statMissThreshold consecutive disconnected
+	// samples (≈3s — a reboot, not jitter). Below the threshold we keep rendering
+	// the last-good held sample so a single slow/failed sample doesn't blank the
+	// footer. (m.sample holds the last good sample; it is only overwritten on a
+	// Connected==true sample, so it never carries a zeroed disconnected snapshot.)
+	if !m.haveSample || m.statMiss >= statMissThreshold {
 		return monDimStyle.Render(clip(t(m.lang, kMonReconnecting), width))
 	}
 

@@ -85,10 +85,14 @@ const (
 	kVerifyTag // "verify" in the summary line
 
 	// loud "SSH password auth will be OFF" warning, shown pre-run (first log lines)
-	// and post-run (finished tail). kPwOffLogin carries two %s: the key path and the
-	// "user@host" login target.
-	kPwOffWarn  // header: "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН."
-	kPwOffLogin // body:   "После харденинга подключайтесь так:  ssh -i %s %s"
+	// and post-run (finished tail) in STRICT mode. kPwOffLogin carries two %s: the
+	// key path and the "user@host" login target.
+	kPwOffWarn  // strict header: "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН."
+	kPwOffLogin // strict body:   "После харденинга подключайтесь так:  ssh -i %s %s"
+
+	// soft-mode info: password login STAYS ON; a key is also generated so either
+	// works. kPwOnInfo carries two %s: the key path and the "user@host" login target.
+	kPwOnInfo // soft body: "вход по SSH: пароль ИЛИ ключ (ssh -i %s %s)"
 
 	// finished tail (rendered below the viewport from m.lang each frame)
 	kFinishedOK
@@ -173,6 +177,7 @@ var tr = map[Lang]map[stringKey]string{
 
 		kPwOffWarn:  "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН (ключ обязателен).",
 		kPwOffLogin: "После харденинга подключайтесь так:  ssh -i %s %s",
+		kPwOnInfo:   "вход по SSH: пароль ИЛИ ключ (ssh -i %s %s)",
 
 		kFinishedOK:  "запуск завершён",
 		kFinishedErr: "завершено с ошибкой: ",
@@ -244,6 +249,7 @@ var tr = map[Lang]map[stringKey]string{
 
 		kPwOffWarn:  "⚠ WARNING: SSH password login will be DISABLED (key required).",
 		kPwOffLogin: "After hardening, connect like this:  ssh -i %s %s",
+		kPwOnInfo:   "SSH login: password OR key (ssh -i %s %s)",
 
 		kFinishedOK:  "run finished",
 		kFinishedErr: "finished with error: ",

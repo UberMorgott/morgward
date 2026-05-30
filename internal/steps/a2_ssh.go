@@ -16,9 +16,18 @@ type A2SSH struct{}
 func (A2SSH) ID() string    { return "A2" }
 func (A2SSH) Title() string { return "SSH crypto hardening (drop-ins, AllowGroups, crypto)" }
 
-const conf00 = `PasswordAuthentication no
-KbdInteractiveAuthentication no
-`
+// conf00 builds 00-hardening.conf. In strict mode SSH is key-only
+// (PasswordAuthentication no); in soft mode password login STAYS ENABLED — the
+// explicit `yes` here OVERRIDES the image's cloud-init 50-cloud-init.conf, which
+// ships PasswordAuthentication no. (PermitRootLogin is set separately in build99:
+// prohibit-password in soft, so root remains key-only either way.)
+func conf00(strict bool) string {
+	pwAuth := "yes"
+	if strict {
+		pwAuth = "no"
+	}
+	return fmt.Sprintf("PasswordAuthentication %s\nKbdInteractiveAuthentication %s\n", pwAuth, pwAuth)
+}
 
 func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 	admin := ctx.Cfg.AdminUser
@@ -26,15 +35,26 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 
 	conf99 := build99(ctx, strict)
 
-	// 1. Write drop-ins + cloud-init disable + neutralize stock 50-cloud-init.
-	write := putFile("/etc/ssh/sshd_config.d/00-hardening.conf", conf00, "0644") +
-		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", conf99, "0644") +
-		putFile("/etc/cloud/cloud.cfg.d/99-disable-passwords.cfg", "ssh_pwauth: false\n", "0644") +
-		`if [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ]; then
+	// 1. Write drop-ins. mkdir the cloud-init dir FIRST so any putFile targeting it
+	// (and its chmod) succeeds even on a box without cloud-init pre-provisioned.
+	// Strict-only: drop the cloud-init ssh_pwauth:false override + neutralize the
+	// stock 50-cloud-init PasswordAuthentication. Soft leaves cloud-init alone so
+	// password login remains available.
+	write := "mkdir -p /etc/cloud/cloud.cfg.d\n" +
+		putFile("/etc/ssh/sshd_config.d/00-hardening.conf", conf00(strict), "0644") +
+		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", conf99, "0644")
+	if strict {
+		write += putFile("/etc/cloud/cloud.cfg.d/99-disable-passwords.cfg", "ssh_pwauth: false\n", "0644") +
+			`if [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ]; then
   sed -ri 's/^\s*PasswordAuthentication\s+yes/PasswordAuthentication no/' /etc/ssh/sshd_config.d/50-cloud-init.conf
 fi
-mkdir -p /etc/cloud/cloud.cfg.d
 `
+	} else {
+		write += `if [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ]; then
+  sed -ri 's/^\s*PasswordAuthentication\s+no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf
+fi
+`
+	}
 	if r := ctx.Cli.Sudo(write); r.RC != 0 {
 		return StatusFail, "writing sshd drop-ins failed: " + firstLine(r.Stderr), fmt.Errorf("sshd config write failed")
 	}
@@ -64,8 +84,8 @@ systemd-run --on-active=300 --unit=ssh-revert sh -c 'rm -f /etc/ssh/sshd_config.
 		return StatusFail, "ssh restart failed: " + firstLine(r.Stderr), fmt.Errorf("ssh restart failed")
 	}
 
-	// 5. Second-session key-only verify as the admin user (AllowGroups active).
-	ctx.Log.Detail("verifying key-only login as %s in a fresh session…", admin)
+	// 5. Second-session key verify as the admin user (AllowGroups active).
+	ctx.Log.Detail("verifying key login as %s in a fresh session…", admin)
 	if err := freshLogin(ctx, admin); err != nil {
 		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh hardening locked out admin")
 	}
@@ -89,7 +109,7 @@ systemctl reset-failed 'ssh-revert.*' 2>/dev/null || true`)
 	}
 
 	pol := ctx.Cli.Sudo(`sshd -T 2>/dev/null | grep -Ei 'permitrootlogin|passwordauthentication' | tr '\n' ' '`).Out()
-	return StatusOK, "SSH hardened, admin key-only verified; " + pol, nil
+	return StatusOK, "SSH hardened, admin key verified; " + pol, nil
 }
 
 // build99 assembles 99-hardening.conf with version-conditional tokens.
