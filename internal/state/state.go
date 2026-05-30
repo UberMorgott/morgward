@@ -50,6 +50,13 @@ func (c *Checkpoint) Mark(stepID, status string) {
 	c.Save()
 }
 
+// Reset clears the completed-step record (e.g. when the checkpoint is detected
+// stale because the box was reinstalled) and persists the empty state.
+func (c *Checkpoint) Reset() {
+	c.Completed = map[string]string{}
+	c.Save()
+}
+
 // Save writes the checkpoint to disk.
 func (c *Checkpoint) Save() {
 	if c.path == "" {
