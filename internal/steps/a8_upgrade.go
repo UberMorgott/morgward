@@ -1,0 +1,75 @@
+package steps
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+// A8Upgrade implements §A8: full upgrade then reboot, sequenced right after A1.
+// Pre-gates the reboot (no armed timer, firewall persisted + SSH port in the
+// persisted ruleset), then anchors reconnection on a boot_id change.
+type A8Upgrade struct{}
+
+func (A8Upgrade) ID() string    { return "A8" }
+func (A8Upgrade) Title() string { return "Full upgrade + reboot (boot_id verified)" }
+
+func (a A8Upgrade) Run(ctx *Context) (Status, string, error) {
+	port := ctx.Cfg.Port
+
+	// PRE-GATE: timer disarmed, persisted rules exist and open the SSH port.
+	gate := fmt.Sprintf(`systemctl stop fw-rollback.timer 2>/dev/null || true
+systemctl reset-failed 'fw-rollback.*' 2>/dev/null || true
+V4=$(wc -l < /etc/iptables/rules.v4 2>/dev/null || echo 0)
+V6=$(wc -l < /etc/iptables/rules.v6 2>/dev/null || echo 0)
+DP=$(grep -c -- "--dport %d" /etc/iptables/rules.v4 2>/dev/null || echo 0)
+printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
+	g := ctx.Cli.Sudo(gate)
+	if !strings.Contains(g.Stdout, "dport=") || strings.Contains(g.Stdout, "dport=0") || strings.Contains(g.Stdout, "v4=0") {
+		return StatusFail, "pre-reboot gate failed: " + firstLine(g.Stdout), fmt.Errorf("firewall not safely persisted before reboot")
+	}
+	ctx.Log.Detail("pre-reboot gate: %s", firstLine(g.Stdout))
+
+	// Full upgrade.
+	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
+	up := ctx.Cli.Sudo(`export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+stdbuf -oL -eL apt-get update
+stdbuf -oL -eL apt-get full-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"`)
+	if up.RC != 0 {
+		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
+	}
+
+	// Capture boot_id, reboot, poll for a NEW boot_id.
+	pre := ctx.Cli.BootID()
+	if pre == "" {
+		return StatusFail, "could not read boot_id before reboot", fmt.Errorf("boot_id unreadable")
+	}
+	ctx.Log.Detail("rebooting (pre boot_id %s)…", short(pre))
+	// `reboot` drops the connection; ignore the resulting transport error.
+	ctx.Cli.Sudo("(sleep 1; systemctl reboot) >/dev/null 2>&1 &")
+
+	newID, err := ctx.Cli.WaitForReboot(pre, 10*time.Minute, func(msg string) {
+		ctx.Log.Detail("%s", msg)
+	})
+	if err != nil {
+		return StatusFail, err.Error(), err
+	}
+	ctx.State.BootID = newID
+	ctx.State.Save()
+
+	// Post-reboot health + firewall re-check.
+	health := ctx.Cli.Run("systemctl is-system-running").Out()
+	fwOK := ctx.Cli.Sudo(fmt.Sprintf(`iptables -S | grep -q -- "--dport %d" && iptables -S | grep -q -- "-P INPUT DROP" && echo ok`, port)).Out()
+	if fwOK != "ok" {
+		return StatusFail, "firewall not loaded after reboot (boot default-ACCEPT?)", fmt.Errorf("post-reboot firewall missing")
+	}
+	return StatusOK, fmt.Sprintf("rebooted (new boot_id %s, system %s), firewall reloaded", short(newID), health), nil
+}
+
+func short(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}

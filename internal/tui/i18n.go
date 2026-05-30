@@ -1,0 +1,369 @@
+package tui
+
+// Lang is the UI language. The whole render path is keyed on the model's current
+// Lang so no user-facing literal is hardcoded in a single language.
+type Lang int
+
+const (
+	langRU Lang = iota
+	langEN
+)
+
+// defaultLang is Russian — the operator's native language.
+const defaultLang = langRU
+
+// next toggles ru<->en (used by the 'l' / ctrl+l hotkey and click handler).
+func (l Lang) next() Lang {
+	if l == langRU {
+		return langEN
+	}
+	return langRU
+}
+
+// langCode maps the model's active Lang to the engine's "ru"/"en" token so the
+// engine-streamed messages (e.g. the auth-failure hint) follow the UI language.
+func (m model) langCode() string {
+	if m.lang == langEN {
+		return "en"
+	}
+	return "ru"
+}
+
+// stringKey enumerates every user-facing string in the form/run UI.
+type stringKey int
+
+const (
+	// form field labels
+	kLabelHost stringKey = iota
+	kLabelPort
+	kLabelUser
+	kLabelPassword
+	kLabelKey
+
+	// placeholders
+	kPhHost
+	kPhPort
+	kPhUser
+	kPhPass
+	kPhKey
+
+	// toggle labels + options
+	kLabelMode
+	kOptSoft
+	kOptStrict
+	kLabelAction
+	kOptRun
+	kOptDetect
+	kOptVerify
+
+	// start button
+	kStart
+	kCancel
+	kBackToMain
+
+	// toggle help (contextual)
+	kHelpModeStrict
+	kHelpModeSoft
+	kHelpActDetect
+	kHelpActVerify
+	kHelpActRun
+	kHelpActionOnly // "action=%s — focus a pill (tab) for details"
+	kHelpModeAction // "mode=%s · action=%s — focus a pill (tab) for details"
+
+	// option names interpolated into the above (lowercase, stable per language)
+	kModeSoftName
+	kModeStrictName
+
+	// bottom control hints
+	kFormHint
+	kRunHintRunning
+	kRunHintIdle
+
+	// run-phase progress + summary pieces
+	kStepN     // "Step" word in "Step N/M"
+	kDoneWord  // "done" in the summary line
+	kVerifyTag // "verify" in the summary line
+
+	// loud "SSH password auth will be OFF" warning, shown pre-run (first log lines)
+	// and post-run (finished tail). kPwOffLogin carries two %s: the key path and the
+	// "user@host" login target.
+	kPwOffWarn  // header: "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН."
+	kPwOffLogin // body:   "После харденинга подключайтесь так:  ssh -i %s %s"
+
+	// finished tail (rendered below the viewport from m.lang each frame)
+	kFinishedOK
+	kFinishedErr // "finished with error: " prefix
+
+	// internet benchmark line (Feature G): kBenchLine carries three values — the
+	// PRE MB/s, POST MB/s and the ratio (e.g. "internet: 12.3 → 18.7 MB/s (1.52x)").
+	kBenchLine
+	// skip-reasons block (Feature F): a header, then one "ID — reason" line each.
+	kSkipsHeader
+	kSkipLine // "%s — %s": step ID, reason
+
+	// monitor footer
+	kMonReconnecting
+	kMonTitle
+
+	// box / banner titles
+	kFormTitleSuffix // " v" stays numeric; this is just the spacing convention reused
+
+	// validation errors shown on the form's error line (built via fmt.Sprintf with
+	// a single %q). kErr* mirror config's sentinel errors so the localized UI never
+	// surfaces raw English err.Error() text.
+	kErrInvalidHost    // "invalid host %q — …"
+	kErrKeyNotFound    // "key file not found: %q — …"
+	kErrHostRequired   // config.ErrHostRequired
+	kErrUserRequired   // config.ErrUserRequired
+	kErrAuthRequired   // config.ErrAuthRequired
+	kErrBadMode        // config.ErrBadMode (carries a %q for the bad value)
+	kErrValidationFail // generic fallback for an unmapped Validate() error
+
+	// window-title chrome (terminal title bar), rebuilt per-frame from m.lang.
+	kTitleHardened // success suffix after "Name · host"
+	kTitleFailed   // failure suffix after "Name · host"
+	kTitleWarding  // in-progress infix: "Name · <warding> host"
+)
+
+// tr is the translation table: every key carries both ru and en.
+var tr = map[Lang]map[stringKey]string{
+	langRU: {
+		kLabelHost:     "Хост",
+		kLabelPort:     "Порт",
+		kLabelUser:     "Пользователь",
+		kLabelPassword: "Пароль",
+		kLabelKey:      "SSH-ключ",
+
+		kPhHost: "1.2.3.4",
+		kPhPort: "22",
+		kPhUser: "root",
+		kPhPass: "пароль SSH",
+		kPhKey:  "путь к приватному ключу (пусто — использовать пароль)",
+
+		kLabelMode:   "Режим",
+		kOptSoft:     "мягкий",
+		kOptStrict:   "строгий",
+		kLabelAction: "Действие",
+		kOptRun:      "запуск",
+		kOptDetect:   "разведка",
+		kOptVerify:   "проверка",
+
+		kStart:      "Старт",
+		kCancel:     "Отмена",
+		kBackToMain: " ↩  Назад в меню ",
+
+		kHelpModeStrict: "строгий: заблокировать пароль root и отключить вход root по SSH",
+		kHelpModeSoft:   "мягкий: оставить резервный пароль на консоли (root не блокируется) — безопаснее по умолчанию",
+		kHelpActDetect:  "разведка: только чтение — инвентаризация, ничего не меняет",
+		kHelpActVerify:  "проверка: запустить только матрицу верификации §V",
+		kHelpActRun:     "запуск: полное усиление Фазы A + верификация §V",
+		kHelpActionOnly: "действие=%s — выберите пункт (tab) для подробностей",
+		kHelpModeAction: "режим=%s · действие=%s — выберите пункт (tab) для подробностей",
+
+		kModeSoftName:   "мягкий",
+		kModeStrictName: "строгий",
+
+		kFormHint:       "tab/↑↓ переход · ←/→ переключить · enter: следующее поле, запуск (на Старте) · l: язык · esc выход",
+		kRunHintRunning: "l: язык · ctrl+c выход",
+		kRunHintIdle:    "enter/esc назад · ↑/↓ прокрутка · l: язык · ctrl+c выход",
+
+		kStepN:     "Шаг",
+		kDoneWord:  "готово",
+		kVerifyTag: "проверка",
+
+		kPwOffWarn:  "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН (ключ обязателен).",
+		kPwOffLogin: "После харденинга подключайтесь так:  ssh -i %s %s",
+
+		kFinishedOK:  "запуск завершён",
+		kFinishedErr: "завершено с ошибкой: ",
+
+		kBenchLine:   "интернет: %.1f → %.1f МБ/с (%.2fx)",
+		kSkipsHeader: "пропущено:",
+		kSkipLine:    "%s — %s",
+
+		kMonReconnecting: "монитор: переподключение…",
+		kMonTitle:        " монитор ",
+
+		kFormTitleSuffix: "",
+
+		kErrInvalidHost:    "неверный хост %q — введите IP или имя хоста",
+		kErrKeyNotFound:    "файл ключа не найден: %q — оставьте поле ключа пустым, чтобы использовать пароль",
+		kErrHostRequired:   "укажите хост",
+		kErrUserRequired:   "укажите пользователя",
+		kErrAuthRequired:   "требуется пароль или ключ",
+		kErrBadMode:        "режим должен быть soft или strict, получено %q",
+		kErrValidationFail: "ошибка конфигурации: %s",
+
+		kTitleHardened: "защищён",
+		kTitleFailed:   "сбой",
+		kTitleWarding:  "защита",
+	},
+	langEN: {
+		kLabelHost:     "Host",
+		kLabelPort:     "Port",
+		kLabelUser:     "User",
+		kLabelPassword: "Password",
+		kLabelKey:      "SSH key",
+
+		kPhHost: "1.2.3.4",
+		kPhPort: "22",
+		kPhUser: "root",
+		kPhPass: "ssh password",
+		kPhKey:  "private key path (leave empty to use password)",
+
+		kLabelMode:   "Mode",
+		kOptSoft:     "soft",
+		kOptStrict:   "strict",
+		kLabelAction: "Action",
+		kOptRun:      "run",
+		kOptDetect:   "detect",
+		kOptVerify:   "verify",
+
+		kStart:      "Start",
+		kCancel:     "Cancel",
+		kBackToMain: " ↩  Back to main ",
+
+		kHelpModeStrict: "strict: lock the root password & disable root SSH login",
+		kHelpModeSoft:   "soft: keep a console password fallback (root not locked) — safer default",
+		kHelpActDetect:  "detect: read-only discovery & inventory — changes nothing",
+		kHelpActVerify:  "verify: run only the §V verification matrix",
+		kHelpActRun:     "run: full Phase A hardening + §V verification",
+		kHelpActionOnly: "action=%s — focus a pill (tab) for details",
+		kHelpModeAction: "mode=%s · action=%s — focus a pill (tab) for details",
+
+		kModeSoftName:   "soft",
+		kModeStrictName: "strict",
+
+		kFormHint:       "tab/↑↓ move · ←/→ toggle · enter: next field, run (on Start) · l: lang · esc quit",
+		kRunHintRunning: "l: lang · ctrl+c quit",
+		kRunHintIdle:    "enter/esc back · ↑/↓ scroll · l: lang · ctrl+c quit",
+
+		kStepN:     "Step",
+		kDoneWord:  "done",
+		kVerifyTag: "verify",
+
+		kPwOffWarn:  "⚠ WARNING: SSH password login will be DISABLED (key required).",
+		kPwOffLogin: "After hardening, connect like this:  ssh -i %s %s",
+
+		kFinishedOK:  "run finished",
+		kFinishedErr: "finished with error: ",
+
+		kBenchLine:   "internet: %.1f → %.1f MB/s (%.2fx)",
+		kSkipsHeader: "skipped:",
+		kSkipLine:    "%s — %s",
+
+		kMonReconnecting: "monitor: reconnecting…",
+		kMonTitle:        " monitor ",
+
+		kFormTitleSuffix: "",
+
+		kErrInvalidHost:    "invalid host %q — enter an IP or hostname",
+		kErrKeyNotFound:    "key file not found: %q — leave SSH key empty to use the password",
+		kErrHostRequired:   "host is required",
+		kErrUserRequired:   "user is required",
+		kErrAuthRequired:   "either password or key is required",
+		kErrBadMode:        "mode must be soft or strict, got %q",
+		kErrValidationFail: "config error: %s",
+
+		kTitleHardened: "hardened",
+		kTitleFailed:   "failed",
+		kTitleWarding:  "warding",
+	},
+}
+
+// t looks up key k for the given language, falling back to English then to "".
+func t(lang Lang, k stringKey) string {
+	if m, ok := tr[lang]; ok {
+		if s, ok := m[k]; ok {
+			return s
+		}
+	}
+	if s, ok := tr[langEN][k]; ok {
+		return s
+	}
+	return ""
+}
+
+// langOptionName maps an internal command/mode token (always the EN canonical
+// value used by the engine) to its localized display name for the toggle help.
+func langModeName(lang Lang, m string) string {
+	switch m {
+	case "strict":
+		return t(lang, kModeStrictName)
+	default:
+		return t(lang, kModeSoftName)
+	}
+}
+
+// langActionName maps the canonical command token to its localized display name.
+func langActionName(lang Lang, cmd string) string {
+	switch cmd {
+	case "detect":
+		return t(lang, kOptDetect)
+	case "verify":
+		return t(lang, kOptVerify)
+	default:
+		return t(lang, kOptRun)
+	}
+}
+
+// stepTitles maps each engine step ID (the curID streamed in progress events) to a
+// SHORT localized name for the top progress line. The full engine Title() (e.g.
+// "Firewall + fail-safe (iptables-nft, v4+v6)") runs off the right edge, so the
+// progress line shows this compact form instead. The canonical meaning of each ID
+// is grounded in the step's Title() in internal/steps/*.go (and the engine's KEY/
+// DETECT pseudo-steps in internal/engine/engine.go); names are kept terse so the
+// step name always fits beside the counter+bar+percent. IDs not listed fall back to
+// the engine-provided Title via localStepTitle.
+var stepTitles = map[Lang]map[string]string{
+	langRU: {
+		"PRE":    "Подготовка",       // §1 Preconditions
+		"KEY":    "SSH-ключ",         // generate ed25519 + switch to key auth
+		"DETECT": "Разведка",         // §0.5/§2 pre-flight discovery
+		"A1":     "Файрвол",          // Firewall + fail-safe (iptables-nft)
+		"A2":     "SSH",              // SSH crypto hardening
+		"A2.5":   "Cloud-init",       // cloud-init neutralization
+		"A3":     "fail2ban",         // fail2ban
+		"A4":     "Сеть/BBR",         // network tuning (BBR, buffers)
+		"A5":     "Ядро",             // kernel hardening (sysctl)
+		"A6":     "Обслуживание",     // maintenance (journald, ntp, …)
+		"A6.5":   "DNS",              // DNS hardening (DoT/DNSSEC)
+		"A6.7":   "Память",           // memory mgmt (ZRAM + earlyoom)
+		"A7":     "Очистка",          // cleanup (purge bloatware)
+		"A8":     "Обновление+ребут", // full upgrade + reboot
+		"A9":     "Автообновления",   // unattended security updates
+		"A10":    "Аудит",            // detection (auditd, login-notify)
+	},
+	langEN: {
+		"PRE":    "Preconditions",
+		"KEY":    "SSH key",
+		"DETECT": "Discovery",
+		"A1":     "Firewall",
+		"A2":     "SSH",
+		"A2.5":   "Cloud-init",
+		"A3":     "fail2ban",
+		"A4":     "Network/BBR",
+		"A5":     "Kernel",
+		"A6":     "Maintenance",
+		"A6.5":   "DNS",
+		"A6.7":   "Memory",
+		"A7":     "Cleanup",
+		"A8":     "Upgrade+reboot",
+		"A9":     "Auto-updates",
+		"A10":    "Audit",
+	},
+}
+
+// localStepTitle returns the SHORT localized name for step id in lang, falling back
+// to fallback (the engine-provided Title) when the id is unknown.
+func localStepTitle(lang Lang, id, fallback string) string {
+	if m, ok := stepTitles[lang]; ok {
+		if s, ok := m[id]; ok {
+			return s
+		}
+	}
+	if s, ok := stepTitles[langEN][id]; ok {
+		return s
+	}
+	return fallback
+}

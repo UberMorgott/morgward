@@ -1,0 +1,37 @@
+# Build artifacts
+/dist/
+/morgward
+/morgward.exe
+*.exe
+
+# Runtime output (logs, generated keys, checkpoints)
+/runs/
+*.log
+*.state.json
+*-stdout.txt
+id_ed25519_*
+
+# SSH keys / secrets — deep defense (never commit any private key)
+*.pem
+*.key
+id_rsa*
+id_ecdsa*
+id_ed25519*
+*_ed25519
+*_rsa
+
+# Backups / scratch
+*.stale-bak
+*.state.json.stale-bak
+*.original.md
+
+# Cached spec (fetched at build/dev time, ~98 KB)
+/RUNBOOK.md
+RUNBOOK.md
+
+# Internal design notes — not for public repo
+/docs/superpowers/
+
+# Tooling / harness
+.serena/
+.claude/
