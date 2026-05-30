@@ -19,10 +19,14 @@ fresh Ubuntu **24.04 / 26.04** VPS over an embedded SSH client (no external `ssh
 - **Reboot handling** — A8 polls SSH until reconnect and confirms `boot_id` changed.
 - **Brownfield detection** — a non-empty box stops the run and prints the inventory.
 - **Network benchmark** — throughput sampled before and after BBR/buffer tuning.
-- **Idempotent** — local JSON checkpoint + per-step skip-if; safe to re-run.
-- **Progress + log** — colored `[OK]/[SKIP]/[FAIL]` to terminal, mirrored to
-  `morgward-YYYYMMDD-HHMMSS.log`. Secrets (console password) shown once on the
-  terminal only, never written to the log.
+- **Idempotent** — every step is skip-if-already-applied on the box; safe to re-run.
+  No local checkpoint file is written (run state is held in memory for the session).
+- **Zero local footprint** — by default the program creates no files next to the exe:
+  no checkpoint, no key file, no log. The generated SSH key is shown on a copyable
+  key screen (TUI) / printed to stdout (CLI) and stored nowhere — save it yourself.
+- **Progress + optional log** — colored `[OK]/[SKIP]/[FAIL]` to terminal; pass
+  `--log-file <path>` (or the TUI "save log" toggle) to also write a full run log.
+  Secrets (console password / key) are shown once on the terminal, never in the log.
 - **Interactive TUI** — run the bare binary (no subcommand) for a terminal form
   (Host/Port/User/Password-or-Key + Action/Mode), then a live streaming view with a
   per-step progress bar, host monitor footer, and the §V verification matrix.
@@ -136,7 +140,7 @@ cmd/morgward/   CLI entry point (flags + interactive prompts)
 internal/config/    resolved run configuration
 internal/ui/        colored terminal + file logger, step status
 internal/sshx/      SSH client wrapper, ed25519 keygen, reboot polling
-internal/state/     local checkpoint (idempotency)
+internal/state/     in-memory run checkpoint (idempotency; not persisted)
 internal/detect/    §0.5/§2 discovery, greenfield/brownfield classification
 internal/steps/     one file per runbook block (a1_firewall.go … a10_detection.go)
 internal/verify/    §V verification matrix runner
