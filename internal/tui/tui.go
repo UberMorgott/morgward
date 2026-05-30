@@ -1417,12 +1417,8 @@ func (m model) runView() string {
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')
 
-	// --- MONITOR BOX (bottom-most) ---
-	sb.WriteString(titledTop(b, t(m.lang, kMonTitle), bw))
-	sb.WriteByte('\n')
-	sb.WriteString(contentLine(b, m.renderMonitor(innerW), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	// --- MONITOR BOX (bottom-most) --- shared with the summary + wiki screens.
+	sb.WriteString(m.monitorBox(innerW))
 
 	return sb.String()
 }
