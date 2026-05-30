@@ -23,6 +23,7 @@ import (
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/version"
+	"github.com/UberMorgott/morgward/internal/wiki"
 )
 
 const (
@@ -56,6 +57,8 @@ type phase int
 const (
 	phaseForm phase = iota
 	phaseRun
+	phaseSummary // post-finish stats summary + clickable fix list
+	phaseWiki    // a single fix's what/why/risk description
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -210,6 +213,11 @@ type model struct {
 	haveSummary  bool
 	progCh       chan engine.Progress
 
+	// wiki navigation: which step's description is shown (phaseWiki) and which
+	// phase to return to on esc (phaseSummary).
+	wikiStep   string
+	wikiReturn phase
+
 	finalErr error
 	finished bool
 	host     string    // target host, stashed at start() for window-title updates
@@ -318,12 +326,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.phase == phaseForm {
+		switch m.phase {
+		case phaseForm:
 			return m.formClick(mc.X, mc.Y)
-		}
-		// Run phase: only the "Back to main" button is clickable (when finished).
-		if m.backToMainAtClick(mc.X, mc.Y) {
-			return m.goBack()
+		case phaseSummary:
+			// A click on a fix row opens its wiki description.
+			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
+				m.wikiStep = id
+				m.wikiReturn = phaseSummary
+				m.phase = phaseWiki
+			}
+			return m, nil
+		case phaseRun:
+			// Only the "Back to main" button is clickable (when finished); it opens
+			// the summary the same way enter/esc does.
+			if m.backToMainAtClick(mc.X, mc.Y) {
+				if m.finished && m.haveSummary {
+					m.phase = phaseSummary
+					return m, nil
+				}
+				return m.goBack()
+			}
 		}
 		return m, nil
 
@@ -355,16 +378,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.phase == phaseForm {
 			return m.updateForm(msg)
 		}
-		// run/done phase
-		switch msg.String() {
-		case "ctrl+c", "q":
+		// ctrl+c / q quit on every post-form screen.
+		if s := msg.String(); s == "ctrl+c" || s == "q" {
 			m.stopSampler()
 			return m, tea.Quit
-		case "enter":
-			if m.finished {
+		}
+		switch m.phase {
+		case phaseWiki:
+			// Any "back" key returns to wherever the wiki was opened from (summary).
+			switch msg.String() {
+			case "enter", "esc", "b":
+				m.phase = m.wikiReturn
+			}
+			return m, nil
+		case phaseSummary:
+			// On the summary, "back" returns to the form/menu (stops the sampler).
+			switch msg.String() {
+			case "enter", "esc", "b":
 				return m.goBack()
 			}
-		case "esc", "b":
+			return m, nil
+		}
+		// run/done phase
+		switch msg.String() {
+		case "enter", "esc", "b":
+			// First advance from a FINISHED run opens the stats summary (the sampler
+			// keeps living so the monitor footer stays alive on the summary screen).
+			if m.finished && m.haveSummary {
+				m.phase = phaseSummary
+				return m, nil
+			}
 			if m.finished {
 				return m.goBack()
 			}
@@ -870,10 +913,16 @@ func (m model) windowTitle() string {
 // local strings.Builder), dispatching by phase. The clickable RU/EN switcher is
 // overlaid on the first content line by both branches via switcherLine.
 func (m model) viewString() string {
-	if m.phase == phaseRun {
+	switch m.phase {
+	case phaseRun:
 		return m.runView()
+	case phaseSummary:
+		return m.summaryView()
+	case phaseWiki:
+		return m.wikiView()
+	default:
+		return m.formView()
 	}
-	return m.formView()
 }
 
 // --- RU/EN language switcher ---------------------------------------------
@@ -1375,6 +1424,19 @@ func (m model) runView() string {
 
 	return sb.String()
 }
+
+// summaryView renders the post-finish stats summary + clickable fix list.
+// (filled in Step C)
+func (m model) summaryView() string { return "" }
+
+// wikiView renders one fix's what/why/risk description. (filled in Step D)
+func (m model) wikiView() string {
+	_, _ = wiki.Doc(wiki.Lang(int(m.lang)), m.wikiStep)
+	return ""
+}
+
+// fixAtClick maps a click to a fix-list row's step ID. (filled in Step C)
+func (m model) fixAtClick(x, y int) (string, bool) { return "", false }
 
 // finishedTail returns the localized completion banner shown below the viewport
 // once the run ends: a success line, or an error line carrying the engine's error
