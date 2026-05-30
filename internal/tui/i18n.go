@@ -159,7 +159,6 @@ const (
 	kZramAdded   // "добавлен" / "added" value for the zram row
 	kYesWord     // да / yes
 	kNoWord      // нет / no
-	kSpeedRatio  // "%.1f → %.1f MB/s (%.2fx)" speed row value (with ratio)
 
 	// nav hints
 	kSummaryHint // enter/esc — меню · клик по фиксу — описание · l — язык
@@ -273,7 +272,6 @@ var tr = map[Lang]map[stringKey]string{
 		kZramAdded:    "добавлен",
 		kYesWord:      "да",
 		kNoWord:       "нет",
-		kSpeedRatio:   "%.1f → %.1f MB/s (%.2fx)",
 
 		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · l — язык",
 		kWikiHint:    "esc — назад · l — язык",
@@ -382,7 +380,6 @@ var tr = map[Lang]map[stringKey]string{
 		kZramAdded:    "added",
 		kYesWord:      "yes",
 		kNoWord:       "no",
-		kSpeedRatio:   "%.1f → %.1f MB/s (%.2fx)",
 
 		kSummaryHint: "enter/esc — menu · click a fix for details · l — lang",
 		kWikiHint:    "esc — back · l — lang",
