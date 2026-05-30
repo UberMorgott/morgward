@@ -56,6 +56,7 @@ type Hooks struct {
 	Sink       func(string)           // streams each log line to the caller
 	OnConnect  func(monitor.ConnInfo) // fires once after key auth is active
 	OnProgress func(Progress)         // fires per step and once at the end
+	OnKey      func(pem string)       // fires once with the generated ed25519 PEM (password path only; never via the logger)
 }
 
 // Progress is a single step lifecycle event (or, with Done set, the run's final
@@ -204,6 +205,9 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		}
 		authLine = kp.AuthorizedLine
 		keyPEM = kp.PrivatePEM
+		if h.OnKey != nil {
+			h.OnKey(string(kp.PrivatePEM))
+		}
 
 		push := "mkdir -p /root/.ssh && chmod 700 /root/.ssh\n" +
 			pushAuthLine("/root/.ssh/authorized_keys", authLine) +

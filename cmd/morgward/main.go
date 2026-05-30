@@ -29,6 +29,8 @@ Commands:
   detect            read-only discovery + inventory; changes nothing
   verify            run only the §V verification matrix
   step <ID...>      run only the named steps, e.g. "step A4 A5"
+  tui               launch the interactive terminal UI (default with no args)
+  version           print the program version and exit
   help              show this help
 
 Step IDs: PRE A1 A8 A2 A2.5 A3 A4 A5 A6 A6.5 A6.7 A7 A9 A10
@@ -44,11 +46,17 @@ Flags:
   --log-file     write a full run log to this file (default: no file written)
   --assume-yes   proceed on a brownfield box without prompting
 
+Note:
+  On the password path a fresh ed25519 key is generated for SSH. The generated
+  SSH key is printed to stdout and stored nowhere — save it.
+
 Examples:
   morgward --host 1.2.3.4 --user root --password XXX --mode soft
   morgward detect --host 1.2.3.4 --user root --password XXX
   morgward verify --host 1.2.3.4 --key ./id_ed25519_1-2-3-4
   morgward step A4 A5 --host 1.2.3.4 --key ./id_ed25519_1-2-3-4
+  # non-interactive (no prompts): all flags supplied + --assume-yes
+  morgward run --host 1.2.3.4 --user root --password XXX --mode soft --assume-yes
 `
 
 func main() {
@@ -65,9 +73,21 @@ func main() {
 	} else if !strings.HasPrefix(args[0], "-") {
 		cmd = strings.ToLower(args[0])
 		args = args[1:]
+	} else {
+		// Bare top-level flags that act as commands (e.g. "-h", "--version").
+		switch strings.ToLower(args[0]) {
+		case "-h", "--help":
+			cmd = "help"
+		case "-v", "--version":
+			cmd = "version"
+		}
 	}
 	if cmd == "help" || cmd == "-h" || cmd == "--help" {
 		fmt.Print(usage)
+		return
+	}
+	if cmd == "version" || cmd == "-v" || cmd == "--version" {
+		fmt.Println(version.Name + " " + version.Version)
 		return
 	}
 	if cmd == "tui" {
@@ -117,10 +137,26 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := engine.Execute(cfg, cmd, stepIDs, engine.Hooks{}); err != nil {
+	// CLI prints the ephemeral key to stdout (the TUI has its own key screen and
+	// leaves OnKey nil). OnKey fires only on the password path; detect/verify do
+	// not generate a key, so it simply won't fire there.
+	if err := engine.Execute(cfg, cmd, stepIDs, engine.Hooks{OnKey: printKeyBlock}); err != nil {
 		fmt.Fprintln(os.Stderr, "\nfailed:", err)
 		os.Exit(1)
 	}
+}
+
+// printKeyBlock writes the generated SSH private key PEM to stdout, fenced by a
+// human/AI-readable banner. The key is stored nowhere else, so this is the only
+// chance to save it. It goes to stdout directly, never the logger (which redacts
+// secrets).
+func printKeyBlock(pem string) {
+	fmt.Println("----- MORGWARD SSH KEY (not stored anywhere — save it) -----")
+	fmt.Print(pem)
+	if !strings.HasSuffix(pem, "\n") {
+		fmt.Println()
+	}
+	fmt.Println("----- END KEY -----")
 }
 
 func bindFlags(fs *flag.FlagSet, cfg *config.Config, modeStr *string) {
