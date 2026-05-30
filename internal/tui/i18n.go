@@ -153,23 +153,23 @@ const (
 	kRowPing     // ping, ms
 	kRowPorts    // открытых портов
 	kRowRootLogin
-	kRowKeyOnly   // ssh только по ключу
-	kRowFirewall  // файрвол
-	kRowFail2ban  // fail2ban
-	kZramAdded    // "добавлен" / "added" value for the zram row
-	kYesWord      // да / yes
-	kNoWord       // нет / no
-	kSpeedRatio   // "%.1f → %.1f MB/s (%.2fx)" speed row value (with ratio)
+	kRowKeyOnly  // ssh только по ключу
+	kRowFirewall // файрвол
+	kRowFail2ban // fail2ban
+	kZramAdded   // "добавлен" / "added" value for the zram row
+	kYesWord     // да / yes
+	kNoWord      // нет / no
+	kSpeedRatio  // "%.1f → %.1f MB/s (%.2fx)" speed row value (with ratio)
 
 	// nav hints
 	kSummaryHint // enter/esc — меню · клик по фиксу — описание · l — язык
 	kWikiHint    // esc — назад · l — язык
 
 	// --- wiki page (phaseWiki) -------------------------------------------
-	kWikiWhat    // ЧТО ДЕЛАЕТ
-	kWikiWhy     // ЗАЧЕМ
-	kWikiRisk    // БЕЗ ЭТОГО
-	kWikiNoDoc   // "нет описания" / "no description"
+	kWikiWhat  // ЧТО ДЕЛАЕТ
+	kWikiWhy   // ЗАЧЕМ
+	kWikiRisk  // БЕЗ ЭТОГО
+	kWikiNoDoc // "нет описания" / "no description"
 )
 
 // tr is the translation table: every key carries both ru and en.
