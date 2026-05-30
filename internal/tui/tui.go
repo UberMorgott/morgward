@@ -84,7 +84,7 @@ const (
 func (m model) labelColW() int {
 	keys := []stringKey{
 		kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey,
-		kLabelMode, kLabelAction,
+		kLabelMode, kLabelAction, kSaveLogLabel,
 	}
 	w := 0
 	for _, k := range keys {
@@ -104,6 +104,15 @@ func padLabel(label string, colW int) string {
 	return label
 }
 
+// saveLogToken maps the save-log bool to the canonical pill token ("on"/"off")
+// renderToggle matches against, mirroring how mode/command use their string tokens.
+func saveLogToken(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
 // field indices in the form.
 const (
 	fHost = iota
@@ -118,8 +127,9 @@ const (
 const (
 	rowMode    = nInputs     // soft/strict toggle
 	rowCommand = nInputs + 1 // run/detect/verify toggle
-	rowStart   = nInputs + 2 // start button
-	nRows      = nInputs + 3
+	rowLog     = nInputs + 2 // save-log-to-file toggle
+	rowStart   = nInputs + 3 // start button
+	nRows      = nInputs + 4
 )
 
 // focusableRows returns the ordered list of currently-focusable row indices.
@@ -135,6 +145,7 @@ func (m model) focusableRows() []int {
 	if m.command != "detect" {
 		rows = append(rows, rowMode)
 	}
+	rows = append(rows, rowLog)
 	rows = append(rows, rowStart)
 	return rows
 }
@@ -608,6 +619,8 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.mode = config.ModeSoft
 			}
+		case rowLog:
+			m.saveLog = !m.saveLog
 		case rowCommand:
 			i := indexOf(m.cmds, m.command)
 			if msg.String() == "right" {
@@ -820,6 +833,13 @@ func (m model) start() (tea.Model, tea.Cmd) {
 
 	host := strings.TrimSpace(m.inputs[fHost].Value())
 	m.host = host
+	// Save-log toggle (default off): point cfg.LogFile at a per-host timestamped
+	// file so the engine's ui.Logger writes the full run log there; empty disables it.
+	if m.saveLog {
+		cfg.LogFile = fmt.Sprintf("morgward-%s-%s.log", fsSafeHost(host), time.Now().Format("20060102-150405"))
+	} else {
+		cfg.LogFile = ""
+	}
 	m.phase = phaseRun
 	m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
 	// A full `run` changes SSH auth policy — show the operator a mode-aware notice up
@@ -1084,6 +1104,7 @@ type formHit struct {
 	field int    // frInput: input index
 	mode  string // frMode: "soft"/"strict"
 	cmd   string // frAction: "run"/"detect"/"verify"
+	log   bool   // frLog: true=on (save log), false=off
 	pill  int    // frStart: 0=Start, 1=Cancel
 	ok    bool
 }
@@ -1115,6 +1136,11 @@ func (m model) formHitAtClick(x, y int) formHit {
 		names := []string{t(m.lang, kOptRun), t(m.lang, kOptDetect), t(m.lang, kOptVerify)}
 		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
 			return formHit{kind: frAction, cmd: m.cmds[i], ok: true}
+		}
+	case frLog:
+		names := []string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)}
+		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
+			return formHit{kind: frLog, log: i == 0, ok: true} // pill 0 = on
 		}
 	case frStart:
 		// Start + Cancel share this line; pillRanges uses the same labels the render
@@ -1196,6 +1222,10 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 		// satisfied unconditionally here.
 		m.focus = rowCommand
 		return m, nil
+	case frLog:
+		m.saveLog = hit.log
+		m.focus = rowLog
+		return m, nil
 	case frStart:
 		if hit.pill == 1 { // Cancel
 			return m, tea.Quit
@@ -1215,6 +1245,7 @@ const (
 	frBlank                     // spacer line (kept in the slice so Y math stays exact)
 	frMode                      // soft/strict pill row
 	frAction                    // run/detect/verify pill row
+	frLog                       // save-log-to-file on/off pill row
 	frHelp                      // contextual toggle-help line
 	frStart                     // Start + Cancel button line
 	frErr                       // validation error line
@@ -1274,6 +1305,12 @@ func (m model) formRows() []formRow {
 			[]string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)},
 			string(m.mode), m.focus == rowMode, colW)})
 	}
+	// Save-log-to-file toggle: writes the full run log to a file (cfg.LogFile) when
+	// on, off by default. Canonical tokens on/off; localized yes/no pill names.
+	rows = append(rows, formRow{kind: frLog, text: renderToggle(t(m.lang, kSaveLogLabel),
+		[]string{"on", "off"},
+		[]string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)},
+		saveLogToken(m.saveLog), m.focus == rowLog, colW)})
 	// Contextual toggle help: accent-tinted/italic (tipStyle) so it reads as form
 	// body, distinct from the gray bottom control hint. Indented to the value column.
 	rows = append(rows, formRow{kind: frHelp, text: indent + tipStyle.Render(m.toggleHelp())})
@@ -2593,6 +2630,13 @@ func validHost(h string) bool {
 		}
 	}
 	return true
+}
+
+// fsSafeHost makes a host string safe for use in a log filename: the form already
+// restricts Host to [0-9a-zA-Z.-] (sanitizeField), so only the dot needs replacing;
+// colon is handled too for defensiveness (e.g. a future IPv6 literal).
+func fsSafeHost(h string) string {
+	return strings.NewReplacer(".", "_", ":", "_").Replace(h)
 }
 
 func atoiDefault(s string, def int) int {
