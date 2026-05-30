@@ -1740,10 +1740,114 @@ func sumPortsStr(p []string) string {
 	return strconv.Itoa(len(p))
 }
 
-// wikiView renders one fix's what/why/risk description. (filled in Step D)
+// wrap word-wraps s to at most w display cells per line (lipgloss.Width-aware so
+// multibyte Cyrillic wraps correctly), returning the lines. A single word longer
+// than w is hard-split. w<1 yields a single (unwrapped) line.
+func wrap(s string, w int) []string {
+	if w < 1 {
+		return []string{s}
+	}
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		cur := ""
+		for _, word := range words {
+			// Hard-split a word that alone exceeds the width.
+			for lipgloss.Width(word) > w {
+				head := truncDisplay(word, w)
+				if cur != "" {
+					lines = append(lines, cur)
+					cur = ""
+				}
+				lines = append(lines, head)
+				word = word[len(head):]
+			}
+			switch {
+			case cur == "":
+				cur = word
+			case lipgloss.Width(cur)+1+lipgloss.Width(word) <= w:
+				cur += " " + word
+			default:
+				lines = append(lines, cur)
+				cur = word
+			}
+		}
+		if cur != "" {
+			lines = append(lines, cur)
+		}
+	}
+	return lines
+}
+
+// wikiView renders one fix's what/why/risk description inside the run frame: a
+// "[ID] Title" header, then three word-wrapped labeled blocks (WHAT IT DOES / WHY /
+// WITHOUT IT). On an unknown step it shows the localized no-description line. The
+// monitor footer stays alive (sampler still running). Text reads m.lang every frame,
+// so the RU|EN toggle re-renders the description in the other language.
 func (m model) wikiView() string {
-	_, _ = wiki.Doc(wiki.Lang(int(m.lang)), m.wikiStep)
-	return ""
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.wikiBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	// Same vertical budget as summaryView: reserve hint(1)+bottom(1) for the main
+	// box and the 3-row monitor box below it.
+	avail := maxi(m.h-2-2-3, len(body))
+	lines := body
+	if len(lines) > avail {
+		lines = lines[:avail]
+	}
+	for _, ln := range lines {
+		sb.WriteString(contentLine(b, ln, innerW))
+		sb.WriteByte('\n')
+	}
+	for range maxi(avail-len(lines), 0) {
+		sb.WriteString(contentLine(b, "", innerW))
+		sb.WriteByte('\n')
+	}
+
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// wikiBodyLines builds the wiki page body: the "[ID] Title" header then the three
+// labeled, word-wrapped blocks. Falls back to the localized no-description line when
+// the step has no wiki entry.
+func (m model) wikiBodyLines(innerW int) []string {
+	doc, ok := wiki.Doc(wiki.Lang(int(m.lang)), m.wikiStep)
+	if !ok {
+		return []string{sumHeadStyle.Render("[" + m.wikiStep + "]"), "", t(m.lang, kWikiNoDoc)}
+	}
+	var body []string
+	body = append(body, sumHeadStyle.Render(fmt.Sprintf("[%s] %s", m.wikiStep, doc.Title)))
+
+	block := func(labelKey stringKey, text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		body = append(body, "")
+		body = append(body, monLabelStyle.Render(t(m.lang, labelKey)))
+		body = append(body, wrap(text, innerW)...)
+	}
+	block(kWikiWhat, doc.What)
+	block(kWikiWhy, doc.Why)
+	block(kWikiRisk, doc.RiskWithout)
+	return body
 }
 
 // finishedTail returns the localized completion banner shown below the viewport
