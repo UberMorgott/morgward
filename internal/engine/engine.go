@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -155,13 +154,6 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 	}
 }
 
-// staleCheckpoint reports whether a loaded checkpoint claiming completed steps
-// can't be trusted: the box carries no hardening markers (alreadyHardened ==
-// false) yet the checkpoint records prior progress — the box was reinstalled.
-func staleCheckpoint(completedCount int, alreadyHardened bool) bool {
-	return completedCount > 0 && !alreadyHardened
-}
-
 // prepare connects, bootstraps the key, detects the box, and (unless
 // allowBrownfield) gates a non-greenfield/hardened box. The returned cleanup
 // closes the connection (the caller owns the log).
@@ -282,14 +274,9 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		}
 	}
 
-	chk := state.Load(filepath.Join(dirOf(cfg.LogDir), "morgward-"+sanitize(cfg.Host)+".state.json"))
-	if staleCheckpoint(len(chk.Completed), facts.AlreadyHardened) {
-		log.Warn("stale checkpoint: box shows no hardening markers but checkpoint claims %d completed step(s) — discarding (box likely reinstalled)", len(chk.Completed))
-		chk.Reset()
-	}
+	chk := state.Load("")
 	chk.Host = cfg.Host
 	chk.Mode = string(cfg.Mode)
-	chk.KeyPath = filepath.Join(dirOf(cfg.LogDir), fmt.Sprintf("id_ed25519_%s", sanitize(cfg.Host)))
 	chk.Greenfield = facts.Greenfield
 	chk.Save()
 

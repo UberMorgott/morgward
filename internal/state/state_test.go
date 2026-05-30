@@ -1,24 +1,18 @@
 package state
 
-import (
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
-func TestResetClearsCompleted(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "x.state.json")
-	c := Load(p)
+func TestInMemoryNoPersistence(t *testing.T) {
+	c := Load("") // no path => fresh, never reads/writes disk
+	if c.Done("A1") {
+		t.Fatal("fresh checkpoint should have nothing done")
+	}
 	c.Mark("A1", "OK")
-	c.Mark("A2", "OK")
 	if !c.Done("A1") {
-		t.Fatal("precondition: A1 should be done")
+		t.Fatal("Mark should update in-memory state")
 	}
 	c.Reset()
-	if c.Done("A1") || c.Done("A2") || len(c.Completed) != 0 {
-		t.Fatalf("Reset did not clear Completed: %v", c.Completed)
-	}
-	// persisted empty
-	if reloaded := Load(p); len(reloaded.Completed) != 0 {
-		t.Fatalf("Reset not persisted: %v", reloaded.Completed)
+	if c.Done("A1") {
+		t.Fatal("Reset should clear in-memory state")
 	}
 }
