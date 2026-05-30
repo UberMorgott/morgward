@@ -206,8 +206,7 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	var authLine string
 	if keyPEM == nil {
 		log.Step("KEY", "Generate ed25519 key and switch to key auth")
-		kpPath := filepath.Join(dirOf(cfg.LogDir), fmt.Sprintf("id_ed25519_%s", sanitize(cfg.Host)))
-		kp, gerr := sshx.GenerateKeyPair(kpPath, "morgward@"+cfg.Host)
+		kp, gerr := sshx.GenerateKeyPair("morgward@" + cfg.Host)
 		if gerr != nil {
 			return nil, cleanup, fmt.Errorf("keygen: %w", gerr)
 		}
@@ -224,7 +223,7 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 			return nil, cleanup, fmt.Errorf("switch to key auth: %w", err)
 		}
 		cfg.Password = "" // bootstrap secret no longer needed
-		log.OK("key generated (%s) and key auth active", kp.PrivatePath)
+		log.OK("ephemeral SSH key generated (held in memory — copy it from the key screen or CLI output)")
 		notifyConnect(h.OnConnect, cfg, keyPEM)
 	} else {
 		authLine, err = sshx.PublicLineFromPEM(keyPEM, "morgward@"+cfg.Host)
@@ -647,34 +646,26 @@ func engineLang(cfg *config.Config) string {
 	return "ru"
 }
 
-// keyPathFor reproduces the SAME generated key path the bootstrap uses
-// (id_ed25519_<sanitized host> under the log dir) so user-facing hints point at
-// the real file, not a guessed name.
-func keyPathFor(cfg *config.Config) string {
-	return filepath.Join(dirOf(cfg.LogDir), fmt.Sprintf("id_ed25519_%s", sanitize(cfg.Host)))
-}
-
 // emitAuthHint prints the localized, actionable hint shown when the server
 // accepted none of the offered auth methods. Localized ru/en via engineLang so
 // both the CLI (ru default) and the TUI (its active language) get a correct
-// message; the key path/admin user are substituted from the real config.
+// message; the admin user is substituted from the real config.
 func emitAuthHint(log *ui.Logger, cfg *config.Config, err error) {
 	admin := cfg.AdminUser
 	if admin == "" {
 		admin = "vpsadmin"
 	}
-	keyPath := keyPathFor(cfg)
 	if engineLang(cfg) == "en" {
 		log.Fail("could not authenticate to %s: the server accepted none of the offered auth methods (no password and no working SSH key).", cfg.Host)
 		log.Detail("If this box is ALREADY hardened, root SSH is blocked by `AllowGroups sshusers` —")
-		log.Detail("  connect as the admin user with its generated key, e.g.:  ssh -i %s %s@%s", keyPath, admin, cfg.Host)
+		log.Detail("  reconnect as the admin user %q with the key shown by morgward (pass it via --key, or save the PEM from the key screen / CLI output).", admin)
 		log.Detail("Otherwise check host/port/user/key, or enable password login / set a root password in your provider panel.")
 		log.Detail("raw error: %v", err)
 		return
 	}
 	log.Fail("не удалось аутентифицироваться на %s: сервер не принял ни один из предложенных методов (нет пароля и нет рабочего SSH-ключа).", cfg.Host)
 	log.Detail("Если машина УЖЕ защищена, вход root по SSH заблокирован `AllowGroups sshusers` —")
-	log.Detail("  подключайтесь админ-пользователем с его сгенерированным ключом, например:  ssh -i %s %s@%s", keyPath, admin, cfg.Host)
+	log.Detail("  переподключитесь админ-пользователем %q с ключом, который показал morgward (передайте его через --key или сохраните PEM с экрана ключа / из вывода CLI).", admin)
 	log.Detail("Иначе проверьте хост/порт/пользователя/ключ либо включите вход по паролю / задайте пароль root в панели провайдера.")
 	log.Detail("исходная ошибка: %v", err)
 }

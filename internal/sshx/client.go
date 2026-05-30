@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -92,11 +91,7 @@ func (c *Client) authMethods() []ssh.AuthMethod {
 	if am := agentAuthMethod(); am != nil {
 		m = append(m, am)
 	}
-	// 3. Default local private keys (~/.ssh/id_*), each added only if it parses.
-	for _, s := range defaultKeySigners() {
-		m = append(m, ssh.PublicKeys(s))
-	}
-	// 4. Password + keyboard-interactive fallback (some sshd configs require the
+	// 3. Password + keyboard-interactive fallback (some sshd configs require the
 	//    latter for password auth). Lowest priority so an installed key wins.
 	if c.password != "" {
 		m = append(m, ssh.Password(c.password))
@@ -129,30 +124,6 @@ func agentAuthMethod() ssh.AuthMethod {
 		// bootstrap CLI is short-lived, so this is acceptable.
 		return agent.NewClient(conn).Signers()
 	})
-}
-
-// defaultKeySigners loads the operator's common default private keys from ~/.ssh,
-// returning a signer for each that exists and parses. Missing or unparsable keys
-// (e.g. passphrase-protected, which we cannot prompt for) are silently skipped.
-// Key material is never logged.
-func defaultKeySigners() []ssh.Signer {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return nil
-	}
-	var signers []ssh.Signer
-	for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
-		pem, err := os.ReadFile(filepath.Join(home, ".ssh", name))
-		if err != nil {
-			continue
-		}
-		s, err := ssh.ParsePrivateKey(pem)
-		if err != nil {
-			continue // unsupported or passphrase-protected — skip, do not prompt.
-		}
-		signers = append(signers, s)
-	}
-	return signers
 }
 
 func (c *Client) connect() error {
