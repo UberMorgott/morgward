@@ -3,6 +3,7 @@
 /morgward
 /morgward.exe
 *.exe
+*.exe~
 
 # Runtime output (logs, generated keys, checkpoints)
 /runs/

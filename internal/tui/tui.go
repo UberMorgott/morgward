@@ -1582,7 +1582,7 @@ func (m model) fixListLines() []string {
 // fixRowText is the (unstyled-glyph) "[ID] title" portion of a fix row: the wiki
 // doc title when present, else the localized short step title, else the engine Title.
 func (m model) fixRowText(r engine.StepResult) string {
-	title := r.Title
+	var title string
 	if d, ok := wiki.Doc(wiki.Lang(int(m.lang)), r.ID); ok && d.Title != "" {
 		title = d.Title
 	} else {
