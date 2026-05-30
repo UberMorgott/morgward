@@ -1693,13 +1693,12 @@ func (m model) renderMonitor(width int) string {
 		pairKB(s.DiskUsedKB, s.DiskTotalKB),
 	}
 
-	const (
-		maxBars = 28 // wide bars: let them absorb most of the row
-		minBars = 3
-	)
-	// Try the richest layout first (with extras, widest bars), then drop extras, then
-	// shrink the bars. For each candidate, sum the FIXED (non-bar) cells of all three
-	// segments plus the two separators; the bars get whatever is left, split evenly.
+	const minBars = 3
+	// Try the richest layout first (with extras), then drop extras if too tight. For
+	// each candidate, sum the FIXED (non-bar) cells of all three segments plus the two
+	// separators; the bars consume ALL the remaining width so the row spans edge to
+	// edge. The remainder of the even split is handed to the leftmost segments (one
+	// extra cell each) so the total exactly fills width with no trailing void.
 	for _, withExtra := range []bool{true, false} {
 		fixed := 2 * monSepCells // the two " │ " separators
 		for i := range labels {
@@ -1713,15 +1712,17 @@ func (m model) renderMonitor(width int) string {
 		if barBudget < len(labels)*minBars {
 			continue // not even minimum bars fit at this richness — go leaner
 		}
-		bars := barBudget / len(labels)
-		if bars > maxBars {
-			bars = maxBars
-		}
+		base := barBudget / len(labels)
+		rem := barBudget % len(labels) // distribute leftover cells across segments
 		segs := make([]string, len(labels))
 		for i := range labels {
 			ex := ""
 			if withExtra {
 				ex = extras[i]
+			}
+			bars := base
+			if i < rem {
+				bars++ // leftmost segments absorb the remainder so the row fills width
 			}
 			segs[i] = monitorSeg(labels[i], pcts[i], bars, ex)
 		}
