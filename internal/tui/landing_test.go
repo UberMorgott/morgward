@@ -305,6 +305,25 @@ func TestFocusRenderingFramed(t *testing.T) {
 	}
 }
 
+// TestFormViewPadding asserts formView fills exactly m.h screen rows (top border +
+// switcher + body + pad + hint + bottom border), with advancedOpen=false.
+func TestFormViewPadding(t *testing.T) {
+	m := formModel(80, 30) // tall enough that pad >= 0
+	m.advancedOpen = false
+	out := m.formView()
+	lines := strings.Count(out, "\n") + 1 // last line has no trailing newline
+	if lines != m.h {
+		t.Fatalf("formView rendered %d rows, want m.h=%d", lines, m.h)
+	}
+	// every line must fit the box width (no overflow past the border)
+	bw := m.boxWidth()
+	for i, ln := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(ln); w > bw {
+			t.Fatalf("line %d width %d > boxWidth %d", i, w, bw)
+		}
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width
