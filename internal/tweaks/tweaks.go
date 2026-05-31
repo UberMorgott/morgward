@@ -114,7 +114,7 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 	ps = append(ps,
 		// --- A2.5 cloud-init ---
 		Probe{ID: "a25.disabled", Step: "A2.5", Name: "cloud-init disabled",
-			Cmd:  "test -f /etc/cloud/cloud-init.disabled && echo 1 || command -v cloud-init >/dev/null 2>&1 && echo 0 || echo na",
+			Cmd:  "test -f /etc/cloud/cloud-init.disabled && echo 1 || { command -v cloud-init >/dev/null 2>&1 && echo 0 || echo na; }",
 			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "na" }},
 
 		// --- A3 fail2ban ---
@@ -164,7 +164,7 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 
 		// --- A6.5 DNS ---
 		Probe{ID: "a65.dns_conf", Step: "A6.5", Name: "resolved DNS hardening",
-			Cmd:  "test -f /etc/systemd/resolved.conf.d/99-morgward-dns.conf && echo 1 || systemctl is-active systemd-resolved >/dev/null 2>&1 && echo 0 || echo na",
+			Cmd:  "test -f /etc/systemd/resolved.conf.d/99-morgward-dns.conf && echo 1 || { systemctl is-active systemd-resolved >/dev/null 2>&1 && echo 0 || echo na; }",
 			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "na" }},
 		Probe{ID: "a65.dot", Step: "A6.5", Name: "DNSOverTLS opportunistic",
 			Cmd: grepFile("DNSOverTLS=opportunistic", "/etc/systemd/resolved.conf.d/99-morgward-dns.conf"), Want: eq("1")},
