@@ -199,6 +199,10 @@ type model struct {
 	cmds    []string
 	errMsg  string
 	saveLog bool // form toggle: write the full run log to a file (sets cfg.LogFile)
+	// advancedOpen is the landing "▸ Дополнительно" disclosure state: when true the
+	// framed Port/User/Key inputs are included in formRows; novice default is false
+	// (Host + Password only). Plain bool — the model is copied by value every Update.
+	advancedOpen bool
 
 	logs    chan string
 	done    chan error
