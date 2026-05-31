@@ -1377,18 +1377,9 @@ func (m model) framedInputRow(idx int, lang Lang, label string, input textinput.
 // iterates the same slice, so geometry can never drift.
 func (m model) formRows() []formRow {
 	colW := m.labelColW()
-	// labelPad is the per-row left column: a colW-wide label + one space, so every
-	// value/pill/button lands on the same left edge (col colW+1).
-	labelPad := func(label string, focused bool) string {
-		s := labelStyle
-		if focused {
-			s = focusStyle
-		}
-		return s.Render(padLabel(label, colW)) + " "
-	}
-	indent := strings.Repeat(" ", colW+1) // aligns the toggleHelp/value-column content
-
-	_ = labelPad // labels now live inside the framed input boxes (see framedInputRow)
+	// indent aligns the toggle/help/button content to the shared value column
+	// (col colW+1), the same left edge the framed input labels use.
+	indent := strings.Repeat(" ", colW+1)
 
 	var rows []formRow
 	labels := []stringKey{kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey}

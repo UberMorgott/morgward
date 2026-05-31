@@ -267,6 +267,44 @@ func TestFormHitTestAccuracy(t *testing.T) {
 	}
 }
 
+// TestFocusRenderingFramed verifies a focused framed input uses the accent border
+// (57) while an unfocused one uses the dim border (240), and that formRows applies
+// focus to the input matching m.focus.
+func TestFocusRenderingFramed(t *testing.T) {
+	m := formModel(80, 24)
+	focused := m.framedInputRow(fHost, m.lang, "Хост", m.inputs[fHost], true)
+	dim := m.framedInputRow(fHost, m.lang, "Хост", m.inputs[fHost], false)
+	if strings.Join(focused, "\n") == strings.Join(dim, "\n") {
+		t.Fatalf("focused and unfocused framed inputs render identically")
+	}
+	// Accent border color 57 must appear in the focused top border, not the dim one.
+	if !strings.Contains(focused[0], "57") {
+		t.Fatalf("focused top border missing accent color 57: %q", focused[0])
+	}
+	if !strings.Contains(dim[0], "240") {
+		t.Fatalf("unfocused top border missing dim color 240: %q", dim[0])
+	}
+
+	// Via formRows: focus on Password → its block carries the accent border, Host dim.
+	m.focus = fPass
+	rows := m.formRows()
+	var passTop, hostTop string
+	for _, r := range rows {
+		if r.kind == frInput && r.field == fPass && passTop == "" {
+			passTop = r.text
+		}
+		if r.kind == frInput && r.field == fHost && hostTop == "" {
+			hostTop = r.text
+		}
+	}
+	if !strings.Contains(passTop, "57") {
+		t.Fatalf("focused Password block missing accent border: %q", passTop)
+	}
+	if !strings.Contains(hostTop, "240") {
+		t.Fatalf("unfocused Host block missing dim border: %q", hostTop)
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width
