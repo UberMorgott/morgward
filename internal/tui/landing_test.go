@@ -190,6 +190,25 @@ func TestCatalogLinkKeyExists(t *testing.T) {
 	}
 }
 
+// TestCatalogLinkRendered asserts the catalog-link label appears as a form row
+// (a P5 stub: a static label, not yet a clickable navigation target).
+func TestCatalogLinkRendered(t *testing.T) {
+	m := formModel(80, 24)
+	rows := m.formRows()
+	idx := kindIndex(rows, frCatalogLink)
+	if idx < 0 {
+		t.Fatalf("no frCatalogLink row in formRows")
+	}
+	if !strings.Contains(rows[idx].text, t2(m.lang, kCatalogLink)) {
+		t.Fatalf("frCatalogLink row missing label: %q", rows[idx].text)
+	}
+	// Stub: clicking it must NOT be a registered hit target (no navigation yet).
+	hit := m.formHitAtClick(0, formBodyTopRow+idx)
+	if hit.ok {
+		t.Fatalf("catalog link should be a non-clickable stub, got hit kind=%v", hit.kind)
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width

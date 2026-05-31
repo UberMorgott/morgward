@@ -1295,6 +1295,7 @@ const (
 	frStart                         // Start + Cancel button line
 	frErr                           // validation error line
 	frDisclosure                    // "▸ Дополнительно" toggle revealing Port/User/Key
+	frCatalogLink                   // "Что настраивает программа ▸" label (P5 nav stub)
 )
 
 // formRow is one rendered body line plus its kind (+ field index for inputs). The
@@ -1445,6 +1446,11 @@ func (m model) formRows() []formRow {
 	// focusable). Both pill labels are wrapped by pillStyle/pillOnStyle, so their
 	// x-geometry is recovered by pillRanges over the same names in the zone mapper.
 	rows = append(rows, formRow{kind: frStart, text: indent + m.startCancelPills()})
+
+	// "Что настраивает программа ▸" — a static catalog-link label (P5 will wire it to
+	// phaseCatalog navigation). Rendered as a label, NOT a clickable pill, so the
+	// hit-test has no case for it and a click is a no-op until P5.
+	rows = append(rows, formRow{kind: frCatalogLink, text: indent + tipStyle.Render(t(m.lang, kCatalogLink))})
 
 	if m.errMsg != "" {
 		rows = append(rows, formRow{kind: frBlank})
