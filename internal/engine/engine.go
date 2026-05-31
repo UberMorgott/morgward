@@ -102,9 +102,17 @@ type Summary struct {
 
 	// Tweaks carries the per-tweak audit (the "анализ" action): every individual
 	// change morgward applies, probed live, with applied/not verdict. Filled only
-	// in the verify path; nil for run/detect. The TUI renders it as phaseMatrix;
-	// the CLI ignores it (its verify output stays the §V matrix only).
+	// in the verify/audit path; nil for run/detect. The TUI renders it as phaseMatrix
+	// (verify) or the Dashboard live audit (audit); the CLI ignores it (its verify
+	// output stays the §V matrix only).
 	Tweaks []tweaks.Result
+
+	// Facts is the read-only §0.5/§2 discovery snapshot captured during prepare().
+	// Filled by Audit so the Dashboard can render the server card (OS/kernel/IPv6/
+	// ports); nil for run/verify/detect (those carry no Facts in the Summary). It is
+	// never mutated after detection, so passing the pointer through the value-copied
+	// TUI model is safe.
+	Facts *detect.Facts
 
 	// Bench* mirror steps.BenchResult: the §A4 internet throughput benchmark
 	// (PRE→POST). BenchOK gates rendering — false ⇒ omit the bench line (detect/
@@ -155,6 +163,8 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 		return DetectOnly(cfg, log, h)
 	case "verify":
 		return VerifyOnly(cfg, log, h)
+	case "audit":
+		return Audit(cfg, log, h)
 	case "step":
 		return RunSteps(cfg, log, ids, h)
 	default:
@@ -165,7 +175,14 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 // prepare connects, bootstraps the key, detects the box, and (unless
 // allowBrownfield) gates a non-greenfield/hardened box. The returned cleanup
 // closes the connection (the caller owns the log).
-func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) (*session, func(), error) {
+//
+// readOnly is the audit contract: when true, prepare DOES NOT mutate the box —
+// it skips the key bootstrap entirely (no ed25519 generation, no push to
+// authorized_keys, no UseKey, no password clear) and keeps the operator's
+// original credentials (password OR --key) live for the connection and the
+// monitor. notifyConnect still fires (KeyGenerated=false) so the monitor footer
+// works on the password path. Used by Audit; Run/RunSteps/Verify pass false.
+func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield, readOnly bool, h Hooks) (*session, func(), error) {
 	cleanup := func() {}
 
 	log.Banner(fmt.Sprintf("morgward — %s@%s:%d  mode=%s", cfg.User, cfg.Host, cfg.Port, cfg.Mode))
@@ -203,8 +220,22 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	log.OK("connected to %s@%s", cfg.User, cfg.Host)
 
 	// 2. Key bootstrap: generate ed25519, push to the bootstrap user, switch to key.
+	// SKIPPED in read-only (audit) mode — Audit must not mutate the box, so it never
+	// generates/pushes a key nor clears the password; it keeps the operator's original
+	// credentials live. notifyConnect still fires below so the monitor footer works.
 	var authLine string
-	if keyPEM == nil {
+	switch {
+	case readOnly:
+		// Read-only: change nothing. Derive the public line only if a --key was given
+		// (cosmetic — steps that would consume it never run on this path). On the
+		// password path keyPEM stays nil and the monitor dials with cfg.Password.
+		if keyPEM != nil {
+			if authLine, err = sshx.PublicLineFromPEM(keyPEM, "morgward@"+cfg.Host); err != nil {
+				return nil, cleanup, fmt.Errorf("derive public key: %w", err)
+			}
+		}
+		notifyConnect(h.OnConnect, cfg, keyPEM, false)
+	case keyPEM == nil:
 		log.Step("KEY", "Generate ed25519 key and switch to key auth")
 		kp, gerr := sshx.GenerateKeyPair("morgward@" + cfg.Host)
 		if gerr != nil {
@@ -228,7 +259,7 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 		cfg.Password = "" // bootstrap secret no longer needed
 		log.OK("ephemeral SSH key generated (held in memory — copy it from the key screen or CLI output)")
 		notifyConnect(h.OnConnect, cfg, keyPEM, true)
-	} else {
+	default:
 		authLine, err = sshx.PublicLineFromPEM(keyPEM, "morgward@"+cfg.Host)
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("derive public key: %w", err)
@@ -241,7 +272,11 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	facts := detect.Run(cli)
 	log.OK("OS=%s %s (%s), iface=%s, ipv4=%s, virt=%s, greenfield=%v",
 		facts.ID, facts.VersionID, facts.Codename, facts.EgressIface, facts.ServerIPv4, facts.Virt, facts.Greenfield)
-	cli.Sudo(writeInventory(facts.Inventory))
+	// The inventory file is the only write detect performs; skip it in read-only
+	// (audit) mode so Audit truly mutates nothing on the box.
+	if !readOnly {
+		cli.Sudo(writeInventory(facts.Inventory))
+	}
 
 	if !facts.IsUbuntu {
 		log.Warn("ID=%s is not ubuntu — runbook is Ubuntu-specific; proceeding with version-drift protocol", facts.ID)
@@ -289,7 +324,11 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield bool, h Hooks) 
 	chk.Host = cfg.Host
 	chk.Mode = string(cfg.Mode)
 	chk.Greenfield = facts.Greenfield
-	chk.Save()
+	// Read-only audit does not persist a checkpoint (it applies no steps), so the
+	// state file is left untouched.
+	if !readOnly {
+		chk.Save()
+	}
 
 	ctx := &steps.Context{
 		Cli: cli, Log: log, Cfg: cfg, State: chk, Facts: facts,
@@ -317,7 +356,7 @@ func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM 
 // Run executes a full hardening pass (all Phase A steps + §V verification).
 func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, false, h)
+	s, cleanup, err := prepare(cfg, log, false, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -366,7 +405,7 @@ func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 // targeted re-tweaks on an already-bootstrapped box (pass --key to reuse a key).
 func RunSteps(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, true, h)
+	s, cleanup, err := prepare(cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -394,7 +433,7 @@ func RunSteps(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 // VerifyOnly runs the §V verification matrix without mutating the box.
 func VerifyOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, true, h)
+	s, cleanup, err := prepare(cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -418,12 +457,44 @@ func VerifyOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 // changing nothing.
 func DetectOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	_, cleanup, err := prepare(cfg, log, true, h)
+	_, cleanup, err := prepare(cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
 	}
 	emitDone(h, Summary{Elapsed: time.Since(start)})
+	return nil
+}
+
+// Audit is the read-only Dashboard entrypoint: it dials with the operator's
+// original credentials (password OR --key), runs §0.5/§2 detection and the
+// per-tweak audit, and changes NOTHING on the box — no key bootstrap, no admin
+// creation, no step application (prepare is called with readOnly=true). The
+// tweak results stream to the TUI via OnProgress (one per Result; cosmetic
+// streaming of a single tweaks.Run batch, not real concurrency), and the final
+// Done carries Summary{Facts, Tweaks} so the Dashboard can render the server
+// card + live audit grid.
+func Audit(cfg *config.Config, log *ui.Logger, h Hooks) error {
+	start := time.Now()
+	s, cleanup, err := prepare(cfg, log, true, true, h)
+	defer cleanup()
+	if err != nil {
+		return err
+	}
+	tw := tweaks.Run(s.cli, s.log, s.ctx.Facts, cfg)
+	// Stream one Progress per tweak Result so the Dashboard audit list fills in
+	// incrementally (this is cosmetic — tweaks.Run already completed in a single
+	// privileged round-trip; we are replaying the parsed batch, not probing in
+	// parallel).
+	for i, res := range tw {
+		if h.OnProgress != nil {
+			h.OnProgress(Progress{
+				ID: res.Probe.ID, Title: res.Probe.Name,
+				Index: i + 1, Total: len(tw), Status: "running",
+			})
+		}
+	}
+	emitDone(h, Summary{Elapsed: time.Since(start), Tweaks: tw, Facts: s.ctx.Facts})
 	return nil
 }
 
