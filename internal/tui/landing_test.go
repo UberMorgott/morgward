@@ -365,6 +365,19 @@ func TestVersionFrameHeader(t *testing.T) {
 	}
 }
 
+// TestUpdateStripKeysExist asserts the update-strip state labels translate
+// non-empty in both languages (P2 will wire them to the model).
+func TestUpdateStripKeysExist(t *testing.T) {
+	keys := []stringKey{kUpdateChecking, kUpdateCurrent, kUpdateAvailable, kUpdateError, kUpdateButtonLabel}
+	for _, k := range keys {
+		for _, lang := range []Lang{langRU, langEN} {
+			if s := t2(lang, k); s == "" {
+				t.Fatalf("lang %d key %d empty", lang, k)
+			}
+		}
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width

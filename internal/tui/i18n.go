@@ -196,6 +196,13 @@ const (
 
 	// landing version-frame tagline under the "Morgward vX.Y" header
 	kVersionTagline // "VPS guardian · защита свежего Ubuntu VPS"
+
+	// update strip states (P1 prep; P2 wires the model state machine + button)
+	kUpdateChecking    // "Обновления: проверка… ⠋"
+	kUpdateCurrent     // "Обновления: ✓ установлена последняя версия"
+	kUpdateAvailable   // "Обновления: vX.Y доступна" (carries a %s for the version)
+	kUpdateError       // "не удалось проверить (офлайн)"
+	kUpdateButtonLabel // clickable button: "Обновить ⬇"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -323,6 +330,12 @@ var tr = map[Lang]map[stringKey]string{
 		kDisclosureOpen:  "▼",
 		kCatalogLink:     "Что настраивает программа ▸",
 		kVersionTagline:  "VPS guardian · защита свежего Ubuntu VPS",
+
+		kUpdateChecking:    "Обновления: проверка… ⠋",
+		kUpdateCurrent:     "Обновления: ✓ установлена последняя версия",
+		kUpdateAvailable:   "Обновления: v%s доступна",
+		kUpdateError:       "не удалось проверить (офлайн)",
+		kUpdateButtonLabel: "Обновить ⬇",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -447,6 +460,12 @@ var tr = map[Lang]map[stringKey]string{
 		kDisclosureOpen:  "▼",
 		kCatalogLink:     "What the program configures ▸",
 		kVersionTagline:  "VPS guardian · fresh Ubuntu VPS protection",
+
+		kUpdateChecking:    "Updates: checking… ⠋",
+		kUpdateCurrent:     "Updates: ✓ latest version installed",
+		kUpdateAvailable:   "Updates: v%s available",
+		kUpdateError:       "failed to check (offline)",
+		kUpdateButtonLabel: "Update ⬇",
 	},
 }
 
