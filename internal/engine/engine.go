@@ -18,6 +18,7 @@ import (
 	"github.com/UberMorgott/morgward/internal/state"
 	"github.com/UberMorgott/morgward/internal/stats"
 	"github.com/UberMorgott/morgward/internal/steps"
+	"github.com/UberMorgott/morgward/internal/tweaks"
 	"github.com/UberMorgott/morgward/internal/ui"
 	"github.com/UberMorgott/morgward/internal/verify"
 )
@@ -98,6 +99,12 @@ type Summary struct {
 	// Skips carries the per-skip reasons (the detail string each SKIPPED step
 	// returned), so the CLI/TUI can show WHY a step was skipped, not just a count.
 	Skips []SkipReason
+
+	// Tweaks carries the per-tweak audit (the "анализ" action): every individual
+	// change morgward applies, probed live, with applied/not verdict. Filled only
+	// in the verify path; nil for run/detect. The TUI renders it as phaseMatrix;
+	// the CLI ignores it (its verify output stays the §V matrix only).
+	Tweaks []tweaks.Result
 
 	// Bench* mirror steps.BenchResult: the §A4 internet throughput benchmark
 	// (PRE→POST). BenchOK gates rendering — false ⇒ omit the bench line (detect/
@@ -395,9 +402,11 @@ func VerifyOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 	res := verify.Run(s.cli, s.log, cfg.Port, string(cfg.Mode))
 	s.log.Banner("SUMMARY")
 	s.log.Info("verify: %d passed, %d failed", res.Passed, res.Failed)
+	tw := tweaks.Run(s.cli, s.log, s.ctx.Facts, cfg)
 	emitDone(h, Summary{
 		VerifyPassed: res.Passed, VerifyFailed: res.Failed,
 		Elapsed: time.Since(start),
+		Tweaks:  tw,
 	})
 	if res.Abort {
 		return fmt.Errorf("verification matrix reported a lockout-capable failure")
