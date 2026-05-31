@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/version"
 )
 
@@ -375,6 +376,23 @@ func TestUpdateStripKeysExist(t *testing.T) {
 				t.Fatalf("lang %d key %d empty", lang, k)
 			}
 		}
+	}
+}
+
+// TestModesUnchanged asserts the soft/strict Mode selector still renders on the
+// landing form (P1 keeps it; P4 will redesign Security and remove modes).
+func TestModesUnchanged(t *testing.T) {
+	m := formModel(80, 24)
+	m.mode = config.ModeSoft
+	m.advancedOpen = false
+	rows := m.formRows()
+	idx := kindIndex(rows, frMode)
+	if idx < 0 {
+		t.Fatalf("no frMode row")
+	}
+	txt := rows[idx].text
+	if !strings.Contains(txt, t2(m.lang, kOptSoft)) || !strings.Contains(txt, t2(m.lang, kOptStrict)) {
+		t.Fatalf("frMode row missing soft/strict pills: %q", txt)
 	}
 }
 
