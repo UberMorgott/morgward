@@ -187,6 +187,12 @@ const (
 	kSaveLogLabel // form toggle label: "Save log to file"
 	kSaveLogOn    // on state word (reuses yes/no semantics)
 	kSaveLogOff   // off state word
+
+	// --- анализ matrix (phaseMatrix) -------------------------------------
+	kTweakApplied
+	kTweakNotApplied
+	kTweakSummary
+	kMatrixHint
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -210,7 +216,7 @@ var tr = map[Lang]map[stringKey]string{
 		kLabelAction: "Действие",
 		kOptRun:      "запуск",
 		kOptDetect:   "разведка",
-		kOptVerify:   "проверка",
+		kOptVerify:   "анализ",
 
 		kStart:      "Старт",
 		kCancel:     "Отмена",
@@ -312,6 +318,11 @@ var tr = map[Lang]map[stringKey]string{
 		kSaveLogLabel: "Сохранять лог в файл",
 		kSaveLogOn:    "да",
 		kSaveLogOff:   "нет",
+
+		kTweakApplied:    "применён",
+		kTweakNotApplied: "не применён",
+		kTweakSummary:    "%d применено / %d нет",
+		kMatrixHint:      "↑/↓ прокрутка · esc назад",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -434,6 +445,11 @@ var tr = map[Lang]map[stringKey]string{
 		kSaveLogLabel: "Save log to file",
 		kSaveLogOn:    "yes",
 		kSaveLogOff:   "no",
+
+		kTweakApplied:    "applied",
+		kTweakNotApplied: "not applied",
+		kTweakSummary:    "%d applied / %d missing",
+		kMatrixHint:      "↑/↓ scroll · esc back",
 	},
 }
 
@@ -530,6 +546,74 @@ func localStepTitle(lang Lang, id, fallback string) string {
 	}
 	if s, ok := stepTitles[langEN][id]; ok {
 		return s
+	}
+	return fallback
+}
+
+// tweakNames maps a tweaks.Probe.ID to its localized display name. Missing IDs
+// fall through to the probe's English Name (see localTweakName).
+var tweakNames = map[Lang]map[string]string{
+	langRU: {
+		"a1.input_drop":     "Политика INPUT DROP",
+		"a1.ssh_accept":     "Порт SSH разрешён",
+		"a1.rules_v4":       "Правила v4 сохранены",
+		"a1.rules_v6":       "Правила v6 сохранены",
+		"a1.persistent":     "iptables-persistent",
+		"a2.conf00":         "00-hardening.conf",
+		"a2.conf99":         "99-hardening.conf",
+		"a2.allowgroups":    "AllowGroups sshusers",
+		"a2.ecdsa_absent":   "ECDSA host-key удалён",
+		"a2.ssh_active":     "Служба ssh активна",
+		"a2.permitroot":     "PermitRootLogin",
+		"a2.passauth":       "Парольный вход",
+		"a2.kex_mlkem":      "PQ-обмен ключей (mlkem768)",
+		"a25.disabled":      "cloud-init отключён",
+		"a3.installed":      "fail2ban установлен",
+		"a3.jail_local":     "jail.local",
+		"a3.sshd_jail":      "Джейл sshd активен",
+		"a4.net_tune":       "99-net-tune.conf",
+		"a4.bbr_conf":       "99-bbr.conf",
+		"a4.bbr_module":     "Модуль tcp_bbr загружен",
+		"a4.bbr_active":     "Контроль перегрузки BBR",
+		"a4.qdisc":          "Очередь fq по умолчанию",
+		"a4.io_sched":       "Планировщик I/O (udev)",
+		"a5.harden_conf":    "99-zz-kernel-harden.conf",
+		"a5.core_pattern":   "core_pattern отключён",
+		"a5.rp_filter":      "rp_filter строгий",
+		"a5.kptr":           "kptr_restrict",
+		"a5.thp":            "THP madvise",
+		"a6.journald":       "Лимит journald",
+		"a6.needrestart":    "needrestart авто",
+		"a6.nofile":         "Лимит NOFILE",
+		"a6.ntp":            "NTP включён",
+		"a65.dns_conf":      "Защита DNS (resolved)",
+		"a65.dot":           "DNSOverTLS opportunistic",
+		"a67.zram_conf":     "zram-generator.conf",
+		"a67.zram_sysctl":   "zram swappiness",
+		"a67.zram_active":   "zram-своп активен",
+		"a67.earlyoom":      "earlyoom активен",
+		"a9.installed":      "unattended-upgrades",
+		"a9.auto":           "20auto-upgrades",
+		"a9.local":          "52-unattended-upgrades-local",
+		"a10.auditd":        "auditd установлен",
+		"a10.audit_rules":   "99-vps.rules",
+		"a10.auditd_active": "auditd активен",
+		"a10.notify":        "ssh-login-notify",
+		"a10.pam":           "pam.d/sshd уведомление",
+		"a10.log_rule":      "LOG входящих (firewall)",
+		"a10.blacklist":     "Чёрный список модулей",
+		"a10.devshm":        "/dev/shm защищён",
+	},
+	langEN: {}, // English falls back to Probe.Name; no overrides needed
+}
+
+// localTweakName returns the localized name for a probe ID, or fallback (the
+// probe's English Name) when no localized entry exists.
+func localTweakName(lang Lang, id, fallback string) string {
+	if m, ok := tweakNames[lang]; ok {
+		if s, ok := m[id]; ok {
+			return s
+		}
 	}
 	return fallback
 }
