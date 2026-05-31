@@ -17,15 +17,14 @@ import (
 
 // Probe is one auditable tweak. Cmd is a shell snippet (single logical line, NO
 // heredoc) whose stdout is captured and passed to Want. Step groups probes for
-// display; NameK is the i18n lookup key (the TUI maps it); Name is the English
-// fallback used when no localized name exists.
+// display. The TUI localizes the display name by ID (see localTweakName),
+// falling back to Name (English) when no localized entry exists.
 type Probe struct {
-	ID    string
-	Step  string
-	NameK string
-	Name  string
-	Cmd   string
-	Want  func(out string) bool
+	ID   string
+	Step string
+	Name string
+	Cmd  string
+	Want func(out string) bool
 }
 
 // Result pairs a probe with its observed value and applied verdict.
