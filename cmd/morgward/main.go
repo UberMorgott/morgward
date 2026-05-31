@@ -5,12 +5,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
+	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"golang.org/x/term"
 
 	"github.com/UberMorgott/morgward/internal/config"
@@ -18,6 +22,9 @@ import (
 	"github.com/UberMorgott/morgward/internal/tui"
 	"github.com/UberMorgott/morgward/internal/version"
 )
+
+// updateRepo is the GitHub "owner/repo" slug self-update pulls releases from.
+const updateRepo = "UberMorgott/morgward"
 
 const usage = `morgward — portable executor for VPS-PREP-RUNBOOK
 
@@ -91,9 +98,18 @@ func main() {
 		return
 	}
 	if cmd == "tui" {
-		if err := tui.Run(); err != nil {
+		result, err := tui.Run()
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "tui error:", err)
 			os.Exit(1)
+		}
+		// The operator may have asked to self-update from the landing strip. Do it
+		// AFTER Run() returns so the alt-screen has fully torn down, then relaunch.
+		if result.DoUpdate {
+			if err := performUpdate(result.TargetVer); err != nil {
+				fmt.Fprintln(os.Stderr, "update failed:", err)
+				os.Exit(1)
+			}
 		}
 		return
 	}
@@ -147,6 +163,52 @@ func main() {
 		fmt.Fprintln(os.Stderr, "\nfailed:", err)
 		os.Exit(1)
 	}
+}
+
+// performUpdate downloads + replaces the running binary with the latest release
+// via go-selfupdate, then relaunches the updated executable and exits. On Windows
+// the running exe cannot be deleted, so go-selfupdate renames it to "<exe>.old";
+// the TUI's Init() cleans that leftover on the next launch. targetVer is the
+// version the operator saw on the strip (informational; UpdateSelf re-detects).
+func performUpdate(targetVer string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+	if err != nil {
+		return fmt.Errorf("new updater: %w", err)
+	}
+	if targetVer != "" {
+		fmt.Printf("%s: обновление до v%s…\n", version.Name, targetVer)
+	} else {
+		fmt.Printf("%s: обновление…\n", version.Name)
+	}
+	// UpdateSelf re-detects the latest release for this OS/arch, downloads it, and
+	// atomically replaces the running binary (returns the applied Release).
+	rel, err := updater.UpdateSelf(ctx, version.Version, selfupdate.ParseSlug(updateRepo))
+	if err != nil {
+		return fmt.Errorf("update self: %w", err)
+	}
+	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, rel.Version())
+
+	// Relaunch the freshly-updated binary in place (portable: spawn + inherit stdio,
+	// then exit with its code). os.Executable() resolves the path of THIS process,
+	// which now points at the replaced binary on disk.
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate executable: %w", err)
+	}
+	c := exec.Command(exe, os.Args[1:]...)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		// Propagate the relaunched process's exit code when it failed cleanly.
+		if ee, ok := err.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+		}
+		return fmt.Errorf("relaunch: %w", err)
+	}
+	os.Exit(0)
+	return nil
 }
 
 // printKeyBlock writes the generated SSH private key PEM to stdout, fenced by a

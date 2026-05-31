@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
+	selfupdate "github.com/creativeprojects/go-selfupdate"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
@@ -32,6 +34,18 @@ import (
 
 const (
 	defaultAdminUser = "vpsadmin"
+)
+
+// updateRepo is the GitHub "owner/repo" slug self-update checks for releases.
+const updateRepo = "UberMorgott/morgward"
+
+// self-update state machine (model.updateState). Plain int constants so the model
+// stays fully value-copyable (the model is copied by value every Update).
+const (
+	updChecking  = iota // check in flight (Init fired checkUpdateCmd, no result yet)
+	updCurrent          // DetectLatest found no newer release → running the latest
+	updAvailable        // a newer release exists (model.updateVer holds its version)
+	updErr              // the check failed (e.g. offline / GitHub unreachable)
 )
 
 var (
@@ -136,10 +150,11 @@ const (
 
 // extra focusable rows after the inputs.
 const (
-	rowDisclosure = nInputs     // "▸ Дополнительно" advanced-inputs toggle
-	rowLog        = nInputs + 1 // save-log-to-file toggle
-	rowStart      = nInputs + 2 // connect button
-	nRows         = nInputs + 3
+	rowDisclosure   = nInputs     // "▸ Дополнительно" advanced-inputs toggle
+	rowLog          = nInputs + 1 // save-log-to-file toggle
+	rowStart        = nInputs + 2 // connect button
+	rowUpdateButton = nInputs + 3 // "Обновить" pill (focusable ONLY when updAvailable)
+	nRows           = nInputs + 4
 )
 
 // focusableRows returns the ordered list of currently-focusable row indices.
@@ -157,6 +172,11 @@ func (m model) focusableRows() []int {
 	}
 	rows = append(rows, rowDisclosure)
 	rows = append(rows, rowLog)
+	// The update pill is focusable ONLY when a newer release was detected, so Tab
+	// never lands on a hidden/disabled button.
+	if m.updateState == updAvailable {
+		rows = append(rows, rowUpdateButton)
+	}
 	rows = append(rows, rowStart)
 	return rows
 }
@@ -176,6 +196,18 @@ func (m model) lastFocusableInput() int {
 
 type logMsg string
 type doneMsg struct{ err error }
+
+// updateCheckMsg carries the result of the one-shot self-update check spawned by
+// Init(). It holds ONLY value types (no *Release / no maps) so the model stays
+// value-copyable when stashed: found reports whether DetectLatest found a NEWER
+// release (found==false is "up-to-date", NOT an error); ver is that version when
+// found; err is non-nil only when the check itself failed (e.g. offline).
+type updateCheckMsg struct {
+	found bool
+	ver   string
+	err   error
+}
+
 type connMsg monitor.ConnInfo
 type statMsg monitor.Sample
 type progMsg engine.Progress
@@ -315,6 +347,14 @@ type model struct {
 	secAdminState     string // "vpsadmin@host" / "отсутствует" (or placeholder)
 	secDangerConfirm  bool   // true while the danger key-only lockout confirm is shown
 
+	// self-update state (landing strip). All plain value types so the model is
+	// safe to copy by value every Update: updateState is the updChecking/updCurrent/
+	// updAvailable/updErr machine, updateVer the latest version string when available,
+	// wantUpdate the flag set when the operator clicks "Обновить" (read by Run()).
+	updateState int
+	updateVer   string
+	wantUpdate  bool
+
 	finalErr error
 	finished bool
 	host     string    // target host, stashed at start() for window-title updates
@@ -386,10 +426,46 @@ func (m *model) toggleLang() {
 }
 
 func (m model) Init() tea.Cmd {
+	// Best-effort: a prior Windows self-update renames the running exe to a hidden
+	// ".<base>.old" dotfile in the exe dir (go-selfupdate cannot delete a running
+	// binary), so clean up that leftover on the next launch. Errors are ignored — it
+	// simply won't exist on first run / non-Windows.
+	if exe, err := os.Executable(); err == nil {
+		_ = os.Remove(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"))
+	}
 	// v2 has no tea.SetWindowTitle Cmd; the window title is a tea.View field built
 	// per-frame in View() from m.titleK + m.lang (see windowTitle).
-	// Start the always-on resize poll (Windows has no SIGWINCH — see resizeTick).
-	return tea.Batch(textinput.Blink, resizeTick())
+	// Start the always-on resize poll (Windows has no SIGWINCH — see resizeTick) and
+	// fire the one-shot self-update check (result arrives as updateCheckMsg).
+	return tea.Batch(textinput.Blink, resizeTick(), checkUpdateCmd())
+}
+
+// checkUpdateCmd runs the one-shot self-update check off the bubbletea loop and
+// returns the outcome as an updateCheckMsg. A short timeout keeps an unreachable
+// GitHub from hanging the strip in "checking…" — it resolves to updErr instead.
+// found==false (no newer release) is up-to-date, NOT an error.
+func checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+		if err != nil {
+			return updateCheckMsg{err: err}
+		}
+		latest, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(updateRepo))
+		if err != nil {
+			return updateCheckMsg{err: err}
+		}
+		// DetectLatest reports found==true for any matching release; it does NOT
+		// compare against the running version. An update is available ONLY when the
+		// latest is strictly newer than version.Version. No matching release
+		// (found==false) is "nothing to update to" → up-to-date, not an error.
+		if !found || latest == nil || !latest.GreaterThan(version.Version) {
+			return updateCheckMsg{found: false}
+		}
+		return updateCheckMsg{found: true, ver: latest.Version()}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -716,6 +792,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case updateCheckMsg:
+		// Resolve the landing update strip from the one-shot check. An err is a failed
+		// check (offline); found==true means a newer release; found==false is up-to-date.
+		switch {
+		case msg.err != nil:
+			m.updateState = updErr
+			m.updateVer = ""
+		case msg.found:
+			m.updateState = updAvailable
+			m.updateVer = msg.ver
+		default:
+			m.updateState = updCurrent
+			m.updateVer = ""
+		}
+		return m, nil
+
 	case connMsg:
 		// Engine signaled key auth is active — start the live sampler.
 		m.statsCh = make(chan monitor.Sample, 4)
@@ -829,6 +921,13 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
+		if m.focus == rowUpdateButton && m.updateState == updAvailable {
+			// Operator chose to self-update: record intent + keep the target version,
+			// then quit so the alt-screen tears down before main() relaunches the
+			// updated binary (Run() returns these via Result).
+			m.wantUpdate = true
+			return m, tea.Quit
+		}
 		if m.focus == rowStart {
 			// The landing "Подключиться" button is READ-ONLY: it runs the audit
 			// (dial → detect → tweaks audit → Dashboard), never the apply path.
@@ -1429,8 +1528,27 @@ func (m model) formHitAtClick(x, y int) formHit {
 		if i := pillIndexAt(m.startCancelLabels(), m.pillColStart(), x); i >= 0 {
 			return formHit{kind: frStart, pill: i, ok: true}
 		}
+	case frUpdate:
+		// Only the "Обновить" pill is a click target, and only when a newer release
+		// is available. The pill begins after the indent + status text + one space;
+		// its [start,end) X-range is recovered from the same label the render path used.
+		if m.updateState == updAvailable && x >= m.updateButtonColStart() {
+			if r := pillRanges([]string{m.updateButtonLabel()}, m.updateButtonColStart()); x >= r[0][0] && x < r[0][1] {
+				return formHit{kind: frUpdate, ok: true}
+			}
+		}
 	}
 	return formHit{}
+}
+
+// updateButtonColStart is the absolute X where the "Обновить" pill begins on the
+// update strip row: indent (value column) + status text width + one space. Shares
+// updateStripText / updateButtonLabel with the render path so geometry never drifts.
+func (m model) updateButtonColStart() int {
+	indentW := m.labelColW() + 1
+	// +2 for the frame's left border + leading space (matches contentLine geometry,
+	// same offset pillColStart uses via formBodyTopRow content rows).
+	return 2 + indentW + lipgloss.Width(m.updateStripText()) + 1
 }
 
 // pillIndexAt returns the index of the pill containing absolute X x (pills starting
@@ -1516,6 +1634,13 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 		// (dial → detect → tweaks audit → Dashboard), never the apply path.
 		m.command = "audit"
 		return m.start()
+	case frUpdate:
+		// Click on the "Обновить" pill: same effect as Enter on the focused button —
+		// record intent + target version, then quit so the alt-screen tears down
+		// before main() relaunches the updated binary.
+		m.focus = rowUpdateButton
+		m.wantUpdate = true
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -1535,6 +1660,7 @@ const (
 	frDisclosure                     // "▸ Дополнительно" toggle revealing Port/User/Key
 	frCatalogLink                    // "Что настраивает программа ▸" label (P5 nav stub)
 	frVersion                        // version-frame line (titled top / tagline / bottom)
+	frUpdate                         // self-update strip line (under the version header)
 )
 
 // formRow is one rendered body line plus its kind (+ field index for inputs). The
@@ -1635,6 +1761,45 @@ func (m model) versionFrame(innerW int) []string {
 	return []string{top, mid, bottom}
 }
 
+// updateStripText returns the localized status text for the self-update strip,
+// keyed on m.updateState. The "available" state interpolates m.updateVer.
+func (m model) updateStripText() string {
+	switch m.updateState {
+	case updChecking:
+		return t(m.lang, kUpdateChecking)
+	case updCurrent:
+		return t(m.lang, kUpdateCurrent)
+	case updAvailable:
+		return fmt.Sprintf(t(m.lang, kUpdateAvailable), m.updateVer)
+	case updErr:
+		return t(m.lang, kUpdateError)
+	default:
+		return t(m.lang, kUpdateChecking)
+	}
+}
+
+// updateButtonLabel is the single source of the "Обновить ⬇" pill text, shared by
+// the render path and the click hit-test so their x-geometry can never drift.
+func (m model) updateButtonLabel() string { return t(m.lang, kUpdateButtonLabel) }
+
+// updateStripRow renders the self-update strip line shown directly under the
+// version header on the landing. It is the status text in an accent tint, plus —
+// ONLY when a newer release is available — the focusable/clickable "Обновить" pill
+// (pillOn when focused). The line content (sans frame) is indented to the value
+// column so it aligns with the rest of the form. Width math is lipgloss.Width-safe.
+func (m model) updateStripRow(indent string) string {
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render(m.updateStripText())
+	if m.updateState != updAvailable {
+		return indent + text
+	}
+	label := m.updateButtonLabel()
+	pill := pillStyle.Render(label)
+	if m.focus == rowUpdateButton {
+		pill = pillOnStyle.Render(label)
+	}
+	return indent + text + " " + pill
+}
+
 // formRows builds the ordered form body as a slice of row specs (INCLUDING blank
 // rows) in exact render order. formView renders by iterating this; the hit-test
 // iterates the same slice, so geometry can never drift.
@@ -1651,6 +1816,9 @@ func (m model) formRows() []formRow {
 	for _, ln := range m.versionFrame(innerWidth(m.boxWidth())) {
 		rows = append(rows, formRow{kind: frVersion, text: ln})
 	}
+	// Self-update strip directly under the version header: status text + (only when a
+	// newer release exists) the clickable "Обновить" pill.
+	rows = append(rows, formRow{kind: frUpdate, text: m.updateStripRow(indent)})
 	rows = append(rows, formRow{kind: frBlank})
 
 	labels := []stringKey{kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey}
@@ -4054,12 +4222,23 @@ func clip(s string, w int) string {
 	return lipgloss.NewStyle().MaxWidth(w).Render(s)
 }
 
-// Run launches the TUI program. In v2 alt-screen + mouse are per-View fields
-// (set in View()), not NewProgram options.
-func Run() error {
+// Result is the outcome of a TUI session, returned by Run() so the caller (main)
+// can act on a user-requested self-update after the alt-screen has torn down.
+type Result struct {
+	DoUpdate  bool   // operator clicked "Обновить" → caller should self-update
+	TargetVer string // the version to update to (set only when DoUpdate)
+}
+
+// Run launches the TUI program and returns the session Result. In v2 alt-screen +
+// mouse are per-View fields (set in View()), not NewProgram options.
+func Run() (Result, error) {
 	p := tea.NewProgram(newModel())
-	_, err := p.Run()
-	return err
+	out, err := p.Run()
+	if err != nil {
+		return Result{}, err
+	}
+	final, _ := out.(model)
+	return Result{DoUpdate: final.wantUpdate, TargetVer: final.updateVer}, nil
 }
 
 // stepFocus advances cur by dir (+1/-1) within the ordered rows slice, wrapping
