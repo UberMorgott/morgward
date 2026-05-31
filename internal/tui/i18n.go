@@ -193,6 +193,11 @@ const (
 	kTweakNotApplied
 	kTweakSummary
 	kMatrixHint
+
+	// --- landing redesign (P1) -------------------------------------------
+	// disclosure toggle revealing the advanced Port/User/SSH-key inputs
+	kDisclosureLabel // collapsible toggle label: "▸ Дополнительно (порт · пользователь · SSH-ключ)"
+	kDisclosureOpen  // open-state indicator glyph "▼" (RU/EN same)
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -323,6 +328,9 @@ var tr = map[Lang]map[stringKey]string{
 		kTweakNotApplied: "не применён",
 		kTweakSummary:    "%d применено / %d нет",
 		kMatrixHint:      "↑/↓ прокрутка · esc назад",
+
+		kDisclosureLabel: "▸ Дополнительно (порт · пользователь · SSH-ключ)",
+		kDisclosureOpen:  "▼",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -450,6 +458,9 @@ var tr = map[Lang]map[stringKey]string{
 		kTweakNotApplied: "not applied",
 		kTweakSummary:    "%d applied / %d missing",
 		kMatrixHint:      "↑/↓ scroll · esc back",
+
+		kDisclosureLabel: "▸ Advanced (port · user · SSH key)",
+		kDisclosureOpen:  "▼",
 	},
 }
 

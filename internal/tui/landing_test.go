@@ -30,6 +30,22 @@ func TestLandingFormPhaseExists(t *testing.T) {
 	}
 }
 
+// TestDisclosureKeysExist asserts the disclosure label/state keys translate
+// non-empty in both languages.
+func TestDisclosureKeysExist(t *testing.T) {
+	for _, lang := range []Lang{langRU, langEN} {
+		if s := t2(lang, kDisclosureLabel); s == "" {
+			t.Fatalf("lang %d kDisclosureLabel empty", lang)
+		}
+		if s := t2(lang, kDisclosureOpen); s == "" {
+			t.Fatalf("lang %d kDisclosureOpen empty", lang)
+		}
+	}
+}
+
+// t2 is a thin alias for t so tests read clearly (t shadows *testing.T name).
+func t2(lang Lang, k stringKey) string { return t(lang, k) }
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width
