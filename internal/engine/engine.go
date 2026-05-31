@@ -546,11 +546,10 @@ func applyResultMarkers(sum *Summary) {
 // markerInt scans detail for "<marker><int>" (whitespace-delimited) and returns
 // the parsed int. ok is false when the marker is absent or unparseable.
 func markerInt(detail, marker string) (int, bool) {
-	i := strings.Index(detail, marker)
-	if i < 0 {
+	_, rest, found := strings.Cut(detail, marker)
+	if !found {
 		return 0, false
 	}
-	rest := detail[i+len(marker):]
 	end := 0
 	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
 		end++

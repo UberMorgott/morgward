@@ -6,6 +6,7 @@ package monitor
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -190,14 +191,7 @@ func (s *Sampler) candidates() []string {
 		if c == "" {
 			continue
 		}
-		dup := false
-		for _, e := range u {
-			if e == c {
-				dup = true
-				break
-			}
-		}
-		if !dup {
+		if !slices.Contains(u, c) {
 			u = append(u, c)
 		}
 	}
@@ -223,7 +217,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // may be concatenated with /proc/meminfo and df output). idle_all = idle+iowait,
 // total = sum of every numeric field.
 func parseCPUStat(blob string) Stat {
-	for _, line := range strings.Split(blob, "\n") {
+	for line := range strings.SplitSeq(blob, "\n") {
 		if !strings.HasPrefix(line, "cpu ") {
 			continue
 		}
@@ -280,7 +274,7 @@ func parseMem(blob string) float64 {
 func parseMemKB(blob string) (usedKB, totalKB float64, ok bool) {
 	var total, avail float64
 	var haveTotal, haveAvail bool
-	for _, line := range strings.Split(blob, "\n") {
+	for line := range strings.SplitSeq(blob, "\n") {
 		switch {
 		case strings.HasPrefix(line, "MemTotal:"):
 			total, haveTotal = meminfoVal(line)
@@ -311,7 +305,7 @@ func meminfoVal(line string) (float64, bool) {
 // format: Filesystem 1024-blocks Used Available Capacity Mounted-on). Returns -1
 // if the row or column is absent.
 func parseDiskPct(blob string) float64 {
-	for _, line := range strings.Split(blob, "\n") {
+	for line := range strings.SplitSeq(blob, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 6 {
 			continue
@@ -333,7 +327,7 @@ func parseDiskPct(blob string) float64 {
 // `df -P /` output. POSIX column layout: Filesystem 1024-blocks Used Available
 // Capacity Mounted-on. ok is false when the `/` row is absent or unparseable.
 func parseDiskKB(blob string) (usedKB, totalKB float64, ok bool) {
-	for _, line := range strings.Split(blob, "\n") {
+	for line := range strings.SplitSeq(blob, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 6 {
 			continue
@@ -356,15 +350,15 @@ func parseDiskKB(blob string) (usedKB, totalKB float64, ok bool) {
 // parseCPUMHz reads the first "cpu MHz" line from /proc/cpuinfo, e.g.
 // "cpu MHz\t\t: 2400.000". Returns 0 when absent (ARM/virt may omit it).
 func parseCPUMHz(blob string) float64 {
-	for _, line := range strings.Split(blob, "\n") {
+	for line := range strings.SplitSeq(blob, "\n") {
 		if !strings.HasPrefix(line, "cpu MHz") {
 			continue
 		}
-		idx := strings.IndexByte(line, ':')
-		if idx < 0 {
+		_, after, found := strings.Cut(line, ":")
+		if !found {
 			continue
 		}
-		v, err := strconv.ParseFloat(strings.TrimSpace(line[idx+1:]), 64)
+		v, err := strconv.ParseFloat(strings.TrimSpace(after), 64)
 		if err != nil {
 			continue
 		}

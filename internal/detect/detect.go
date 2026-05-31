@@ -72,7 +72,7 @@ func Run(c *sshx.Client) *Facts {
 
 	// Listening sockets, excluding loopback binds and sshd itself.
 	ss := c.Sudo(`ss -tulpnH 2>/dev/null`).Stdout
-	for _, line := range strings.Split(ss, "\n") {
+	for line := range strings.SplitSeq(ss, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -102,7 +102,7 @@ iptables -S INPUT 2>/dev/null | grep -q -- '-P INPUT DROP' && echo m:input-drop
 systemctl is-active fail2ban >/dev/null 2>&1 && echo m:fail2ban
 [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo m:bbr
 [ -f /etc/sysctl.d/99-zz-kernel-harden.conf ] && echo m:kernel-harden`
-	for _, line := range strings.Split(c.Sudo(markerScript).Stdout, "\n") {
+	for line := range strings.SplitSeq(c.Sudo(markerScript).Stdout, "\n") {
 		if m, ok := strings.CutPrefix(strings.TrimSpace(line), "m:"); ok && m != "" {
 			f.HardenMarkers = append(f.HardenMarkers, m)
 		}

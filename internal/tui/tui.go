@@ -1707,7 +1707,7 @@ func (m model) framedInputWidth() int {
 // Every line's display width equals the frame outer width (inner + 2) so the
 // caller (formRows → contentLine) pads/truncates to innerW without breaking the
 // frame. All width math is via lipgloss.Width (Cyrillic-safe), never %-*s.
-func (m model) framedInputRow(idx int, lang Lang, label string, input textinput.Model, focused bool) []string {
+func (m model) framedInputRow(label string, input textinput.Model, focused bool) []string {
 	bd := lipgloss.RoundedBorder()
 	bs := inputBorderDim
 	if focused {
@@ -1742,10 +1742,7 @@ func (m model) versionFrame(innerW int) []string {
 	bd := lipgloss.RoundedBorder()
 	// Inner frame width: full content width, but bounded so titledTop/borderLine
 	// (which clamp to minBoxWidth) never draw wider than the content area.
-	fw := innerW
-	if fw < minBoxWidth {
-		fw = minBoxWidth
-	}
+	fw := max(innerW, minBoxWidth)
 	finner := fw - 2 // cells between the frame's border runes
 	title := " " + version.Name + " v" + version.Version + " "
 	top := titledTop(bd, title, fw)
@@ -1826,7 +1823,7 @@ func (m model) formRows() []formRow {
 	// same field index so a click on any of them focuses that input (the hit-test
 	// maps the whole 3-row block to one target).
 	appendFramedInput := func(i int) {
-		framed := m.framedInputRow(i, m.lang, t(m.lang, labels[i]), m.inputs[i], i == m.focus)
+		framed := m.framedInputRow(t(m.lang, labels[i]), m.inputs[i], i == m.focus)
 		for _, ln := range framed {
 			rows = append(rows, formRow{kind: frInput, field: i, text: ln})
 		}
@@ -2467,10 +2464,7 @@ func (m model) dashBodyLines(innerW int) []string {
 
 	// Live audit status line: "Анализ твиков ⠹  применено N из M · можно применить K".
 	applied, total := m.dashAuditApplied, m.dashAuditTotal
-	canApply := total - applied
-	if canApply < 0 {
-		canApply = 0
-	}
+	canApply := max(total-applied, 0)
 	label := t(m.lang, kDashAuditLabel)
 	if m.dashAuditRunning && !m.dashAuditDone {
 		label += " " + string(spinnerFrames[m.spin%len(spinnerFrames)])
@@ -2506,10 +2500,7 @@ func (m model) dashBodyLines(innerW int) []string {
 // lines fitted to innerW. Missing facts are omitted, never rendered as blanks.
 func (m model) dashServerCard(innerW int) []string {
 	bd := lipgloss.RoundedBorder()
-	fw := innerW
-	if fw < minBoxWidth {
-		fw = minBoxWidth
-	}
+	fw := max(innerW, minBoxWidth)
 	finner := fw - 2 // cells between the card's border runes
 
 	title := " " + t(m.lang, kDashTitle) + ": " + m.host + " "
@@ -2752,10 +2743,7 @@ func (m model) catalogBodyLines(innerW int) []string {
 // dashboard server card) as content lines fitted to innerW.
 func (m model) catalogTitleCard(innerW int) []string {
 	bd := lipgloss.RoundedBorder()
-	fw := innerW
-	if fw < minBoxWidth {
-		fw = minBoxWidth
-	}
+	fw := max(innerW, minBoxWidth)
 	title := " " + t(m.lang, kCatalogTitle) + " "
 	top := titledTop(bd, title, fw)
 	bottom := borderLine(bd.BottomLeft, bd.Bottom, bd.BottomRight, fw)
@@ -3124,10 +3112,7 @@ func secButtonsLine(names []string) string {
 // content lines fitted to innerW. Mirrors dashServerCard's framing.
 func (m model) securityAccessCard(innerW int) []string {
 	bd := lipgloss.RoundedBorder()
-	fw := innerW
-	if fw < minBoxWidth {
-		fw = minBoxWidth
-	}
+	fw := max(innerW, minBoxWidth)
 	finner := fw - 2 // cells between the card's border runes
 
 	top := titledTop(bd, t(m.lang, kSecMenuTitle), fw)
@@ -3330,10 +3315,7 @@ func (m model) matrixBodyLines(innerW int) []string {
 		}
 		// "  name <spaces> status" padded to innerW display cells.
 		left := "  " + name
-		gap := innerW - lipgloss.Width(left) - lipgloss.Width(statusTxt)
-		if gap < 1 {
-			gap = 1
-		}
+		gap := max(innerW-lipgloss.Width(left)-lipgloss.Width(statusTxt), 1)
 		lines = append(lines, left+strings.Repeat(" ", gap)+style.Render(statusTxt))
 	}
 	return lines
@@ -3422,7 +3404,7 @@ func wrap(s string, w int) []string {
 		return []string{s}
 	}
 	var lines []string
-	for _, para := range strings.Split(s, "\n") {
+	for para := range strings.SplitSeq(s, "\n") {
 		words := strings.Fields(para)
 		if len(words) == 0 {
 			lines = append(lines, "")
@@ -3661,7 +3643,7 @@ func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
 		lines = append(lines, wrap(labelStyle.Render(t(m.lang, kKeyWarnSoft)), innerW)...)
 	}
 	lines = append(lines, "")
-	for _, ln := range strings.Split(strings.TrimRight(m.keyPEM, "\n"), "\n") {
+	for ln := range strings.SplitSeq(strings.TrimRight(m.keyPEM, "\n"), "\n") {
 		lines = append(lines, truncDisplay(ln, innerW))
 	}
 	lines = append(lines, "")
@@ -3855,13 +3837,7 @@ func (m model) barLine(innerW int) string {
 	nameW := max(avail-barW, minNameSlot)
 	name := truncDisplay(title, nameW)
 
-	filled := pct * barW / 100
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > barW {
-		filled = barW
-	}
+	filled := min(max(pct*barW/100, 0), barW)
 	bar := monGreenStyle.Render(strings.Repeat("█", filled)) +
 		monDimStyle.Render(strings.Repeat("░", barW-filled))
 	out := left + bar + " " + pctStr
@@ -3899,10 +3875,7 @@ func titledTop(b lipgloss.Border, title string, w int) string {
 		// Title too wide for the border — clip it and use no dashes.
 		title = truncDisplay(title, w-2)
 		tw = lipgloss.Width(title)
-		dashTotal = w - 2 - tw
-		if dashTotal < 0 {
-			dashTotal = 0
-		}
+		dashTotal = max(w-2-tw, 0)
 	}
 	leftN := dashTotal / 2
 	rightN := dashTotal - leftN
@@ -3915,13 +3888,8 @@ func titledTop(b lipgloss.Border, title string, w int) string {
 
 // borderLine draws a plain horizontal border edge: left + dashes + right, width w.
 func borderLine(left, mid, right string, w int) string {
-	if w < minBoxWidth {
-		w = minBoxWidth
-	}
-	n := w - 2
-	if n < 0 {
-		n = 0
-	}
+	w = max(w, minBoxWidth)
+	n := max(w-2, 0)
 	return borderStyle.Render(left + strings.Repeat(mid, n) + right)
 }
 
@@ -3961,10 +3929,7 @@ func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-1, 1) }
 // scroll past the end (or before the start). Recomputed on every use, so a resize
 // that grows the window (raising viewH) automatically pulls the offset back.
 func clampScroll(off, total, viewH int) int {
-	maxOff := total - viewH
-	if maxOff < 0 {
-		maxOff = 0
-	}
+	maxOff := max(total-viewH, 0)
 	if off < 0 {
 		return 0
 	}
@@ -4183,13 +4148,7 @@ func renderBar(pct float64, barW int) string {
 	if pct < 0 {
 		return monDimStyle.Render(strings.Repeat("░", barW))
 	}
-	filled := int(math.Round(pct / 100 * float64(barW)))
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > barW {
-		filled = barW
-	}
+	filled := min(max(int(math.Round(pct/100*float64(barW))), 0), barW)
 	return pctStyle(pct).Render(strings.Repeat("█", filled)) +
 		monDimStyle.Render(strings.Repeat("░", barW-filled))
 }
@@ -4267,7 +4226,7 @@ func validHost(h string) bool {
 	if net.ParseIP(h) != nil {
 		return true
 	}
-	for _, label := range strings.Split(h, ".") {
+	for label := range strings.SplitSeq(h, ".") {
 		if label == "" || len(label) > 63 {
 			return false
 		}

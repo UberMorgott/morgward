@@ -54,7 +54,7 @@ func t2(lang Lang, k stringKey) string { return t(lang, k) }
 // box inner width.
 func TestFramedInputRender3Rows(t *testing.T) {
 	m := formModel(80, 24)
-	lines := m.framedInputRow(fHost, m.lang, "Хост", m.inputs[fHost], true)
+	lines := m.framedInputRow("Хост", m.inputs[fHost], true)
 	if len(lines) != 3 {
 		t.Fatalf("framedInputRow returned %d lines, want 3", len(lines))
 	}
@@ -270,8 +270,8 @@ func TestFormHitTestAccuracy(t *testing.T) {
 // focus to the input matching m.focus.
 func TestFocusRenderingFramed(t *testing.T) {
 	m := formModel(80, 24)
-	focused := m.framedInputRow(fHost, m.lang, "Хост", m.inputs[fHost], true)
-	dim := m.framedInputRow(fHost, m.lang, "Хост", m.inputs[fHost], false)
+	focused := m.framedInputRow("Хост", m.inputs[fHost], true)
+	dim := m.framedInputRow("Хост", m.inputs[fHost], false)
 	if strings.Join(focused, "\n") == strings.Join(dim, "\n") {
 		t.Fatalf("focused and unfocused framed inputs render identically")
 	}

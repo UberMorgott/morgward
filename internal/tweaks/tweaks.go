@@ -248,12 +248,12 @@ func Run(cli *sshx.Client, log *ui.Logger, facts *detect.Facts, cfg *config.Conf
 	res := cli.Sudo(b.String())
 
 	vals := make(map[string]string, len(probes))
-	for _, line := range strings.Split(res.Stdout, "\n") {
-		i := strings.IndexByte(line, '\t')
-		if i < 0 {
+	for line := range strings.SplitSeq(res.Stdout, "\n") {
+		id, val, found := strings.Cut(line, "\t")
+		if !found {
 			continue
 		}
-		vals[line[:i]] = strings.TrimSpace(line[i+1:])
+		vals[id] = strings.TrimSpace(val)
 	}
 
 	out := make([]Result, 0, len(probes))
