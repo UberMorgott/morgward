@@ -61,6 +61,7 @@ const (
 	phaseSummary // post-finish stats summary + clickable fix list
 	phaseWiki    // a single fix's what/why/risk description
 	phaseKey     // shows the generated SSH private key + a clipboard "Copy key" button
+	phaseMatrix  // per-tweak audit table (the "анализ" action result)
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -248,6 +249,7 @@ type model struct {
 	// window auto-reduces the offset and the monitor footer stays pinned.
 	sumScroll  int
 	wikiScroll int
+	matScroll  int // анализ matrix scroll offset, clamped like sumScroll
 
 	finalErr error
 	finished bool
@@ -419,6 +421,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				d = wheelStep
 			}
 			m.wikiScroll = clampScroll(m.wikiScroll+d, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+		case phaseMatrix:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.matScroll = clampScroll(m.matScroll+d, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 		}
 		return m, nil
 
@@ -462,6 +472,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sumScroll = clampScroll(m.sumScroll-1, len(m.summaryBodyLines()), m.bodyViewH())
 			case "down", "j":
 				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.bodyViewH())
+			}
+			return m, nil
+		case phaseMatrix:
+			// анализ audit table: "back" returns to the form/menu (stops the sampler);
+			// ↑↓/k/j scroll the table when it overflows the middle region.
+			switch msg.String() {
+			case "enter", "esc", "b":
+				return m.goBack()
+			case "up", "k":
+				m.matScroll = clampScroll(m.matScroll-1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			case "down", "j":
+				m.matScroll = clampScroll(m.matScroll+1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			}
 			return m, nil
 		case phaseKey:
@@ -528,7 +550,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// an early connect/auth abort (no summary) stays on the run log for the
 		// operator to read, and on phaseRun so a generated-key view isn't yanked away.
 		if m.haveSummary && m.phase == phaseRun {
-			m.phase = phaseSummary
+			if len(m.summary.Tweaks) > 0 {
+				m.phase = phaseMatrix
+				m.matScroll = 0
+			} else {
+				m.phase = phaseSummary
+			}
 		}
 		return m, nil
 
@@ -577,7 +604,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// (see doneMsg). Guard on finished so a summary that somehow precedes
 			// doneMsg waits, and on phaseRun so the key view isn't yanked away.
 			if m.finished && m.phase == phaseRun {
-				m.phase = phaseSummary
+				if len(m.summary.Tweaks) > 0 {
+					m.phase = phaseMatrix
+					m.matScroll = 0
+				} else {
+					m.phase = phaseSummary
+				}
 			}
 		} else {
 			m.index = p.Index
@@ -1028,6 +1060,8 @@ func (m model) viewString() string {
 		return m.runView()
 	case phaseSummary:
 		return m.summaryView()
+	case phaseMatrix:
+		return m.matrixView()
 	case phaseWiki:
 		return m.wikiView()
 	case phaseKey:
@@ -1780,6 +1814,80 @@ func (m model) summaryView() string {
 	// Monitor box (kept alive — sampler still running on the summary screen).
 	sb.WriteString(m.monitorBox(innerW))
 	return sb.String()
+}
+
+// matrixView renders phaseMatrix: the scrollable анализ table with the monitor
+// footer, mirroring summaryView's chrome exactly (same outer titled box, switcher
+// line, scroll region, hint line, bottom border, and monitor footer).
+func (m model) matrixView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.matrixBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	viewH := m.bodyViewH()
+	off := clampScroll(m.matScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
+
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kMatrixHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// matrixBodyLines renders the анализ audit: results grouped by step, each row
+// "  <name> <leaders> <status>" right-aligned to innerW. Mirrors summaryBodyLines.
+func (m model) matrixBodyLines(innerW int) []string {
+	res := m.summary.Tweaks
+	if len(res) == 0 {
+		return []string{t(m.lang, kMatrixHint)}
+	}
+
+	applied := 0
+	for _, r := range res {
+		if r.Applied {
+			applied++
+		}
+	}
+
+	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	noStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf(t(m.lang, kTweakSummary), applied, len(res)-applied), "")
+
+	var curStep string
+	for _, r := range res {
+		if r.Probe.Step != curStep {
+			curStep = r.Probe.Step
+			lines = append(lines, localStepTitle(m.lang, curStep, curStep))
+		}
+		name := localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
+		statusTxt := t(m.lang, kTweakNotApplied)
+		style := noStyle
+		if r.Applied {
+			statusTxt = t(m.lang, kTweakApplied)
+			style = okStyle
+		}
+		// "  name <spaces> status" padded to innerW display cells.
+		left := "  " + name
+		gap := innerW - lipgloss.Width(left) - lipgloss.Width(statusTxt)
+		if gap < 1 {
+			gap = 1
+		}
+		lines = append(lines, left+strings.Repeat(" ", gap)+style.Render(statusTxt))
+	}
+	return lines
 }
 
 // summaryBodyLines builds the ordered body line slice (the single source of truth
