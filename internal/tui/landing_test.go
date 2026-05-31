@@ -209,6 +209,64 @@ func TestCatalogLinkRendered(t *testing.T) {
 	}
 }
 
+// TestFormHitTestAccuracy verifies a click at (x, formBodyTopRow+rowIdx) resolves
+// to the correct row kind for every row, with 3-row framed inputs.
+func TestFormHitTestAccuracy(t *testing.T) {
+	m := formModel(80, 24)
+	m.advancedOpen = true // exercise all five framed inputs
+	rows := m.formRows()
+	pillX := m.pillColStart() + 1 // inside the first pill of any toggle row
+
+	for i, r := range rows {
+		y := formBodyTopRow + i
+		switch r.kind {
+		case frInput:
+			hit := m.formHitAtClick(0, y)
+			if !hit.ok || hit.kind != frInput || hit.field != r.field {
+				t.Fatalf("row %d (frInput field %d): hit=%+v", i, r.field, hit)
+			}
+		case frDisclosure:
+			hit := m.formHitAtClick(0, y)
+			if !hit.ok || hit.kind != frDisclosure {
+				t.Fatalf("row %d (frDisclosure): hit=%+v", i, hit)
+			}
+		case frMode:
+			hit := m.formHitAtClick(pillX, y)
+			if !hit.ok || hit.kind != frMode {
+				t.Fatalf("row %d (frMode): hit=%+v", i, hit)
+			}
+		case frLog:
+			hit := m.formHitAtClick(pillX, y)
+			if !hit.ok || hit.kind != frLog {
+				t.Fatalf("row %d (frLog): hit=%+v", i, hit)
+			}
+		case frStart:
+			hit := m.formHitAtClick(pillX, y)
+			if !hit.ok || hit.kind != frStart {
+				t.Fatalf("row %d (frStart): hit=%+v", i, hit)
+			}
+		}
+	}
+
+	// All three Y rows of the Host input map to the same field.
+	hostFirst := -1
+	for i, r := range rows {
+		if r.kind == frInput && r.field == fHost {
+			hostFirst = i
+			break
+		}
+	}
+	if hostFirst < 0 {
+		t.Fatalf("no host input row")
+	}
+	for d := 0; d < 3; d++ {
+		hit := m.formHitAtClick(5, formBodyTopRow+hostFirst+d)
+		if !hit.ok || hit.field != fHost {
+			t.Fatalf("host row offset %d did not map to fHost: %+v", d, hit)
+		}
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width

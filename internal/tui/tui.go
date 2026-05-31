@@ -1144,10 +1144,13 @@ func (m model) langAtClick(x, y int) (Lang, bool) {
 //
 // All form click targets are resolved against the SAME ordered slice the renderer
 // iterates (m.formRows): a row at slice index i renders at screen Y = formBodyTopRow
-// + i, so the hit-test reproduces the exact geometry View drew. For per-pill targets
-// (Mode/Action/Start/Cancel) pillRanges computes the x-ranges with the same offsets
-// the render path uses. The value/pill column begins at absolute X = 2 (frame: left
-// border + space) + colW + 1 (label column + one space).
+// + i, so the hit-test reproduces the exact geometry View drew. Framed inputs now
+// occupy THREE consecutive slice entries (border-top / label+value / border-bottom),
+// each tagged frInput with the same field — so a click on any of those three Y rows
+// resolves to that input with no extra math. For per-pill targets (Mode/Start/Cancel)
+// pillRanges computes the x-ranges with the same offsets the render path uses. The
+// value/pill column begins at absolute X = 2 (frame: left border + space) + colW + 1
+// (label column + one space).
 
 // formHit is the resolved click target inside the form body.
 type formHit struct {
