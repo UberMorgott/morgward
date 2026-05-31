@@ -71,6 +71,7 @@ const (
 	phaseMatrix    // per-tweak audit table (the "анализ" action result)
 	phaseDashboard // post-connect server card + live tweak audit + apply/security/catalog buttons
 	phaseSecurity  // security + access menu: access-state card + SAFE actions + DANGER key-only lock
+	phaseCatalog   // tweak catalog: domain-grouped step list, works pre- and post-connect
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -263,6 +264,14 @@ type model struct {
 	wikiTweak  string
 	wikiReturn phase
 
+	// Catalog screen (phaseCatalog). catalogScroll is the scroll offset (clamped
+	// like the other directly-rendered screens); catalogReturn is the phase to go
+	// back to on esc/back (phaseForm pre-connect, phaseDashboard post-connect). Both
+	// plain value-copyable types — status is read from the existing dashAudit slices,
+	// no map is added (the model is copied by value every Update).
+	catalogScroll int
+	catalogReturn phase
+
 	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
 	// memory; never logged), the copy-to-clipboard status, where esc returns to,
 	// and whether the auto-route to this screen has already fired once. All plain
@@ -420,6 +429,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.dashboardClick(mc.X, mc.Y)
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
+		case phaseCatalog:
+			return m.catalogClick(mc.X, mc.Y)
 		case phaseWiki:
 			// The clickable "← Назад" pill returns to wherever the wiki was opened from.
 			if m.wikiBackAtClick(mc.X, mc.Y) {
@@ -502,6 +513,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				d = wheelStep
 			}
 			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+		case phaseCatalog:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.catalogScroll = clampScroll(m.catalogScroll+d, len(m.catalogBodyLines(innerWidth(m.boxWidth()))), m.catalogBodyViewH())
 		}
 		return m, nil
 
@@ -613,6 +632,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dashScroll = clampScroll(m.dashScroll-1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			case "down", "j":
 				m.dashScroll = clampScroll(m.dashScroll+1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			}
+			return m, nil
+		case phaseCatalog:
+			// Catalog: "back" returns to wherever it was opened from (catalogReturn);
+			// ↑↓/k/j scroll the domain list when it overflows the middle region. The
+			// catalog does NOT stop the sampler — it can be opened pre- or post-connect
+			// and the Dashboard/footer stay alive behind it.
+			switch msg.String() {
+			case "enter", "esc", "b":
+				m.phase = m.catalogReturn
+			case "up", "k":
+				m.catalogScroll = clampScroll(m.catalogScroll-1, len(m.catalogBodyLines(innerWidth(m.boxWidth()))), m.catalogBodyViewH())
+			case "down", "j":
+				m.catalogScroll = clampScroll(m.catalogScroll+1, len(m.catalogBodyLines(innerWidth(m.boxWidth()))), m.catalogBodyViewH())
 			}
 			return m, nil
 		case phaseKey:
@@ -1264,6 +1297,8 @@ func (m model) viewString() string {
 		return m.dashboardView()
 	case phaseSecurity:
 		return m.securityView()
+	case phaseCatalog:
+		return m.catalogView()
 	case phaseWiki:
 		return m.wikiView()
 	case phaseKey:
@@ -1380,6 +1415,9 @@ func (m model) formHitAtClick(x, y int) formHit {
 	case frDisclosure:
 		// The whole disclosure line is one click target (toggles advancedOpen).
 		return formHit{kind: frDisclosure, ok: true}
+	case frCatalogLink:
+		// The whole catalog-link line is one click target (opens the catalog).
+		return formHit{kind: frCatalogLink, ok: true}
 	case frLog:
 		names := []string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)}
 		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
@@ -1457,6 +1495,13 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 	case frDisclosure:
 		m.advancedOpen = !m.advancedOpen
 		m.focus = rowDisclosure
+		return m, nil
+	case frCatalogLink:
+		// "Что настраивает программа ▸" → the tweak catalog (pre-connect: docs only).
+		// Returning from it lands back on the landing form.
+		m.catalogReturn = phaseForm
+		m.catalogScroll = 0
+		m.phase = phaseCatalog
 		return m, nil
 	case frLog:
 		m.saveLog = hit.log
@@ -1662,9 +1707,9 @@ func (m model) formRows() []formRow {
 	// x-geometry is recovered by pillRanges over the same names in the zone mapper.
 	rows = append(rows, formRow{kind: frStart, text: indent + m.startCancelPills()})
 
-	// "Что настраивает программа ▸" — a static catalog-link label (P5 will wire it to
-	// phaseCatalog navigation). Rendered as a label, NOT a clickable pill, so the
-	// hit-test has no case for it and a click is a no-op until P5.
+	// "Что настраивает программа ▸" — the catalog-link line. The WHOLE row is a click
+	// target (frCatalogLink in formHitAtClick) that opens phaseCatalog pre-connect
+	// (docs only). Styled as a tip label, not a pill, but clickable.
 	rows = append(rows, formRow{kind: frCatalogLink, text: indent + tipStyle.Render(t(m.lang, kCatalogLink))})
 
 	if m.errMsg != "" {
@@ -2461,6 +2506,231 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 	return dashBtnNone
 }
 
+// --- Catalog screen (phaseCatalog) --------------------------------------------
+//
+// The catalog lists every NON-security tweak step grouped by domain. It works
+// pre-connect (docs only — no status column, no monitor footer) and post-connect
+// (+ a live "[✓ применено]/[• можно]/[⊘ недоступно]" status column, derived from the
+// audit results, and the monitor footer). Security (A2/PRE) is deliberately NOT
+// listed — a one-line note points to the Security screen instead. Rows are clickable
+// (and ↑↓-scrollable) and open the step's wiki detail. Chrome mirrors dashboardView/
+// wikiView so the layout and the footer never drift.
+
+// catalogDomain groups a domain header key with its ordered step IDs.
+type catalogDomain struct {
+	headKey stringKey
+	steps   []string
+}
+
+// catalogDomains is the hardcoded domain → step grouping (see the P5 plan). A2/PRE
+// are intentionally absent (Security screen); A2.5 (cloud-init neutralization) is
+// likewise excluded as part of the SSH/access story surfaced on the Security screen,
+// so its absence here is deliberate, not an oversight. If a step ID is added/
+// recategorized in the engine, update this map (single source of truth for the
+// catalog layout).
+func catalogDomains() []catalogDomain {
+	return []catalogDomain{
+		{kCatalogNetwork, []string{"A4"}},
+		{kCatalogMemory, []string{"A6.7"}},
+		{kCatalogKernelMaint, []string{"A5", "A6", "A6.5"}},
+		{kCatalogFwUpdates, []string{"A1", "A3", "A8"}},
+		{kCatalogOther, []string{"A7", "A9", "A10"}},
+	}
+}
+
+// catalogStepLabel is the rendered text of one catalog step row (without the status
+// column): "  › <localized name>  <ID>". The single source shared by the render path
+// and the row hit-test so their geometry cannot drift.
+func (m model) catalogStepLabel(stepID string) string {
+	name := localStepTitle(m.lang, stepID, stepID)
+	return "  › " + name + "  " + stepID
+}
+
+// catalogBodyLines builds the ordered catalog body slice — the single source of
+// truth for BOTH catalogView's render and the row hit-test (catalogRowAtClick).
+// Order: title card (framed), blank, [docs-only header pre-connect | blank], then
+// for each domain: a header line + its indented step rows, blank between domains,
+// finally a blank + the security note. Status column only post-connect.
+func (m model) catalogBodyLines(innerW int) []string {
+	var body []string
+	body = append(body, m.catalogTitleCard(innerW)...)
+	body = append(body, "")
+
+	if !m.catalogConnected() {
+		body = append(body, helpStyle.Render(t(m.lang, kCatalogDocsOnly)))
+		body = append(body, "")
+	}
+
+	for i, d := range catalogDomains() {
+		if i > 0 {
+			body = append(body, "")
+		}
+		body = append(body, sumHeadStyle.Render(t(m.lang, d.headKey)))
+		for _, id := range d.steps {
+			row := m.catalogStepLabel(id)
+			if word, ok := m.stepStatusWord(id); ok {
+				row += "  [" + word + "]"
+			}
+			body = append(body, truncDisplay(row, innerW))
+		}
+	}
+
+	body = append(body, "")
+	body = append(body, tipStyle.Render(t(m.lang, kCatalogSecurityNote)))
+	return body
+}
+
+// catalogTitleCard renders the framed catalog title card (rounded frame like the
+// dashboard server card) as content lines fitted to innerW.
+func (m model) catalogTitleCard(innerW int) []string {
+	bd := lipgloss.RoundedBorder()
+	fw := innerW
+	if fw < minBoxWidth {
+		fw = minBoxWidth
+	}
+	title := " " + t(m.lang, kCatalogTitle) + " "
+	top := titledTop(bd, title, fw)
+	bottom := borderLine(bd.BottomLeft, bd.Bottom, bd.BottomRight, fw)
+	return []string{top, bottom}
+}
+
+// catalogDataTopIndex is the body-slice index of the FIRST domain/row line — the
+// prefix is the title card (N lines) + blank, plus the docs-only header + blank when
+// pre-connect. Used by catalogRowAtClick to walk rows against the same layout.
+func (m model) catalogDataTopIndex(innerW int) int {
+	idx := len(m.catalogTitleCard(innerW)) + 1
+	if !m.catalogConnected() {
+		idx += 2 // docs-only header line + blank
+	}
+	return idx
+}
+
+// catalogRowAtClick maps a click at (x,y) to the step ID whose row was hit, or
+// ok=false on a miss. It walks the SAME domain/row sequence catalogBodyLines emits,
+// honoring the scroll offset, so a click resolves to exactly the rendered row.
+func (m model) catalogRowAtClick(x, y int) (string, bool) {
+	if m.phase != phaseCatalog {
+		return "", false
+	}
+	innerW := innerWidth(m.boxWidth())
+	body := m.catalogBodyLines(innerW)
+	viewH := m.catalogBodyViewH()
+	off := clampScroll(m.catalogScroll, len(body), viewH)
+	rowInRegion := y - summaryBodyTopRow
+	if rowInRegion < 0 || rowInRegion >= viewH {
+		return "", false
+	}
+	bodyIdx := off + rowInRegion
+	if bodyIdx < 0 || bodyIdx >= len(body) {
+		return "", false
+	}
+	// Reconstruct which body indices are step rows by replaying the layout, mapping
+	// each step-row body index to its step ID.
+	dataTop := m.catalogDataTopIndex(innerW)
+	cur := dataTop
+	for i, d := range catalogDomains() {
+		if i > 0 {
+			cur++ // blank between domains
+		}
+		cur++ // domain header line
+		for _, id := range d.steps {
+			if cur == bodyIdx {
+				// X must fall within the rendered row width (content starts at column 2).
+				// Rebuild the row IDENTICALLY to catalogBodyLines (label + status bracket
+				// post-connect) so the status portion is hittable, not just the label.
+				const contentX0 = 2
+				row := m.catalogStepLabel(id)
+				if word, ok := m.stepStatusWord(id); ok {
+					row += "  [" + word + "]"
+				}
+				w := lipgloss.Width(truncDisplay(row, innerW))
+				if x >= contentX0 && x < contentX0+w {
+					return id, true
+				}
+				return "", false
+			}
+			cur++
+		}
+	}
+	return "", false
+}
+
+// catalogBodyViewH is bodyViewH minus one row (the catalog carries an extra
+// fixed-chrome row: the "← Назад" pill above the hint, like the wiki screen). Used
+// for BOTH the render and every catalog scroll clamp so geometry never drifts.
+func (m model) catalogBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+
+// catalogBackRow is the screen Y of the catalog back-button row: right after the
+// scrollable middle region. Mirrors wikiBackRow.
+func (m model) catalogBackRow() int {
+	return summaryBodyTopRow + m.catalogBodyViewH()
+}
+
+// catalogBackAtClick reports whether (x,y) hit the catalog "← Назад" pill, mirroring
+// wikiBackAtClick's single-pill geometry.
+func (m model) catalogBackAtClick(x, y int) bool {
+	if m.phase != phaseCatalog || y != m.catalogBackRow() {
+		return false
+	}
+	return pillIndexAt([]string{t(m.lang, kWikiBack)}, wikiBackStartCol, x) == 0
+}
+
+// catalogView renders the tweak-catalog screen. Chrome mirrors wikiView (title box,
+// switcher, scroll region, pinned back pill, hint, bottom border) so the monitor
+// footer stays pinned. The footer is appended ONLY post-connect.
+func (m model) catalogView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.catalogBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	viewH := m.catalogBodyViewH()
+	off := clampScroll(m.catalogScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
+
+	// Clickable "← Назад" pill pinned just above the hint, hit-tested by
+	// catalogBackAtClick (same chrome row as the wiki back pill).
+	sb.WriteString(contentLine(b, pillOnStyle.Render(t(m.lang, kWikiBack)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kCatalogHint)), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+
+	// Monitor footer ONLY post-connect (pre-connect the sampler isn't running and the
+	// catalog is docs-only). renderScrollRegion already kept the body pinned, so we
+	// only append the footer block here.
+	if m.catalogConnected() {
+		sb.WriteByte('\n')
+		sb.WriteString(m.monitorBox(innerW))
+	}
+	return sb.String()
+}
+
+// catalogClick applies a catalog-phase click: the back pill returns to catalogReturn;
+// a step row opens that step's wiki detail (step-level doc — wikiTweak cleared) with
+// wikiReturn=phaseCatalog so esc/back returns here.
+func (m model) catalogClick(x, y int) (tea.Model, tea.Cmd) {
+	if m.catalogBackAtClick(x, y) {
+		m.phase = m.catalogReturn
+		return m, nil
+	}
+	if id, ok := m.catalogRowAtClick(x, y); ok {
+		m.wikiStep = id
+		m.wikiTweak = "" // step-level doc, plain step header
+		m.wikiReturn = phaseCatalog
+		m.wikiScroll = 0
+		m.phase = phaseWiki
+	}
+	return m, nil
+}
+
 // wikiBackStartCol is the absolute X where the wiki "← Назад" pill begins: 2
 // (left border + the leading content space added by contentLine).
 const wikiBackStartCol = 2
@@ -2590,7 +2860,11 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.phase = phaseSecurity
 		return m, nil
 	case dashBtnCatalog:
-		// P5 stub: phaseCatalog is not built yet — harmless no-op nav.
+		// Open the tweak catalog (post-connect: status column + footer). Returning
+		// from it lands back on the Dashboard.
+		m.catalogReturn = phaseDashboard
+		m.catalogScroll = 0
+		m.phase = phaseCatalog
 		return m, nil
 	}
 	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's
@@ -3082,7 +3356,54 @@ func (m model) wikiBodyLines(innerW int) []string {
 	block(kWikiWhat, doc.What)
 	block(kWikiWhy, doc.Why)
 	block(kWikiRisk, doc.RiskWithout)
+	block(kWikiOnBox, doc.OnBox)
+	block(kWikiRevert, doc.Revert)
+	// Live status line — ONLY post-connect, and only when the audit yielded a result
+	// for this step. Pre-connect (or no result) shows no status line at all.
+	if word, ok := m.stepStatusWord(m.wikiStep); ok {
+		body = append(body, "")
+		body = append(body, monLabelStyle.Render(t(m.lang, kWikiStatus))+" "+word)
+	}
 	return body
+}
+
+// catalogConnected reports whether we are post-connect: an audit has completed and
+// carried results. Used to gate the wiki/catalog live-status column and the catalog
+// monitor footer. Mirrors how the Dashboard treats dashAuditDone as "connected".
+func (m model) catalogConnected() bool {
+	return m.dashAuditDone && len(m.dashAuditRaw) > 0
+}
+
+// stepStatusWord returns the localized live-status word for a step ID, derived from
+// the audit results (m.dashAuditRaw, the unfiltered set). A step is "applied" only
+// when EVERY non-informational probe for it is applied; if any is not yet applied it
+// is "can apply"; if the step has no probe at all it is "unavailable". ok=false
+// pre-connect (no status line should be shown then).
+func (m model) stepStatusWord(stepID string) (string, bool) {
+	if !m.catalogConnected() || stepID == "" {
+		return "", false
+	}
+	total, applied := 0, 0
+	for _, r := range m.dashAuditRaw {
+		if r.Informational {
+			continue
+		}
+		if r.Probe.Step != stepID {
+			continue
+		}
+		total++
+		if r.Applied {
+			applied++
+		}
+	}
+	switch {
+	case total == 0:
+		return t(m.lang, kStatusUnavailable), true
+	case applied == total:
+		return t(m.lang, kStatusApplied), true
+	default:
+		return t(m.lang, kStatusCanApply), true
+	}
 }
 
 // finishedTail returns the localized completion banner shown below the viewport

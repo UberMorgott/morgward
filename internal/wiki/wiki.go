@@ -15,6 +15,8 @@ type FixDoc struct {
 	What        string
 	Why         string
 	RiskWithout string
+	OnBox       string // ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ — files/dirs/packages/services changed.
+	Revert      string // КАК ОТКАТИТЬ — manual undo steps (no auto-rollback).
 }
 
 // Doc returns the localized doc for a step ID; ok=false if unknown.

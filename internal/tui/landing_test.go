@@ -193,8 +193,8 @@ func TestCatalogLinkKeyExists(t *testing.T) {
 	}
 }
 
-// TestCatalogLinkRendered asserts the catalog-link label appears as a form row
-// (a P5 stub: a static label, not yet a clickable navigation target).
+// TestCatalogLinkRendered asserts the catalog-link label appears as a form row and
+// (P5) is a clickable navigation target that opens the catalog (catalogReturn=form).
 func TestCatalogLinkRendered(t *testing.T) {
 	m := formModel(80, 24)
 	rows := m.formRows()
@@ -205,10 +205,10 @@ func TestCatalogLinkRendered(t *testing.T) {
 	if !strings.Contains(rows[idx].text, t2(m.lang, kCatalogLink)) {
 		t.Fatalf("frCatalogLink row missing label: %q", rows[idx].text)
 	}
-	// Stub: clicking it must NOT be a registered hit target (no navigation yet).
+	// P5: clicking it is a registered hit target that navigates to phaseCatalog.
 	hit := m.formHitAtClick(0, formBodyTopRow+idx)
-	if hit.ok {
-		t.Fatalf("catalog link should be a non-clickable stub, got hit kind=%v", hit.kind)
+	if !hit.ok || hit.kind != frCatalogLink {
+		t.Fatalf("catalog link should be clickable, got ok=%v kind=%v", hit.ok, hit.kind)
 	}
 }
 

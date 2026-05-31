@@ -12,7 +12,7 @@ func TestEveryStepHasDoc(t *testing.T) {
 			if !ok {
 				t.Fatalf("lang=%d id=%s: no doc", lang, id)
 			}
-			if d.Title == "" || d.What == "" || d.Why == "" || d.RiskWithout == "" {
+			if d.Title == "" || d.What == "" || d.Why == "" || d.RiskWithout == "" || d.OnBox == "" || d.Revert == "" {
 				t.Errorf("lang=%d id=%s: empty field in %+v", lang, id, d)
 			}
 		}

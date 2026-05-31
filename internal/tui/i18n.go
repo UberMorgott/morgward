@@ -144,11 +144,28 @@ const (
 	kWikiHint    // esc — назад · ↑↓ — прокрутка · l — язык
 
 	// --- wiki page (phaseWiki) -------------------------------------------
-	kWikiWhat  // ЧТО ДЕЛАЕТ
-	kWikiWhy   // ЗАЧЕМ
-	kWikiRisk  // БЕЗ ЭТОГО
-	kWikiNoDoc // "нет описания" / "no description"
-	kWikiBack  // clickable back button: "← Назад" / "← Back"
+	kWikiWhat   // ЧТО ДЕЛАЕТ
+	kWikiWhy    // ЗАЧЕМ
+	kWikiRisk   // БЕЗ ЭТОГО
+	kWikiOnBox  // ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ
+	kWikiRevert // КАК ОТКАТИТЬ
+	kWikiStatus // "Статус:" label prefixed to the post-connect status word
+	kWikiNoDoc  // "нет описания" / "no description"
+	kWikiBack   // clickable back button: "← Назад" / "← Back"
+
+	// --- catalog screen (phaseCatalog, P5) -------------------------------
+	kCatalogTitle        // box title: "Каталог твиков — что настраивает Morgward"
+	kCatalogNetwork      // domain header: "Сеть и пропускная способность" / "Network & throughput"
+	kCatalogMemory       // domain header: "Память" / "Memory"
+	kCatalogKernelMaint  // domain header: "Ядро и обслуживание" / "Kernel & maintenance"
+	kCatalogFwUpdates    // domain header: "Файрвол и обновления" / "Firewall & updates"
+	kCatalogOther        // domain header: "Прочее" / "Other"
+	kCatalogSecurityNote // "ⓘ Безопасность (SSH, аккаунты) — на отдельном экране."
+	kCatalogDocsOnly     // pre-connect header line: docs only, no live status
+	kCatalogHint         // catalog control hint
+	kStatusApplied       // "✓ применено" / "✓ applied"
+	kStatusCanApply      // "• можно" / "• available"
+	kStatusUnavailable   // "⊘ недоступно" / "⊘ unavailable"
 
 	// --- SSH key screen (phaseKey) ---------------------------------------
 	// The generated private key lives ONLY in memory; this screen is the one
@@ -312,11 +329,27 @@ var tr = map[Lang]map[stringKey]string{
 		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
 		kWikiHint:    "esc — назад · ↑↓ — прокрутка · l — язык",
 
-		kWikiWhat:  "ЧТО ДЕЛАЕТ",
-		kWikiWhy:   "ЗАЧЕМ",
-		kWikiRisk:  "БЕЗ ЭТОГО",
-		kWikiNoDoc: "нет описания для этого шага",
-		kWikiBack:  "← Назад",
+		kWikiWhat:   "ЧТО ДЕЛАЕТ",
+		kWikiWhy:    "ЗАЧЕМ",
+		kWikiRisk:   "БЕЗ ЭТОГО",
+		kWikiOnBox:  "ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ",
+		kWikiRevert: "КАК ОТКАТИТЬ",
+		kWikiStatus: "Статус:",
+		kWikiNoDoc:  "нет описания для этого шага",
+		kWikiBack:   "← Назад",
+
+		kCatalogTitle:        "Каталог твиков — что настраивает Morgward",
+		kCatalogNetwork:      "Сеть и пропускная способность",
+		kCatalogMemory:       "Память",
+		kCatalogKernelMaint:  "Ядро и обслуживание",
+		kCatalogFwUpdates:    "Файрвол и обновления",
+		kCatalogOther:        "Прочее",
+		kCatalogSecurityNote: "ⓘ Безопасность (SSH, аккаунты) — на отдельном экране.",
+		kCatalogDocsOnly:     "Только описания · подключитесь, чтобы увидеть статус",
+		kCatalogHint:         "↑/↓ прокрутка · enter описание · esc назад · l — язык",
+		kStatusApplied:       "✓ применено",
+		kStatusCanApply:      "• можно",
+		kStatusUnavailable:   "⊘ недоступно",
 
 		kKeyTitle:      "Доступ по SSH-ключу",
 		kKeyWarnSoft:   "Режим новичка: вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
@@ -463,11 +496,27 @@ var tr = map[Lang]map[stringKey]string{
 		kSummaryHint: "enter/esc — menu · click a fix for details · ↑↓ — scroll · l — lang",
 		kWikiHint:    "esc — back · ↑↓ — scroll · l — lang",
 
-		kWikiWhat:  "WHAT IT DOES",
-		kWikiWhy:   "WHY",
-		kWikiRisk:  "WITHOUT IT",
-		kWikiNoDoc: "no description for this step",
-		kWikiBack:  "← Back",
+		kWikiWhat:   "WHAT IT DOES",
+		kWikiWhy:    "WHY",
+		kWikiRisk:   "WITHOUT IT",
+		kWikiOnBox:  "WHAT CHANGES ON THE SERVER",
+		kWikiRevert: "HOW TO REVERT",
+		kWikiStatus: "Status:",
+		kWikiNoDoc:  "no description for this step",
+		kWikiBack:   "← Back",
+
+		kCatalogTitle:        "Tweak catalog — what Morgward configures",
+		kCatalogNetwork:      "Network & throughput",
+		kCatalogMemory:       "Memory",
+		kCatalogKernelMaint:  "Kernel & maintenance",
+		kCatalogFwUpdates:    "Firewall & updates",
+		kCatalogOther:        "Other",
+		kCatalogSecurityNote: "ⓘ Security (SSH, accounts) — on a separate screen.",
+		kCatalogDocsOnly:     "Docs only · connect to see live status",
+		kCatalogHint:         "↑/↓ scroll · enter detail · esc back · l — lang",
+		kStatusApplied:       "✓ applied",
+		kStatusCanApply:      "• available",
+		kStatusUnavailable:   "⊘ unavailable",
 
 		kKeyTitle:      "SSH key access",
 		kKeyWarnSoft:   "Novice mode: password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
