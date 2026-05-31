@@ -45,6 +45,11 @@ var (
 	// no native border labels), tinted to match the form's accent.
 	borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("57"))
 
+	// framed-input chrome (landing form): a dim rounded border when unfocused (240)
+	// and an accent rounded border when focused (57), matching the design spec.
+	inputBorderDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	inputBorderFocus = lipgloss.NewStyle().Foreground(lipgloss.Color("57"))
+
 	// monitor footer styles: dim chrome + threshold-colored percent.
 	monDimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	monLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -1315,8 +1320,64 @@ type formRow struct {
 
 // formBodyTopRow is the 0-based screen Y of the FIRST form body line: top border
 // (row 0) + switcher (row 1) → body starts at row 2. A body row at slice index i
-// therefore renders at screen Y = formBodyTopRow + i.
+// renders at screen Y = formBodyTopRow + i. Each framed input now contributes THREE
+// consecutive slice entries (border-top / label+value / border-bottom), all tagged
+// frInput with the same field, so the hit-test maps any of those three Y's to that
+// input. The disclosure/version frame rows shift this slice but not this constant.
 const formBodyTopRow = 2
+
+// framedInputWidth is the inner box width (between the border runes) of a framed
+// input: the shared label column + one space + the textinput visible width (44),
+// clamped so the whole 3-row frame (border adds 2 cells) never exceeds the box
+// content width innerW. All widths are display cells (lipgloss.Width).
+func (m model) framedInputWidth() int {
+	innerW := innerWidth(m.boxWidth())
+	want := m.labelColW() + 1 + 44
+	if max := innerW - 2; want > max { // -2 for the left+right border cells
+		want = max
+	}
+	if want < 1 {
+		want = 1
+	}
+	return want
+}
+
+// framedInputRow renders ONE landing input as a 3-line rounded-border box:
+//
+//	line 0: ╭───────────────╮         (top border)
+//	line 1: │ Label  value… │         (left border + label + space + input.View + right)
+//	line 2: ╰───────────────╯         (bottom border)
+//
+// Unfocused → dim border (240); focused → accent border (57) + bold label (213).
+// Every line's display width equals the frame outer width (inner + 2) so the
+// caller (formRows → contentLine) pads/truncates to innerW without breaking the
+// frame. All width math is via lipgloss.Width (Cyrillic-safe), never %-*s.
+func (m model) framedInputRow(idx int, lang Lang, label string, input textinput.Model, focused bool) []string {
+	bd := lipgloss.RoundedBorder()
+	bs := inputBorderDim
+	if focused {
+		bs = inputBorderFocus
+	}
+	inner := m.framedInputWidth()
+	colW := m.labelColW()
+
+	top := bs.Render(bd.TopLeft + strings.Repeat(bd.Top, inner) + bd.TopRight)
+	bottom := bs.Render(bd.BottomLeft + strings.Repeat(bd.Bottom, inner) + bd.BottomRight)
+
+	ls := labelStyle
+	if focused {
+		ls = focusStyle
+	}
+	// content = " " + label(colW) + " " + input.View(), truncated/padded to inner.
+	content := " " + ls.Render(padLabel(label, colW)) + " " + input.View()
+	content = truncDisplay(content, inner)
+	if pad := inner - lipgloss.Width(content); pad > 0 {
+		content += strings.Repeat(" ", pad)
+	}
+	mid := bs.Render(bd.Left) + content + bs.Render(bd.Right)
+
+	return []string{top, mid, bottom}
+}
 
 // formRows builds the ordered form body as a slice of row specs (INCLUDING blank
 // rows) in exact render order. formView renders by iterating this; the hit-test
@@ -1334,14 +1395,21 @@ func (m model) formRows() []formRow {
 	}
 	indent := strings.Repeat(" ", colW+1) // aligns the toggleHelp/value-column content
 
+	_ = labelPad // labels now live inside the framed input boxes (see framedInputRow)
+
 	var rows []formRow
 	labels := []stringKey{kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey}
+	// appendFramedInput emits the 3 rows of one framed input; all three carry the
+	// same field index so a click on any of them focuses that input (the hit-test
+	// maps the whole 3-row block to one target).
+	appendFramedInput := func(i int) {
+		framed := m.framedInputRow(i, m.lang, t(m.lang, labels[i]), m.inputs[i], i == m.focus)
+		for _, ln := range framed {
+			rows = append(rows, formRow{kind: frInput, field: i, text: ln})
+		}
+	}
 	for i := range m.inputs {
-		rows = append(rows, formRow{
-			kind:  frInput,
-			field: i,
-			text:  labelPad(t(m.lang, labels[i]), i == m.focus) + m.inputs[i].View(),
-		})
+		appendFramedInput(i)
 	}
 
 	rows = append(rows, formRow{kind: frBlank})
