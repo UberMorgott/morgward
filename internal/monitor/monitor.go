@@ -27,6 +27,9 @@ type ConnInfo struct {
 	User      string
 	AdminUser string
 	KeyPEM    []byte
+	// Password is used to dial only when KeyPEM is empty — the read-only/password
+	// audit path. It is never logged.
+	Password string
 	// KeyGenerated is true only when KeyPEM is a freshly generated ephemeral key
 	// (password path). With a user-supplied --key it is false, so consumers can
 	// avoid showing the operator their own private key.
@@ -103,7 +106,7 @@ func (s *Sampler) Run(ctx context.Context, out chan<- Sample) {
 
 		// (Re)connect if we have no live client.
 		if cli == nil {
-			c, err := sshx.Dial(s.info.Host, s.info.Port, users[ui], "", s.info.KeyPEM)
+			c, err := sshx.Dial(s.info.Host, s.info.Port, users[ui], s.dialPassword(), s.info.KeyPEM)
 			if err != nil {
 				emit(Sample{Connected: false, Err: err.Error()})
 				// Next attempt: rotate user, grow backoff, sleep (ctx-aware).
@@ -168,6 +171,16 @@ func (s *Sampler) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+}
+
+// dialPassword returns the password to dial with: the configured password only
+// when there is no key (read-only/password audit path); "" when a key is present
+// so dialing uses key auth.
+func (s *Sampler) dialPassword() string {
+	if len(s.info.KeyPEM) == 0 {
+		return s.info.Password
+	}
+	return ""
 }
 
 // candidates returns the non-empty, de-duplicated user list to cycle on dial.

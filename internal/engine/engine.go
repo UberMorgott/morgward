@@ -344,11 +344,15 @@ func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM 
 		return
 	}
 	onConnect(monitor.ConnInfo{
-		Host:         cfg.Host,
-		Port:         cfg.Port,
-		User:         cfg.User,
-		AdminUser:    cfg.AdminUser,
-		KeyPEM:       keyPEM,
+		Host:      cfg.Host,
+		Port:      cfg.Port,
+		User:      cfg.User,
+		AdminUser: cfg.AdminUser,
+		KeyPEM:    keyPEM,
+		// Password is consumed by the monitor only when KeyPEM is empty (the
+		// read-only/password audit path); cleared after key bootstrap on the
+		// other paths, so it is "" there.
+		Password:     cfg.Password,
 		KeyGenerated: generated,
 	})
 }

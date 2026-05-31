@@ -196,20 +196,25 @@ func TestDashboardApplyShowsA8Confirm(t *testing.T) {
 }
 
 // TestDashboardAuditRowClickOpensWiki asserts clicking an audit row opens the wiki
-// detail for that tweak with wikiReturn=phaseDashboard.
+// detail for that tweak: wikiStep resolves to the tweak's STEP key (so wiki.Doc
+// hits, not the empty fallback) while wikiTweak carries the specific tweak header,
+// and wikiReturn=phaseDashboard.
 func TestDashboardAuditRowClickOpensWiki(t *testing.T) {
 	m := dashModel(100, 40)
 	innerW := innerWidth(m.boxWidth())
 	gridStart := m.dashGridStartIndex(innerW)
-	// Click the first grid row (the BBR result).
+	// Click the first grid row (the BBR result, Step "A4").
 	row := summaryBodyTopRow + gridStart
 	next, _ := m.dashboardClick(4, row)
 	mm := next.(model)
 	if mm.phase != phaseWiki {
 		t.Fatalf("audit row click → phase %v, want phaseWiki", mm.phase)
 	}
-	if mm.wikiStep != "A4-bbr" {
-		t.Fatalf("wikiStep=%q want A4-bbr", mm.wikiStep)
+	if mm.wikiStep != "A4" {
+		t.Fatalf("wikiStep=%q want A4 (the step key, for wiki.Doc lookup)", mm.wikiStep)
+	}
+	if mm.wikiTweak == "" || !strings.Contains(mm.wikiTweak, "A4-bbr") {
+		t.Fatalf("wikiTweak=%q want a header containing the tweak id A4-bbr", mm.wikiTweak)
 	}
 	if mm.wikiReturn != phaseDashboard {
 		t.Fatalf("wikiReturn=%v want phaseDashboard", mm.wikiReturn)

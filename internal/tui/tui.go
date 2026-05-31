@@ -159,6 +159,19 @@ func (m model) focusableRows() []int {
 	return rows
 }
 
+// lastFocusableInput returns the highest text-input row index currently in
+// focusableRows() — the Password field normally, or the Key field when the
+// advanced disclosure is open. Returns -1 if no input is focusable.
+func (m model) lastFocusableInput() int {
+	last := -1
+	for _, r := range m.focusableRows() {
+		if r < nInputs {
+			last = r
+		}
+	}
+	return last
+}
+
 type logMsg string
 type doneMsg struct{ err error }
 type connMsg monitor.ConnInfo
@@ -241,8 +254,12 @@ type model struct {
 	progCh       chan engine.Progress
 
 	// wiki navigation: which step's description is shown (phaseWiki) and which
-	// phase to return to on esc (phaseSummary).
+	// phase to return to on esc (phaseSummary). wikiStep is the wiki.Doc key (a
+	// real step id, e.g. "A2"). wikiTweak, when non-empty, is the header label of
+	// the specific tweak the page was opened from ("[a2.permitroot] <name>"); the
+	// body is still the step-level doc resolved via wikiStep. Empty => summary path.
 	wikiStep   string
+	wikiTweak  string
 	wikiReturn phase
 
 	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
@@ -389,10 +406,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.formClick(mc.X, mc.Y)
 		case phaseDashboard:
 			return m.dashboardClick(mc.X, mc.Y)
+		case phaseWiki:
+			// The clickable "← Назад" pill returns to wherever the wiki was opened from.
+			if m.wikiBackAtClick(mc.X, mc.Y) {
+				m.phase = m.wikiReturn
+			}
+			return m, nil
 		case phaseSummary:
 			// A click on a fix row opens its wiki description.
 			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
 				m.wikiStep = id
+				m.wikiTweak = "" // summary path: real step id, plain step header
 				m.wikiReturn = phaseSummary
 				m.wikiScroll = 0 // fresh page starts at the top
 				m.phase = phaseWiki
@@ -447,7 +471,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if down {
 				d = wheelStep
 			}
-			m.wikiScroll = clampScroll(m.wikiScroll+d, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			m.wikiScroll = clampScroll(m.wikiScroll+d, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
 		case phaseMatrix:
 			d := 0
 			if up {
@@ -492,9 +516,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc", "b":
 				m.phase = m.wikiReturn
 			case "up", "k":
-				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
 			case "down", "j":
-				m.wikiScroll = clampScroll(m.wikiScroll+1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				m.wikiScroll = clampScroll(m.wikiScroll+1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
 			}
 			return m, nil
 		case phaseSummary:
@@ -735,12 +759,19 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.advancedOpen = !m.advancedOpen
 			return m, nil
 		}
-		// Enter advances focus only WITHIN the text inputs and stops at the first
-		// non-input row. This prevents a multiline paste (which on terminals without
-		// bracketed paste arrives as a keystroke stream with embedded Enters) from
-		// walking through every field and auto-pressing Start. Reach Start via tab/↑↓.
+		// Inside a text input: Enter connects ONLY from the LAST focusable input
+		// (Password normally, Key when advanced is open) — the natural end of
+		// typing — and only when the form is connectable. Earlier inputs just
+		// advance focus. This restores the multiline-paste guard: on terminals
+		// without bracketed paste a paste arrives as a KeyPressMsg stream with
+		// embedded "enter" events, so an Enter mid-paste in a non-final field
+		// must never auto-start the connect.
 		if m.focus < nInputs {
-			m.focus++
+			if m.focus == m.lastFocusableInput() && m.formConnectable() {
+				m.command = "audit"
+				return m.start()
+			}
+			m.focus = stepFocus(m.focusableRows(), m.focus, +1)
 			return m, m.refocus()
 		}
 		return m, nil
@@ -756,6 +787,16 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// formConnectable reports whether the landing form carries enough to dial: a
+// non-empty Host plus at least one credential (Password OR SSH key). Used by the
+// Enter-to-connect shortcut so typing Host + Password then pressing Enter dials.
+func (m model) formConnectable() bool {
+	host := strings.TrimSpace(m.inputs[fHost].Value())
+	pass := strings.TrimSpace(m.inputs[fPass].Value())
+	key := strings.TrimSpace(m.inputs[fKey].Value())
+	return host != "" && (pass != "" || key != "")
 }
 
 // sanitizeField strips characters that don't belong in a given input. Newlines/
@@ -2214,6 +2255,12 @@ func (m model) dashServerCard(innerW int) []string {
 			}
 			parts = append(parts, t(m.lang, kDashOS)+" "+osStr)
 		}
+		if f.Kernel != "" {
+			parts = append(parts, t(m.lang, kDashKernel)+" "+f.Kernel)
+		}
+		if f.Virt != "" && f.Virt != "none" {
+			parts = append(parts, t(m.lang, kDashVirt)+" "+f.Virt)
+		}
 		if f.HasIPv6 {
 			parts = append(parts, t(m.lang, kDashIPv6)+" "+m.boolWordL(true))
 		}
@@ -2239,11 +2286,15 @@ func (m model) dashServerCard(innerW int) []string {
 		return borderStyle.Render(bd.Left) + content + borderStyle.Render(bd.Right)
 	}
 
+	// One fact per card line so nothing is hidden on a narrow width. dashGridStartIndex
+	// uses len(card) dynamically, so a taller card stays hit-test-correct.
 	lines := []string{top}
 	if len(parts) == 0 {
 		lines = append(lines, mid(labelStyle.Render("…")))
 	} else {
-		lines = append(lines, mid(strings.Join(parts, "   ")))
+		for _, p := range parts {
+			lines = append(lines, mid(p))
+		}
 	}
 	lines = append(lines, bottom)
 	return lines
@@ -2279,22 +2330,23 @@ func (m model) dashRowYToBodyIdx(y int) (int, bool) {
 	return idx, true
 }
 
-// dashAuditRowAtClick maps a click at (x,y) to an audit result's Probe.ID (for the
-// wiki detail), or ok=false on a miss. The grid rows are the contiguous block of
-// len(results) lines starting at dashGridStartIndex.
-func (m model) dashAuditRowAtClick(x, y int) (string, bool) {
+// dashAuditRowAtClick maps a click at (x,y) to the audit Result whose row was hit,
+// or ok=false on a miss. The caller resolves the wiki doc key from the result's
+// Probe.Step and the header label from its Probe.ID/Name. The grid rows are the
+// contiguous block of len(results) lines starting at dashGridStartIndex.
+func (m model) dashAuditRowAtClick(x, y int) (tweaks.Result, bool) {
 	if m.phase != phaseDashboard || len(m.dashAuditResults) == 0 {
-		return "", false
+		return tweaks.Result{}, false
 	}
 	innerW := innerWidth(m.boxWidth())
 	bodyIdx, ok := m.dashRowYToBodyIdx(y)
 	if !ok {
-		return "", false
+		return tweaks.Result{}, false
 	}
 	gridStart := m.dashGridStartIndex(innerW)
 	resIdx := bodyIdx - gridStart
 	if resIdx < 0 || resIdx >= len(m.dashAuditResults) {
-		return "", false
+		return tweaks.Result{}, false
 	}
 	// X must fall within the rendered row width (rows are content from column 2).
 	const contentX0 = 2
@@ -2306,9 +2358,15 @@ func (m model) dashAuditRowAtClick(x, y int) (string, bool) {
 	row := "  " + glyph + " " + localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
 	w := lipgloss.Width(truncDisplay(row, innerW))
 	if x >= contentX0 && x < contentX0+w {
-		return r.Probe.ID, true
+		return r, true
 	}
-	return "", false
+	return tweaks.Result{}, false
+}
+
+// tweakWikiHeader is the wiki page header for a tweak opened from the Dashboard:
+// "[<id>] <localized name>". Pure function so it is testable without driving the TUI.
+func tweakWikiHeader(lang Lang, p tweaks.Probe) string {
+	return fmt.Sprintf("[%s] %s", p.ID, localTweakName(lang, p.ID, p.Name))
 }
 
 // dashButton enumerates the three Dashboard actions resolved by dashButtonAtClick.
@@ -2342,6 +2400,25 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 		return dashBtnCatalog
 	}
 	return dashBtnNone
+}
+
+// wikiBackStartCol is the absolute X where the wiki "← Назад" pill begins: 2
+// (left border + the leading content space added by contentLine).
+const wikiBackStartCol = 2
+
+// wikiBackRow is the screen Y of the back-button row in wikiView: it sits right
+// after the scrollable middle region (rows [summaryBodyTopRow, +viewH)).
+func (m model) wikiBackRow() int {
+	return summaryBodyTopRow + m.wikiBodyViewH()
+}
+
+// wikiBackAtClick reports whether (x,y) hit the wiki "← Назад" pill, mirroring
+// dashButtonAtClick's pillRanges geometry for one pill.
+func (m model) wikiBackAtClick(x, y int) bool {
+	if m.phase != phaseWiki || y != m.wikiBackRow() {
+		return false
+	}
+	return pillIndexAt([]string{t(m.lang, kWikiBack)}, wikiBackStartCol, x) == 0
 }
 
 // tweakBucketIDs is the canonical Tweaks-bucket step ID set applied by the
@@ -2401,9 +2478,12 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		// P5 stub: phaseCatalog is not built yet — harmless no-op nav.
 		return m, nil
 	}
-	// Audit row → wiki detail for that tweak.
-	if id, ok := m.dashAuditRowAtClick(x, y); ok {
-		m.wikiStep = id
+	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's
+	// Probe.Step (matches wiki.Doc keys, e.g. "A2"); keep the specific tweak's
+	// name+ID as the page header so the body is never the empty fallback.
+	if r, ok := m.dashAuditRowAtClick(x, y); ok {
+		m.wikiStep = r.Probe.Step
+		m.wikiTweak = tweakWikiHeader(m.lang, r.Probe)
 		m.wikiReturn = phaseDashboard
 		m.wikiScroll = 0
 		m.phase = phaseWiki
@@ -2596,10 +2676,14 @@ func (m model) wikiView() string {
 	// Same fixed-chrome layout as summaryView: a scrollable middle region of exactly
 	// bodyViewH rows (scrollbar drawn on overflow), then the hint + bottom border +
 	// the 3-row monitor box, so the footer stays pinned at any terminal size.
-	viewH := m.bodyViewH()
+	viewH := m.wikiBodyViewH()
 	off := clampScroll(m.wikiScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
+	// Clickable "← Назад" pill pinned just above the hint line (its own fixed-chrome
+	// row, hit-tested by wikiBackAtClick). Styled like the dashboard action pills.
+	sb.WriteString(contentLine(b, pillOnStyle.Render(t(m.lang, kWikiBack)), innerW))
+	sb.WriteByte('\n')
 	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
@@ -2613,11 +2697,19 @@ func (m model) wikiView() string {
 // the step has no wiki entry.
 func (m model) wikiBodyLines(innerW int) []string {
 	doc, ok := wiki.Doc(wiki.Lang(int(m.lang)), m.wikiStep)
+	// Header: when opened from a tweak (Dashboard) show that specific tweak's
+	// "[id] name"; otherwise (summary path) show the step "[ID] Title".
+	header := func(title string) string {
+		if m.wikiTweak != "" {
+			return sumHeadStyle.Render(m.wikiTweak)
+		}
+		return sumHeadStyle.Render(title)
+	}
 	if !ok {
-		return []string{sumHeadStyle.Render("[" + m.wikiStep + "]"), "", t(m.lang, kWikiNoDoc)}
+		return []string{header("[" + m.wikiStep + "]"), "", t(m.lang, kWikiNoDoc)}
 	}
 	var body []string
-	body = append(body, sumHeadStyle.Render(fmt.Sprintf("[%s] %s", m.wikiStep, doc.Title)))
+	body = append(body, header(fmt.Sprintf("[%s] %s", m.wikiStep, doc.Title)))
 
 	block := func(labelKey stringKey, text string) {
 		if strings.TrimSpace(text) == "" {
@@ -3010,6 +3102,11 @@ func contentLineR(b lipgloss.Border, line string, innerW int, right string) stri
 // switcher (2) + hint + main-box bottom (2) + the 3-row monitor box = 7 — floored at
 // 1 so the region never vanishes on a tiny terminal.
 func (m model) bodyViewH() int { return max(m.h-7, 1) }
+
+// wikiBodyViewH is bodyViewH minus one row, because the wiki screen carries an
+// extra fixed-chrome row (the clickable "← Назад" pill) above the hint. Used for
+// BOTH the wiki render and every wiki scroll clamp so geometry never drifts.
+func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-1, 1) }
 
 // clampScroll bounds a scroll offset to [0, max(0,total-viewH)] so it can never
 // scroll past the end (or before the start). Recomputed on every use, so a resize

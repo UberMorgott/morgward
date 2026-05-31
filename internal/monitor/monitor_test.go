@@ -7,6 +7,17 @@ import (
 
 func approx(a, b float64) bool { return math.Abs(a-b) < 0.01 }
 
+func TestDialPassword(t *testing.T) {
+	// No key → password audit path: dial with the configured password.
+	if got := New(ConnInfo{Password: "x"}).dialPassword(); got != "x" {
+		t.Fatalf("dialPassword(no key) = %q, want %q", got, "x")
+	}
+	// Key present → key auth: password must not leak into the dial.
+	if got := New(ConnInfo{Password: "x", KeyPEM: []byte("pem")}).dialPassword(); got != "" {
+		t.Fatalf("dialPassword(with key) = %q, want %q", got, "")
+	}
+}
+
 func TestParseCPU(t *testing.T) {
 	// Two /proc/stat snapshots. Fields: user nice system idle iowait irq softirq...
 	// prev: idle_all = 100+0 = 100, total = 100+0+100+100+0 = 300

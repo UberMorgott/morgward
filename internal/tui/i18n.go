@@ -162,6 +162,7 @@ const (
 	kWikiWhy   // ЗАЧЕМ
 	kWikiRisk  // БЕЗ ЭТОГО
 	kWikiNoDoc // "нет описания" / "no description"
+	kWikiBack  // clickable back button: "← Назад" / "← Back"
 
 	// --- SSH key screen (phaseKey) ---------------------------------------
 	// The generated private key lives ONLY in memory; this screen is the one
@@ -214,6 +215,7 @@ const (
 	kDashCatalogButton // "Каталог твиков" / "Tweak Catalog"
 	kDashOS            // "ОС" / "OS"
 	kDashKernel        // "Ядро" / "Kernel"
+	kDashVirt          // "Виртуализация" / "Virt"
 	kDashMemory        // "Память" / "Memory"
 	kDashDisk          // "Диск" / "Disk"
 	kDashPorts         // "Порты" / "Ports"
@@ -324,6 +326,7 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiWhy:   "ЗАЧЕМ",
 		kWikiRisk:  "БЕЗ ЭТОГО",
 		kWikiNoDoc: "нет описания для этого шага",
+		kWikiBack:  "← Назад",
 
 		kKeyTitle:      "Доступ по SSH-ключу",
 		kKeyWarnSoft:   "Режим новичка: вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
@@ -363,6 +366,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDashCatalogButton: "Каталог твиков",
 		kDashOS:            "ОС",
 		kDashKernel:        "Ядро",
+		kDashVirt:          "Виртуализация",
 		kDashMemory:        "Память",
 		kDashDisk:          "Диск",
 		kDashPorts:         "Порты",
@@ -470,6 +474,7 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiWhy:   "WHY",
 		kWikiRisk:  "WITHOUT IT",
 		kWikiNoDoc: "no description for this step",
+		kWikiBack:  "← Back",
 
 		kKeyTitle:      "SSH key access",
 		kKeyWarnSoft:   "Novice mode: password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
@@ -509,6 +514,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDashCatalogButton: "Tweak Catalog",
 		kDashOS:            "OS",
 		kDashKernel:        "Kernel",
+		kDashVirt:          "Virt",
 		kDashMemory:        "Memory",
 		kDashDisk:          "Disk",
 		kDashPorts:         "Ports",

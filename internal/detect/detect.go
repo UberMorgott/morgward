@@ -18,6 +18,7 @@ type Facts struct {
 	Is2404      bool
 	IsUbuntu    bool
 	Virt        string // systemd-detect-virt (none = bare metal)
+	Kernel      string // uname -r
 	EgressIface string
 	IfaceMAC    string
 	ClientIP    string // controller source IP (for ignoreip / exempt lists)
@@ -48,6 +49,7 @@ func Run(c *sshx.Client) *Facts {
 	f.Is2404 = strings.HasPrefix(f.VersionID, "24.04")
 
 	f.Virt = c.Run("systemd-detect-virt").Out()
+	f.Kernel = c.Run("uname -r").Out()
 
 	// Egress interface from the DEFAULT ROUTE, not the client IP (§2).
 	f.EgressIface = c.Run(`ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'`).Out()
