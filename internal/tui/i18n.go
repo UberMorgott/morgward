@@ -47,24 +47,10 @@ const (
 	kPhPass
 	kPhKey
 
-	// toggle labels + options
-	kLabelMode
-	kOptSoft
-	kOptStrict
-
 	// start button
 	kStart
 	kCancel
 	kBackToMain
-
-	// toggle help (contextual)
-	kHelpModeStrict
-	kHelpModeSoft
-	kHelpModeOnly // "mode=%s — focus a pill (tab) for details"
-
-	// option names interpolated into the above (lowercase, stable per language)
-	kModeSoftName
-	kModeStrictName
 
 	// bottom control hints
 	kFormHint
@@ -222,6 +208,21 @@ const (
 	kDashIPv6          // "IPv6"
 	kDashHint          // dashboard control hint
 	kDashApplyConfirm  // A8 reboot warning shown before applying tweaks
+
+	// --- security menu (phaseSecurity, P4) -------------------------------
+	kSecMenuTitle      // box title: "Безопасность и доступ" / "Security and access"
+	kSecRootLogin      // access-card label: "Вход root" / "Root login"
+	kSecKeyOnly        // access-card label: "Только по ключу" / "Key-only"
+	kSecAdmin          // access-card label: "Админ" / "Admin user"
+	kSecSafeHeader     // "Безопасно (вход не меняется):" / "Safe (access unchanged):"
+	kSecCreateAdmin    // SAFE button: "Создать админа" / "Create admin"
+	kSecCryptoKey      // SAFE button: "Усилить SSH-крипто + ключ" / "Strengthen SSH crypto + key"
+	kSecDangerHeader   // "⚠ Опасная зона (можно потерять доступ):" / danger header
+	kSecKeyOnlyBtn     // DANGER button: "Вход только по ключу · заблокировать пароль root" / …
+	kSecDangerConfirm  // explicit blocking warning shown before the danger apply
+	kSecHint           // security-menu control hint
+	kSecRootByPassword // access-card value: root login allowed by password
+	kSecAdminAbsent    // access-card value: no admin user present
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -239,20 +240,9 @@ var tr = map[Lang]map[stringKey]string{
 		kPhPass: "пароль SSH",
 		kPhKey:  "путь к приватному ключу (пусто — использовать пароль)",
 
-		kLabelMode: "Режим",
-		kOptSoft:   "мягкий",
-		kOptStrict: "строгий",
-
 		kStart:      "Подключиться",
 		kCancel:     "Отмена",
 		kBackToMain: " ↩  Назад в меню ",
-
-		kHelpModeStrict: "строгий: заблокировать пароль root и отключить вход root по SSH",
-		kHelpModeSoft:   "мягкий: оставить резервный пароль на консоли (root не блокируется) — безопаснее по умолчанию",
-		kHelpModeOnly:   "режим=%s — выберите пункт (tab) для подробностей",
-
-		kModeSoftName:   "мягкий",
-		kModeStrictName: "строгий",
 
 		kFormHint:       "tab/↑↓ переход · ←/→ переключить · enter: следующее поле, подключение (на «Подключиться») · l: язык · esc выход",
 		kRunHintRunning: "l: язык · ctrl+c выход",
@@ -373,6 +363,20 @@ var tr = map[Lang]map[stringKey]string{
 		kDashIPv6:          "IPv6",
 		kDashHint:          "↑/↓ прокрутка · enter описание твика · esc назад",
 		kDashApplyConfirm:  "Включает полное обновление и перезагрузку (A8) — несколько минут. Enter — применить, esc — отмена.",
+
+		kSecMenuTitle:      " Безопасность и доступ ",
+		kSecRootLogin:      "Вход root",
+		kSecKeyOnly:        "Только по ключу",
+		kSecAdmin:          "Админ",
+		kSecSafeHeader:     "Безопасно (вход не меняется):",
+		kSecCreateAdmin:    "Создать админа",
+		kSecCryptoKey:      "Усилить SSH-крипто + ключ",
+		kSecDangerHeader:   "⚠ Опасная зона (можно потерять доступ):",
+		kSecKeyOnlyBtn:     "Вход только по ключу · заблокировать пароль root",
+		kSecDangerConfirm:  "Вы потеряете доступ к root SSH, если ключ не сохранён. Покажем ключ перед применением. Enter — показать ключ и применить, esc — отмена.",
+		kSecHint:           "1/2 — безопасные действия · 3 — опасное · esc назад · l — язык",
+		kSecRootByPassword: "разрешён по паролю",
+		kSecAdminAbsent:    "отсутствует",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -387,20 +391,9 @@ var tr = map[Lang]map[stringKey]string{
 		kPhPass: "ssh password",
 		kPhKey:  "private key path (leave empty to use password)",
 
-		kLabelMode: "Mode",
-		kOptSoft:   "soft",
-		kOptStrict: "strict",
-
 		kStart:      "Connect",
 		kCancel:     "Cancel",
 		kBackToMain: " ↩  Back to main ",
-
-		kHelpModeStrict: "strict: lock the root password & disable root SSH login",
-		kHelpModeSoft:   "soft: keep a console password fallback (root not locked) — safer default",
-		kHelpModeOnly:   "mode=%s — focus a pill (tab) for details",
-
-		kModeSoftName:   "soft",
-		kModeStrictName: "strict",
 
 		kFormHint:       "tab/↑↓ move · ←/→ toggle · enter: next field, connect (on Connect) · l: lang · esc quit",
 		kRunHintRunning: "l: lang · ctrl+c quit",
@@ -521,6 +514,20 @@ var tr = map[Lang]map[stringKey]string{
 		kDashIPv6:          "IPv6",
 		kDashHint:          "↑/↓ scroll · enter tweak detail · esc back",
 		kDashApplyConfirm:  "Includes a full upgrade and reboot (A8) — several minutes. Enter to apply, esc to cancel.",
+
+		kSecMenuTitle:      " Security and access ",
+		kSecRootLogin:      "Root login",
+		kSecKeyOnly:        "Key-only",
+		kSecAdmin:          "Admin user",
+		kSecSafeHeader:     "Safe (access unchanged):",
+		kSecCreateAdmin:    "Create admin",
+		kSecCryptoKey:      "Strengthen SSH crypto + key",
+		kSecDangerHeader:   "⚠ Danger zone (you may lose access):",
+		kSecKeyOnlyBtn:     "Key-only login · lock the root password",
+		kSecDangerConfirm:  "You will lose root SSH access if the key is not saved. We will show the key before applying. Enter to show the key and apply, esc to cancel.",
+		kSecHint:           "1/2 — safe actions · 3 — danger · esc back · l — lang",
+		kSecRootByPassword: "allowed by password",
+		kSecAdminAbsent:    "absent",
 	},
 }
 
@@ -535,17 +542,6 @@ func t(lang Lang, k stringKey) string {
 		return s
 	}
 	return ""
-}
-
-// langOptionName maps an internal command/mode token (always the EN canonical
-// value used by the engine) to its localized display name for the toggle help.
-func langModeName(lang Lang, m string) string {
-	switch m {
-	case "strict":
-		return t(lang, kModeStrictName)
-	default:
-		return t(lang, kModeSoftName)
-	}
 }
 
 // stepTitles maps each engine step ID (the curID streamed in progress events) to a

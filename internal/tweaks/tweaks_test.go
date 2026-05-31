@@ -36,13 +36,14 @@ func TestRegistryModeFiltering(t *testing.T) {
 	soft := ids(Registry(facts, &config.Config{Mode: config.ModeSoft}))
 	strict := ids(Registry(facts, &config.Config{Mode: config.ModeStrict}))
 
-	// strict-only probes must be absent in soft, present in strict.
+	// Locked decision: the strict-only A10 extras are dropped entirely — absent in
+	// BOTH modes now.
 	for _, id := range []string{"a10.blacklist", "a10.devshm"} {
 		if _, ok := soft[id]; ok {
-			t.Errorf("soft registry must not contain strict-only probe %s", id)
+			t.Errorf("soft registry must not contain dropped probe %s", id)
 		}
-		if _, ok := strict[id]; !ok {
-			t.Errorf("strict registry must contain %s", id)
+		if _, ok := strict[id]; ok {
+			t.Errorf("strict registry must not contain dropped probe %s", id)
 		}
 	}
 
@@ -86,5 +87,47 @@ func TestRegistryIPv6Filtering(t *testing.T) {
 	with6 := ids(Registry(&detect.Facts{Is2404: true, HasIPv6: true}, cfg))
 	if _, ok := with6["a1.rules_v6"]; !ok {
 		t.Error("registry must include a1.rules_v6 when HasIPv6 is true")
+	}
+}
+
+// TestA2SafeProbesInformational asserts the access-policy probes the default
+// (safe) path deliberately leaves at the image default are marked Informational —
+// so the audit does NOT render them as "не применён"/red until A2-danger.
+func TestA2SafeProbesInformational(t *testing.T) {
+	facts := &detect.Facts{Is2404: true}
+	ps := ids(Registry(facts, &config.Config{Mode: config.ModeSoft, Port: 22}))
+	for _, id := range []string{"a2.allowgroups", "a2.permitroot", "a2.passauth"} {
+		p, ok := ps[id]
+		if !ok {
+			t.Errorf("probe %q missing from registry", id)
+			continue
+		}
+		if !p.Informational {
+			t.Errorf("probe %q must be Informational on the safe/default path", id)
+		}
+	}
+}
+
+// TestA10StrictExtrasRemoved guards the locked decision: the strict-only A10
+// extras (module blacklist, /dev/shm) are dropped entirely, in BOTH modes.
+func TestA10StrictExtrasRemoved(t *testing.T) {
+	facts := &detect.Facts{Is2404: true}
+	for _, mode := range []config.Mode{config.ModeSoft, config.ModeStrict} {
+		ps := ids(Registry(facts, &config.Config{Mode: mode, Port: 22}))
+		for _, id := range []string{"a10.blacklist", "a10.devshm"} {
+			if _, ok := ps[id]; ok {
+				t.Errorf("mode=%s: strict-only probe %q must be removed", mode, id)
+			}
+		}
+	}
+}
+
+// TestNonInformationalProbesStayHard sanity-checks ordinary probes are NOT
+// flagged informational (only the access-policy ones are relaxed).
+func TestNonInformationalProbesStayHard(t *testing.T) {
+	facts := &detect.Facts{Is2404: true}
+	ps := ids(Registry(facts, &config.Config{Mode: config.ModeSoft, Port: 22}))
+	if p, ok := ps["a1.input_drop"]; !ok || p.Informational {
+		t.Error("a1.input_drop must exist and not be informational")
 	}
 }

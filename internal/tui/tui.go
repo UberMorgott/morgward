@@ -70,6 +70,7 @@ const (
 	phaseKey       // shows the generated SSH private key + a clipboard "Copy key" button
 	phaseMatrix    // per-tweak audit table (the "анализ" action result)
 	phaseDashboard // post-connect server card + live tweak audit + apply/security/catalog buttons
+	phaseSecurity  // security + access menu: access-state card + SAFE actions + DANGER key-only lock
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -93,7 +94,7 @@ const (
 func (m model) labelColW() int {
 	keys := []stringKey{
 		kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey,
-		kLabelMode, kSaveLogLabel,
+		kSaveLogLabel,
 	}
 	w := 0
 	for _, k := range keys {
@@ -289,10 +290,21 @@ type model struct {
 	dashAuditDone    bool
 	dashAuditTotal   int
 	dashAuditApplied int
-	dashAuditResults []tweaks.Result
+	dashAuditResults []tweaks.Result // display set: informational probes filtered out
+	dashAuditRaw     []tweaks.Result // unfiltered set; populateSecurityState reads this
 	dashFacts        *detect.Facts
 	dashScroll       int  // audit list scroll offset (clamped like sumScroll)
 	dashApplyConfirm bool // true while the A8 reboot-warning confirm is shown
+
+	// Security menu state (phaseSecurity). All plain strings/bool — value-copy safe.
+	// The three sec*State fields are derived from the audit BEFORE entering the menu
+	// (populateSecurityState) so the access-state card shows the current posture.
+	// secDangerConfirm gates the explicit blocking lockout warning before the danger
+	// key-only flow routes to phaseKey + applies A2-danger/A2.5.
+	secRootLoginState string // "разрешён по паролю" / "no" / "только по ключу" (or placeholder)
+	secKeyOnlyState   string // "да" / "нет" (or placeholder)
+	secAdminState     string // "vpsadmin@host" / "отсутствует" (or placeholder)
+	secDangerConfirm  bool   // true while the danger key-only lockout confirm is shown
 
 	finalErr error
 	finished bool
@@ -406,6 +418,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.formClick(mc.X, mc.Y)
 		case phaseDashboard:
 			return m.dashboardClick(mc.X, mc.Y)
+		case phaseSecurity:
+			return m.securityClick(mc.X, mc.Y)
 		case phaseWiki:
 			// The clickable "← Назад" pill returns to wherever the wiki was opened from.
 			if m.wikiBackAtClick(mc.X, mc.Y) {
@@ -566,6 +580,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dashScroll = clampScroll(m.dashScroll-1, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			case "down", "j":
 				m.dashScroll = clampScroll(m.dashScroll+1, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			}
+			return m, nil
+		case phaseSecurity:
+			// Security menu: 1/2 trigger the SAFE actions, 3 the DANGER action. enter
+			// confirms a pending danger lockout (after the explicit warning), routing
+			// through phaseKey so the generated key is shown BEFORE A2-danger applies;
+			// esc cancels the confirm, or with no pending confirm returns to the
+			// Dashboard. ↑↓/k/j scroll if the body overflows.
+			if m.secDangerConfirm {
+				switch msg.String() {
+				case "enter":
+					m.secDangerConfirm = false
+					return m.launchKeyOnlyDanger()
+				case "esc", "b":
+					m.secDangerConfirm = false
+					return m, nil
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "1":
+				return m.securityAction(secBtnCreateAdmin)
+			case "2":
+				return m.securityAction(secBtnCryptoKey)
+			case "3":
+				return m.securityAction(secBtnKeyOnlyDanger)
+			case "esc", "b":
+				m.phase = phaseDashboard
+				return m, nil
+			case "up", "k":
+				m.dashScroll = clampScroll(m.dashScroll-1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			case "down", "j":
+				m.dashScroll = clampScroll(m.dashScroll+1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			}
 			return m, nil
 		case phaseKey:
@@ -933,6 +980,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.dashAuditTotal = 0
 	m.dashAuditApplied = 0
 	m.dashAuditResults = nil
+	m.dashAuditRaw = nil
 	m.dashFacts = nil
 	m.dashScroll = 0
 	m.dashApplyConfirm = false
@@ -965,10 +1013,20 @@ func (m model) advanceFromRun() model {
 // "audit" command finishes (its Done carries Summary.Facts + Summary.Tweaks).
 func (m *model) captureAudit(sum engine.Summary) {
 	m.dashFacts = sum.Facts
-	m.dashAuditResults = sum.Tweaks
-	m.dashAuditTotal = len(sum.Tweaks)
-	applied := 0
+	m.dashAuditRaw = sum.Tweaks
+	// Informational access-policy probes are shown on the Security screen, not in the
+	// tweaks audit grid — drop them from the display set.
+	disp := sum.Tweaks[:0:0]
 	for _, r := range sum.Tweaks {
+		if r.Informational {
+			continue
+		}
+		disp = append(disp, r)
+	}
+	m.dashAuditResults = disp
+	m.dashAuditTotal = len(disp)
+	applied := 0
+	for _, r := range disp {
 		if r.Applied {
 			applied++
 		}
@@ -1204,6 +1262,8 @@ func (m model) viewString() string {
 		return m.matrixView()
 	case phaseDashboard:
 		return m.dashboardView()
+	case phaseSecurity:
+		return m.securityView()
 	case phaseWiki:
 		return m.wikiView()
 	case phaseKey:
@@ -1422,8 +1482,7 @@ type formRowKind int
 const (
 	frInput       formRowKind = iota // a text-input row; field holds the input index
 	frBlank                          // spacer line (kept in the slice so Y math stays exact)
-	frMode                           // soft/strict pill row
-	frAction                         // run/detect/verify pill row
+	frAction                         // run/detect/verify pill row (removed from the form; kept for the negative-assertion guard)
 	frLog                            // save-log-to-file on/off pill row
 	frHelp                           // contextual toggle-help line
 	frStart                          // Start + Cancel button line
@@ -2450,6 +2509,59 @@ func (m model) launchApplyTweaks() (tea.Model, tea.Cmd) {
 	return m.start()
 }
 
+// startSteps starts an apply over the given engine step IDs via the "step" command
+// (RunSteps, allowBrownfield=true). It mirrors launchApplyTweaks: set the command +
+// id list, then reuse start() so the run streams into the same log view and the
+// existing Hooks (Sink/OnConnect/OnProgress) plumbing carries progress + the
+// generated key. The Security-menu buttons funnel through here.
+func (m model) startSteps(ids []string) (tea.Model, tea.Cmd) {
+	m.command = "step"
+	m.cmds = ids
+	return m.start()
+}
+
+// populateSecurityState derives the three access-state card fields from the audit
+// results already in the model (m.dashAuditRaw), so the Security menu shows the
+// current posture without a fresh probe. Mapping uses the access-policy probes:
+//   - root login: a2.permitroot Applied → "no"; else "разрешён по паролю"/"by password"
+//   - key-only:   a2.passauth   Applied → yes; else no
+//   - admin:      a2.allowgroups Applied → "vpsadmin@host" (an sshusers group exists,
+//     so the admin handoff is in place); else a neutral "отсутствует"/"absent"
+//
+// When a probe is missing from the audit, the field shows a neutral placeholder
+// ("—") rather than asserting a state we did not observe.
+func (m *model) populateSecurityState() {
+	const placeholder = "—"
+	m.secRootLoginState = placeholder
+	m.secKeyOnlyState = placeholder
+	m.secAdminState = placeholder
+
+	applied := map[string]bool{}
+	seen := map[string]bool{}
+	for _, r := range m.dashAuditRaw {
+		applied[r.Probe.ID] = r.Applied
+		seen[r.Probe.ID] = true
+	}
+
+	if seen["a2.permitroot"] {
+		if applied["a2.permitroot"] {
+			m.secRootLoginState = t(m.lang, kNoWord)
+		} else {
+			m.secRootLoginState = t(m.lang, kSecRootByPassword)
+		}
+	}
+	if seen["a2.passauth"] {
+		m.secKeyOnlyState = m.boolWordL(applied["a2.passauth"])
+	}
+	if seen["a2.allowgroups"] {
+		if applied["a2.allowgroups"] {
+			m.secAdminState = defaultAdminUser + "@" + m.host
+		} else {
+			m.secAdminState = t(m.lang, kSecAdminAbsent)
+		}
+	}
+}
+
 // dashboardClick resolves a Dashboard click: an audit row opens its wiki detail; a
 // button pill triggers its action. "Применить твики" first shows the A8 reboot
 // warning (Enter to confirm). "Безопасность ▸" and "Каталог твиков" navigate to
@@ -2471,8 +2583,11 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		}
 		return m.launchApplyTweaks()
 	case dashBtnSecurity:
-		// P4 stub: phaseSecurity is not built yet — harmless no-op. MUST NOT apply
-		// anything. (Wired to navigate in P4.)
+		// Open the Security + access menu. Populate the access-state card from the
+		// audit results we already have (read-only — no apply happens here).
+		m.populateSecurityState()
+		m.secDangerConfirm = false
+		m.phase = phaseSecurity
 		return m, nil
 	case dashBtnCatalog:
 		// P5 stub: phaseCatalog is not built yet — harmless no-op nav.
@@ -2488,6 +2603,251 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.wikiScroll = 0
 		m.phase = phaseWiki
 		return m, nil
+	}
+	return m, nil
+}
+
+// --- Security menu (phaseSecurity) --------------------------------------------
+//
+// securityView renders the Security + access menu: a framed access-state card (3
+// lines: root login / key-only / admin), a SAFE section (Create-admin + Strengthen-
+// crypto buttons) and a DANGER section (one key-only-lock button). Chrome (titled
+// top, switcher, scroll region, hint, bottom border, monitor box) mirrors
+// dashboardView exactly so the footer never moves. The two button rows are resolved
+// against the SAME ordered body slice the renderer iterates (securityBodyLines), so
+// the hit-test geometry can never drift.
+func (m model) securityView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.securityBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	viewH := m.bodyViewH()
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, 0)
+
+	hint := t(m.lang, kSecHint)
+	if m.secDangerConfirm {
+		hint = t(m.lang, kSecDangerConfirm)
+	}
+	sb.WriteString(contentLine(b, helpStyle.Render(hint), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// securitySafeButtonNames is the ordered SAFE-section button labels (Create admin,
+// Strengthen crypto). Single source for the render path and the hit-test.
+func (m model) securitySafeButtonNames() []string {
+	return []string{
+		t(m.lang, kSecCreateAdmin),
+		t(m.lang, kSecCryptoKey),
+	}
+}
+
+// securityDangerButtonNames is the ordered DANGER-section button labels (just the
+// key-only lockdown button). Single source for the render path and the hit-test.
+func (m model) securityDangerButtonNames() []string {
+	return []string{
+		t(m.lang, kSecKeyOnlyBtn),
+	}
+}
+
+// secButtonStartCol is the absolute X where a button-row's first pill begins: 2
+// (left border + space) + 1 (the leading indent space in the row). Mirrors
+// dashButtonStartCol.
+const secButtonStartCol = 3
+
+// secButtonsLine renders a row of pills (the leading indent puts the first pill at
+// secButtonStartCol), mirroring dashButtonsLine so pillRanges recovers the geometry.
+func secButtonsLine(names []string) string {
+	pills := make([]string, len(names))
+	for i, n := range names {
+		pills[i] = pillStyle.Render(n)
+	}
+	return " " + strings.Join(pills, " ")
+}
+
+// securityAccessCard renders the framed "Безопасность и доступ" card with the three
+// access-state lines (root login / key-only / admin) from the sec*State fields, as
+// content lines fitted to innerW. Mirrors dashServerCard's framing.
+func (m model) securityAccessCard(innerW int) []string {
+	bd := lipgloss.RoundedBorder()
+	fw := innerW
+	if fw < minBoxWidth {
+		fw = minBoxWidth
+	}
+	finner := fw - 2 // cells between the card's border runes
+
+	top := titledTop(bd, t(m.lang, kSecMenuTitle), fw)
+	bottom := borderLine(bd.BottomLeft, bd.Bottom, bd.BottomRight, fw)
+
+	mid := func(content string) string {
+		content = " " + content
+		content = truncDisplay(content, finner)
+		if pad := finner - lipgloss.Width(content); pad > 0 {
+			content += strings.Repeat(" ", pad)
+		}
+		return borderStyle.Render(bd.Left) + content + borderStyle.Render(bd.Right)
+	}
+
+	rootV := m.secRootLoginState
+	keyV := m.secKeyOnlyState
+	adminV := m.secAdminState
+	if rootV == "" {
+		rootV = "—"
+	}
+	if keyV == "" {
+		keyV = "—"
+	}
+	if adminV == "" {
+		adminV = "—"
+	}
+
+	lines := []string{top}
+	lines = append(lines, mid(labelStyle.Render(t(m.lang, kSecRootLogin)+": ")+rootV))
+	lines = append(lines, mid(labelStyle.Render(t(m.lang, kSecKeyOnly)+": ")+keyV))
+	lines = append(lines, mid(labelStyle.Render(t(m.lang, kSecAdmin)+": ")+adminV))
+	lines = append(lines, bottom)
+	return lines
+}
+
+// securityBodyLines builds the ordered Security-menu body slice — the single source
+// of truth for BOTH securityView's render and the button hit-test. Order: access
+// card (framed), blank, SAFE header, SAFE buttons, blank, DANGER header, DANGER
+// button. The two button rows' body indices are recovered by secSafeButtonsIndex /
+// secDangerButtonsIndex (computed from the dynamic card height).
+func (m model) securityBodyLines(innerW int) []string {
+	var body []string
+	body = append(body, m.securityAccessCard(innerW)...)
+	body = append(body, "")
+	body = append(body, sumHeadStyle.Render(t(m.lang, kSecSafeHeader)))
+	body = append(body, secButtonsLine(m.securitySafeButtonNames()))
+	body = append(body, "")
+	body = append(body, errStyle.Render(t(m.lang, kSecDangerHeader)))
+	body = append(body, secButtonsLine(m.securityDangerButtonNames()))
+	return body
+}
+
+// secSafeButtonsIndex / secDangerButtonsIndex are the body-slice indices of the SAFE
+// and DANGER button rows. Prefix: card (N lines) + blank + SAFE header → SAFE buttons
+// at len(card)+2; then blank + DANGER header → DANGER buttons at len(card)+5.
+func (m model) secSafeButtonsIndex(innerW int) int {
+	return len(m.securityAccessCard(innerW)) + 2
+}
+
+func (m model) secDangerButtonsIndex(innerW int) int {
+	return len(m.securityAccessCard(innerW)) + 5
+}
+
+// secButton enumerates the three Security-menu actions resolved by secButtonAtClick.
+type secButton int
+
+const (
+	secBtnNone secButton = iota
+	secBtnCreateAdmin
+	secBtnCryptoKey
+	secBtnKeyOnlyDanger
+)
+
+// secRowYToBodyIdx maps a screen Y to a Security-menu body-slice index (no scroll on
+// this screen — off is 0), or ok=false when Y is in the chrome. Mirrors
+// dashRowYToBodyIdx with a fixed zero offset.
+func (m model) secRowYToBodyIdx(y int) (int, bool) {
+	body := m.securityBodyLines(innerWidth(m.boxWidth()))
+	viewH := m.bodyViewH()
+	rowInRegion := y - summaryBodyTopRow
+	if rowInRegion < 0 || rowInRegion >= viewH {
+		return 0, false
+	}
+	idx := rowInRegion
+	if idx < 0 || idx >= len(body) {
+		return 0, false
+	}
+	return idx, true
+}
+
+// secButtonAtClick maps a click at (x,y) to one of the Security-menu buttons, using
+// pillRanges over the SAFE/DANGER button names (the same geometry secButtonsLine
+// renders), or secBtnNone on a miss.
+func (m model) secButtonAtClick(x, y int) secButton {
+	if m.phase != phaseSecurity {
+		return secBtnNone
+	}
+	innerW := innerWidth(m.boxWidth())
+	bodyIdx, ok := m.secRowYToBodyIdx(y)
+	if !ok {
+		return secBtnNone
+	}
+	switch bodyIdx {
+	case m.secSafeButtonsIndex(innerW):
+		switch pillIndexAt(m.securitySafeButtonNames(), secButtonStartCol, x) {
+		case 0:
+			return secBtnCreateAdmin
+		case 1:
+			return secBtnCryptoKey
+		}
+	case m.secDangerButtonsIndex(innerW):
+		if pillIndexAt(m.securityDangerButtonNames(), secButtonStartCol, x) == 0 {
+			return secBtnKeyOnlyDanger
+		}
+	}
+	return secBtnNone
+}
+
+// securityAction performs the Security-menu action for btn. SAFE actions start an
+// apply immediately (RunSteps). The DANGER action is two-step: the first invocation
+// raises the explicit blocking confirm (secDangerConfirm) and the apply only launches
+// once the operator confirms (handled in the phaseSecurity key handler), which routes
+// through phaseKey so the generated key is shown BEFORE the lockdown applies.
+func (m model) securityAction(btn secButton) (tea.Model, tea.Cmd) {
+	switch btn {
+	case secBtnCreateAdmin:
+		return m.startSteps([]string{"PRE"})
+	case secBtnCryptoKey:
+		return m.startSteps([]string{"PRE", "A2-safe"})
+	case secBtnKeyOnlyDanger:
+		// Raise the explicit lockout confirm; apply launches on Enter (key handler).
+		m.secDangerConfirm = true
+		return m, nil
+	}
+	return m, nil
+}
+
+// launchKeyOnlyDanger runs the opt-in key-only lockdown: A2-danger (AllowGroups +
+// PermitRootLogin no + PasswordAuthentication no + passwd -l root, behind the
+// existing ssh-revert safety timer + freshLogin key-only verify) then A2.5 (cloud-
+// init neutralization). The generated key is surfaced to phaseKey by the connMsg
+// handler (KeyGenerated path) BEFORE the lockdown applies, so the operator can copy
+// it first.
+func (m model) launchKeyOnlyDanger() (tea.Model, tea.Cmd) {
+	return m.startSteps([]string{"A2-danger", "A2.5"})
+}
+
+// securityClick resolves a Security-menu click to one of the three buttons. A pending
+// danger confirm swallows clicks (resolve with Enter/esc on the hint), mirroring the
+// Dashboard apply-confirm pattern so a stray click can never bypass the lockout
+// warning.
+func (m model) securityClick(x, y int) (tea.Model, tea.Cmd) {
+	if m.secDangerConfirm {
+		return m, nil
+	}
+	switch m.secButtonAtClick(x, y) {
+	case secBtnCreateAdmin:
+		return m.securityAction(secBtnCreateAdmin)
+	case secBtnCryptoKey:
+		return m.securityAction(secBtnCryptoKey)
+	case secBtnKeyOnlyDanger:
+		return m.securityAction(secBtnKeyOnlyDanger)
 	}
 	return m, nil
 }

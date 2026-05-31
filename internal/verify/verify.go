@@ -79,9 +79,22 @@ func Run(c *sshx.Client, log *ui.Logger, port int, mode string) Result {
 	if mode == "soft" {
 		rootCheck = "prohibit-password"
 	}
+	// Root-login / PasswordAuthentication policy is INFORMATIONAL on the default
+	// (safe) path, not a lockout assert. The default TUI path (A2-safe) hardens SSH
+	// crypto only and leaves the image's access policy untouched — root login stays
+	// at the image default (prohibit-password) and PasswordAuthentication is left to
+	// the image, so neither is something we force. Only the opt-in lockdown
+	// (A2-danger) sets PermitRootLogin no + PasswordAuthentication no; the CLI strict
+	// mode still does too. We therefore report the observed policy (PASS when it
+	// matches the mode-expected value, WARN otherwise) but never abort the run on it —
+	// a softer policy than expected is a deliberate default, not a lockout.
+	//
+	// PasswordAuthentication is only enforced (key-only) by strict / A2-danger; the
+	// safe path leaves the image default untouched, so there is intentionally no
+	// PasswordAuthentication assert here.
 	checks := []Check{
 		{Name: "SSH syntax", Cmd: "sshd -t && echo ok", Want: equals("ok"), Lockout: true},
-		{Name: "SSH effective policy", Cmd: "sshd -T | grep -i permitrootlogin", Want: contains(rootCheck), Lockout: true},
+		{Name: "SSH effective policy", Cmd: "sshd -T | grep -i permitrootlogin", Want: contains(rootCheck), Lockout: false},
 		{Name: "Firewall order", Cmd: "iptables -S | grep -- '-P INPUT DROP'", Want: contains("drop"), Lockout: true},
 		{Name: "SSH port open", Cmd: fmt.Sprintf("iptables -S | grep -- '--dport %d'", port), Want: contains("accept"), Lockout: true},
 		{Name: "Rollback disarmed", Cmd: "systemctl list-timers --all | grep -c fw-rollback || true", Want: equals("0"), Lockout: false},

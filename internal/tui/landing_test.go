@@ -388,13 +388,15 @@ func TestModeSelectorAbsent(t *testing.T) {
 	for _, adv := range []bool{false, true} {
 		m.advancedOpen = adv
 		rows := m.formRows()
-		if hasKind(rows, frMode) {
-			t.Fatalf("frMode row present (advancedOpen=%v) — landing must not show the mode selector", adv)
-		}
-		// The mode pill labels must not leak onto the form via any other row.
+		// The soft/strict mode pill labels must not leak onto the form via any row.
+		// (The mode selector keys were removed from the TUI form in P4; access
+		// lockdown moved to the Security menu. Assert against the literal labels so
+		// the guard survives even though the i18n keys no longer exist.)
 		for _, r := range rows {
-			if strings.Contains(r.text, t2(m.lang, kOptStrict)) {
-				t.Fatalf("mode pill %q leaked into row kind=%v: %q", t2(m.lang, kOptStrict), r.kind, r.text)
+			for _, leak := range []string{"строгий", "мягкий", "strict", "soft"} {
+				if strings.Contains(r.text, leak) {
+					t.Fatalf("mode pill %q leaked into row kind=%v: %q", leak, r.kind, r.text)
+				}
 			}
 		}
 	}
@@ -443,9 +445,13 @@ func TestLandingFormRenderComplete(t *testing.T) {
 			t.Fatalf("rendered landing missing %s (%q)", name, want)
 		}
 	}
-	// The Mode label must NOT appear anywhere on the landing.
-	if strings.Contains(out, t2(m.lang, kLabelMode)) {
-		t.Fatalf("rendered landing still shows the Mode label %q", t2(m.lang, kLabelMode))
+	// The Mode label must NOT appear anywhere on the landing (the selector was
+	// removed from the TUI form in P4; assert against the literal labels since the
+	// i18n keys no longer exist).
+	for _, leak := range []string{"Режим", "Mode"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("rendered landing still shows the Mode label %q", leak)
+		}
 	}
 }
 

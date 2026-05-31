@@ -25,6 +25,13 @@ type Probe struct {
 	Name string
 	Cmd  string
 	Want func(out string) bool
+	// Informational marks a probe whose unset state is EXPECTED on the default
+	// (safe) path — the value is reported but a non-match is NOT a failure. The
+	// access-policy probes (PermitRootLogin / PasswordAuthentication / AllowGroups)
+	// are informational because A2-safe deliberately leaves the image default
+	// untouched; they only become "applied" after the opt-in A2-danger lockdown.
+	// Renderers must show these as a neutral state line, never red "не применён".
+	Informational bool
 }
 
 // Result pairs a probe with its observed value and applied verdict.
@@ -32,6 +39,9 @@ type Result struct {
 	Probe   Probe
 	Applied bool
 	Detail  string
+	// Informational mirrors Probe.Informational so renderers that only carry the
+	// Result can treat the row as a neutral state report (not a pass/fail verdict).
+	Informational bool
 }
 
 // eq matches when the trimmed output equals want.
@@ -85,14 +95,19 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 		{ID: "a2.conf99", Step: "A2", Name: "99-hardening.conf",
 			Cmd: fileExists("/etc/ssh/sshd_config.d/99-hardening.conf"), Want: eq("1")},
 		{ID: "a2.allowgroups", Step: "A2", Name: "AllowGroups sshusers",
-			Cmd: "sshd -T 2>/dev/null | grep -i '^allowgroups'", Want: has("sshusers")},
+			Cmd: "sshd -T 2>/dev/null | grep -i '^allowgroups'", Want: has("sshusers"), Informational: true},
 		{ID: "a2.ecdsa_absent", Step: "A2", Name: "ECDSA host key removed",
 			Cmd: "test -e /etc/ssh/ssh_host_ecdsa_key && echo present || echo absent", Want: eq("absent")},
 		{ID: "a2.ssh_active", Step: "A2", Name: "ssh service active",
 			Cmd: "systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null", Want: has("active")},
 	}
 
-	// PermitRootLogin + PasswordAuthentication are mode-dependent.
+	// PermitRootLogin + PasswordAuthentication are mode-dependent AND informational:
+	// the default (safe) path leaves the image access policy untouched, so an unset
+	// state is expected — only the opt-in A2-danger lockdown (or CLI strict) sets
+	// PermitRootLogin no / PasswordAuthentication no. The Want predicate still
+	// reflects the mode-expected value (so a locked-down box reads as "applied"),
+	// but Informational tells renderers not to flag a non-match as a failure.
 	rootWant := "prohibit-password"
 	passWant := "yes"
 	if strict {
@@ -101,9 +116,9 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 	}
 	ps = append(ps,
 		Probe{ID: "a2.permitroot", Step: "A2", Name: "PermitRootLogin",
-			Cmd: "sshd -T 2>/dev/null | awk '/^permitrootlogin/{print $2}'", Want: eq(rootWant)},
+			Cmd: "sshd -T 2>/dev/null | awk '/^permitrootlogin/{print $2}'", Want: eq(rootWant), Informational: true},
 		Probe{ID: "a2.passauth", Step: "A2", Name: "PasswordAuthentication",
-			Cmd: "sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}'", Want: eq(passWant)},
+			Cmd: "sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}'", Want: eq(passWant), Informational: true},
 	)
 
 	if facts.Is2604 {
@@ -207,14 +222,8 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: fileExists("/etc/iptables/rules.v6"), Want: eq("1")})
 	}
 
-	if strict {
-		ps = append(ps,
-			Probe{ID: "a10.blacklist", Step: "A10", Name: "module blacklist",
-				Cmd: fileExists("/etc/modprobe.d/99-vps-blacklist.conf"), Want: eq("1")},
-			Probe{ID: "a10.devshm", Step: "A10", Name: "/dev/shm hardened",
-				Cmd: "grep -q '/dev/shm' /etc/fstab && echo 1 || echo 0", Want: eq("1")},
-		)
-	}
+	// Locked decision: the strict-only A10 extras (module blacklist + /dev/shm
+	// hardening) are dropped — they are no longer probed in either mode.
 
 	return ps
 }
@@ -255,7 +264,7 @@ func Run(cli *sshx.Client, log *ui.Logger, facts *detect.Facts, cfg *config.Conf
 		if ok {
 			applied++
 		}
-		out = append(out, Result{Probe: p, Applied: ok, Detail: v})
+		out = append(out, Result{Probe: p, Applied: ok, Detail: v, Informational: p.Informational})
 	}
 	if log != nil {
 		log.Info("анализ: %d проб, %d применено", len(out), applied)

@@ -43,6 +43,25 @@ func orderedSteps() []steps.Step {
 	}
 }
 
+// extraSteps are step types that are NOT part of the default full-run sequence
+// (orderedSteps) but ARE resolvable by `step <IDs>` / RunSteps — the TUI security
+// menu drives them explicitly. A2Safe (crypto only, image-default access) and
+// A2Danger (opt-in access lockdown) are the split of the legacy A2SSH; A2SSH
+// stays the full-run step for CLI `run --mode` back-compat.
+func extraSteps() []steps.Step {
+	return []steps.Step{
+		steps.A2Safe{},
+		steps.A2Danger{},
+	}
+}
+
+// resolvableSteps is the full lookup set for selective runs: the default ordered
+// sequence first (so canonical order is preserved for IDs that live there), then
+// the extra opt-in steps appended in declaration order.
+func resolvableSteps() []steps.Step {
+	return append(orderedSteps(), extraSteps()...)
+}
+
 // session is the shared connected state produced by prepare().
 type session struct {
 	log    *ui.Logger
@@ -669,8 +688,8 @@ func selectSteps(ids []string) (selected []steps.Step, unknown []string) {
 		want[strings.ToUpper(id)] = true
 	}
 	seen := map[string]bool{}
-	for _, st := range orderedSteps() {
-		if want[strings.ToUpper(st.ID())] {
+	for _, st := range resolvableSteps() {
+		if want[strings.ToUpper(st.ID())] && !seen[strings.ToUpper(st.ID())] {
 			selected = append(selected, st)
 			seen[strings.ToUpper(st.ID())] = true
 		}
@@ -685,7 +704,7 @@ func selectSteps(ids []string) (selected []steps.Step, unknown []string) {
 
 func allStepIDs() []string {
 	var ids []string
-	for _, st := range orderedSteps() {
+	for _, st := range resolvableSteps() {
 		ids = append(ids, st.ID())
 	}
 	return ids
