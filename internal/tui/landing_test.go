@@ -181,6 +181,15 @@ func TestSaveLogTogglePosition(t *testing.T) {
 	}
 }
 
+// TestCatalogLinkKeyExists asserts the catalog-link label translates non-empty.
+func TestCatalogLinkKeyExists(t *testing.T) {
+	for _, lang := range []Lang{langRU, langEN} {
+		if s := t2(lang, kCatalogLink); s == "" {
+			t.Fatalf("lang %d kCatalogLink empty", lang)
+		}
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width

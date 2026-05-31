@@ -190,6 +190,9 @@ const (
 	// disclosure toggle revealing the advanced Port/User/SSH-key inputs
 	kDisclosureLabel // collapsible toggle label: "▸ Дополнительно (порт · пользователь · SSH-ключ)"
 	kDisclosureOpen  // open-state indicator glyph "▼" (RU/EN same)
+
+	// catalog navigation link (P5 stub: rendered as a label on the landing form)
+	kCatalogLink // "Что настраивает программа ▸"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -315,6 +318,7 @@ var tr = map[Lang]map[stringKey]string{
 
 		kDisclosureLabel: "▸ Дополнительно (порт · пользователь · SSH-ключ)",
 		kDisclosureOpen:  "▼",
+		kCatalogLink:     "Что настраивает программа ▸",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -437,6 +441,7 @@ var tr = map[Lang]map[stringKey]string{
 
 		kDisclosureLabel: "▸ Advanced (port · user · SSH key)",
 		kDisclosureOpen:  "▼",
+		kCatalogLink:     "What the program configures ▸",
 	},
 }
 
