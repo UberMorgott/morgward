@@ -522,6 +522,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.titleK = titleHardened
 		}
+		// Auto-advance to the summary once BOTH completion signals have landed.
+		// doneMsg and progMsg(Done) travel on separate channels, so either may be
+		// last; whichever runs last performs the transition. Guard on haveSummary so
+		// an early connect/auth abort (no summary) stays on the run log for the
+		// operator to read, and on phaseRun so a generated-key view isn't yanked away.
+		if m.haveSummary && m.phase == phaseRun {
+			m.phase = phaseSummary
+		}
 		return m, nil
 
 	case connMsg:
@@ -565,6 +573,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = p.Summary
 			m.haveSummary = true
 			m.running = false
+			// Auto-advance to the summary once BOTH completion signals have landed
+			// (see doneMsg). Guard on finished so a summary that somehow precedes
+			// doneMsg waits, and on phaseRun so the key view isn't yanked away.
+			if m.finished && m.phase == phaseRun {
+				m.phase = phaseSummary
+			}
 		} else {
 			m.index = p.Index
 			m.total = p.Total
@@ -1660,8 +1674,13 @@ func (m model) summaryStatLines() []string {
 			net = append(net, l)
 		}
 	}
-	if b.PingMs > 0 || a.PingMs > 0 {
-		if l := sumDelta(t(m.lang, kRowPing), sumSpeedStr(b.PingMs), sumSpeedStr(a.PingMs)); l != "" {
+	if b.GatewayPingMs > 0 || a.GatewayPingMs > 0 {
+		if l := sumDelta(t(m.lang, kRowPingGW), sumSpeedStr(b.GatewayPingMs), sumSpeedStr(a.GatewayPingMs)); l != "" {
+			net = append(net, l)
+		}
+	}
+	if b.InternetPingMs > 0 || a.InternetPingMs > 0 {
+		if l := sumDelta(t(m.lang, kRowPingNet), sumSpeedStr(b.InternetPingMs), sumSpeedStr(a.InternetPingMs)); l != "" {
 			net = append(net, l)
 		}
 	}

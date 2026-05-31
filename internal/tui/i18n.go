@@ -149,8 +149,9 @@ const (
 	kRowPurged   // удалено пакетов
 	kRowDiskUsed // диск занято
 	kRowZram     // zram
-	kRowSpeed    // скорость, MB/s
-	kRowPing     // ping, ms
+	kRowSpeed    // скорость, MB/s (до зеркала)
+	kRowPingGW   // задержка ДЦ, ms
+	kRowPingNet  // интернет, ms
 	kRowPorts    // открытых портов
 	kRowRootLogin
 	kRowKeyOnly  // ssh только по ключу
@@ -279,8 +280,9 @@ var tr = map[Lang]map[stringKey]string{
 		kRowPurged:    "удалено пакетов",
 		kRowDiskUsed:  "диск занято",
 		kRowZram:      "zram",
-		kRowSpeed:     "скорость, MB/s",
-		kRowPing:      "ping, ms",
+		kRowSpeed:     "скорость, MB/s (до зеркала)",
+		kRowPingGW:    "задержка ДЦ, ms",
+		kRowPingNet:   "интернет, ms",
 		kRowPorts:     "открытых портов",
 		kRowRootLogin: "root-вход",
 		kRowKeyOnly:   "ssh только по ключу",
@@ -400,8 +402,9 @@ var tr = map[Lang]map[stringKey]string{
 		kRowPurged:    "purged pkgs",
 		kRowDiskUsed:  "disk used",
 		kRowZram:      "zram",
-		kRowSpeed:     "speed, MB/s",
-		kRowPing:      "ping, ms",
+		kRowSpeed:     "speed, MB/s (to mirror)",
+		kRowPingGW:    "datacenter latency, ms",
+		kRowPingNet:   "internet, ms",
 		kRowPorts:     "open ports",
 		kRowRootLogin: "root login",
 		kRowKeyOnly:   "ssh key-only",

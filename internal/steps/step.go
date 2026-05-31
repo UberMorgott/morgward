@@ -6,7 +6,6 @@ package steps
 import (
 	"encoding/base64"
 	"fmt"
-	"strings"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
@@ -40,10 +39,11 @@ func (s Status) String() string {
 // true only when both samples were valid (a comparable PRE→POST pair); when false
 // the renderers omit the bench line entirely.
 type BenchResult struct {
-	PreMBs  float64 // pre-tuning best throughput, MB/s
-	PostMBs float64 // post-tuning best throughput, MB/s
-	Ratio   float64 // PostMBs / PreMBs
-	OK      bool    // true ⇒ a valid comparable pair was measured
+	PreMBs   float64 // pre-tuning median throughput, MB/s
+	PostMBs  float64 // post-tuning median throughput, MB/s
+	Ratio    float64 // PostMBs / PreMBs
+	OK       bool    // true ⇒ valid pair measured AND tuning kept
+	Reverted bool    // true ⇒ tuning regressed throughput and was rolled back
 }
 
 // Context carries everything a step needs. The SSH client is shared and may be
@@ -87,21 +87,6 @@ func appendLineIfMissing(file, line string) string {
 	return fmt.Sprintf(
 		"__L=$(echo '%s' | base64 -d); grep -qxF \"$__L\" '%s' 2>/dev/null || printf '%%s\\n' \"$__L\" >> '%s'\n",
 		b64, file, file)
-}
-
-// anchorSysctl returns a fragment that ensures a `key = value` line exists in a
-// shared file, replacing any prior setting of the same key.
-func anchorSysctl(file, key, value string) string {
-	line := fmt.Sprintf("%s = %s", key, value)
-	b64 := base64.StdEncoding.EncodeToString([]byte(line))
-	return fmt.Sprintf(
-		"__L=$(echo '%s' | base64 -d); sed -ri '/^\\s*%s\\s*=/d' '%s' 2>/dev/null; printf '%%s\\n' \"$__L\" >> '%s'\n",
-		b64, escapeRe(key), file, file)
-}
-
-func escapeRe(s string) string {
-	r := strings.NewReplacer(".", `\.`, "+", `\+`, "*", `\*`)
-	return r.Replace(s)
 }
 
 // freshLogin opens an INDEPENDENT new SSH session (the runbook's [LOCAL]

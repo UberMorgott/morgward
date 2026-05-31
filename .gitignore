@@ -12,7 +12,7 @@
 *-stdout.txt
 id_ed25519_*
 
-# SSH keys / secrets — deep defense (never commit any private key)
+# SSH keys / secrets ? deep defense (never commit any private key)
 *.pem
 *.key
 id_rsa*
@@ -30,9 +30,10 @@ id_ed25519*
 /RUNBOOK.md
 RUNBOOK.md
 
-# Internal design notes — not for public repo
+# Internal design notes ? not for public repo
 /docs/superpowers/
 
 # Tooling / harness
 .serena/
 .claude/
+_calib*/

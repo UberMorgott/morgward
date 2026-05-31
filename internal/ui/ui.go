@@ -129,6 +129,22 @@ func (l *Logger) Detail(format string, a ...any) {
 	l.raw(fmt.Sprintf("%s   %s\n", ts, msg))
 }
 
+// isBenignNoise reports whether a stderr line is known-harmless OS chatter that
+// should not be rendered as an alarming error. On Ubuntu 26.04 the rust-coreutils
+// package wires an LD_PRELOAD for libstdbuf.so; when apt/dpkg invoke helpers that
+// lack it, ld.so emits dozens of lines of the shape
+//
+//	ERROR: ld.so: object '.../libstdbuf.so' from LD_PRELOAD cannot be preloaded
+//	(cannot open shared object file): ignored.
+//
+// The OS itself ends each with ": ignored." and carries on — these are not
+// failures. Matched conservatively (must end in ": ignored." AND mention
+// LD_PRELOAD) so real errors keep the red treatment.
+func isBenignNoise(line string) bool {
+	t := strings.TrimSpace(line)
+	return strings.HasSuffix(t, ": ignored.") && strings.Contains(t, "LD_PRELOAD")
+}
+
 // Stream is the raw passthrough for live server output: a single line emitted by
 // a remote command (stream is "out" or "err"). It goes verbatim to the log file
 // AND to the streaming sink the TUI consumes, with a subtle dim prefix so it reads
@@ -137,7 +153,10 @@ func (l *Logger) Detail(format string, a ...any) {
 func (l *Logger) Stream(stream, line string) {
 	if l.color {
 		mark := cGray + "  │ " + cReset
-		if stream == "err" {
+		// Real stderr is alarming red; known-benign OS noise (e.g. the Ubuntu
+		// 26.04 rust-coreutils LD_PRELOAD chatter) stays dim so it does not read
+		// as a wall of failures — still emitted, only its color is muted.
+		if stream == "err" && !isBenignNoise(line) {
 			mark = cRed + "  │ " + cReset
 		}
 		l.emit(fmt.Sprintf("%s%s\n", mark, line))

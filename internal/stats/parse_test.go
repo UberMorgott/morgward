@@ -115,7 +115,8 @@ func TestParseSnapshot(t *testing.T) {
 		"SSHD\tpasswordauthentication no\n" +
 		"FW\tyes\n" +
 		"F2B\tactive\n" +
-		"PING\trtt min/avg/max/mdev = 10.2/12.1/14.0/1.3 ms\n"
+		"PINGGW\trtt min/avg/max/mdev = 0.2/0.3/0.4/0.1 ms\n" +
+		"PINGNET\trtt min/avg/max/mdev = 24.0/26.0/28.0/1.3 ms\n"
 
 	s := parseSnapshot(raw)
 	if s.KernelVer != "6.8.0-31-generic" {
@@ -148,8 +149,11 @@ func TestParseSnapshot(t *testing.T) {
 	if !s.Fail2banActive {
 		t.Errorf("fail2ban not active")
 	}
-	if s.PingMs < 12.0 || s.PingMs > 12.2 {
-		t.Errorf("ping %v", s.PingMs)
+	if s.GatewayPingMs < 0.29 || s.GatewayPingMs > 0.31 {
+		t.Errorf("gateway ping %v", s.GatewayPingMs)
+	}
+	if s.InternetPingMs < 25.9 || s.InternetPingMs > 26.1 {
+		t.Errorf("internet ping %v", s.InternetPingMs)
 	}
 }
 

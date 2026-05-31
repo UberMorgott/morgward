@@ -1,10 +1,27 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/UberMorgott/morgward/internal/stats"
 	"github.com/UberMorgott/morgward/internal/steps"
 )
+
+// statsLines must render BOTH network latency rows (datacenter gateway and
+// internet) when either snapshot side has a value, with the measured numbers.
+func TestStatsLinesRendersBothPings(t *testing.T) {
+	s := Summary{
+		Before: &stats.Snapshot{GatewayPingMs: 0.3, InternetPingMs: 26.0},
+		After:  &stats.Snapshot{GatewayPingMs: 0.2, InternetPingMs: 24.0},
+	}
+	joined := strings.Join(s.statsLines(), "\n")
+	for _, want := range []string{"задержка ДЦ, ms", "интернет, ms", "0.3", "0.2", "26.0", "24.0"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("statsLines output missing %q\n%s", want, joined)
+		}
+	}
+}
 
 func TestSummaryAppliedCount(t *testing.T) {
 	s := Summary{Results: []StepResult{
@@ -47,5 +64,39 @@ func TestApplyResultMarkersNoRebootOnFail(t *testing.T) {
 	}
 	if s.UpgradedPkgs != 0 {
 		t.Fatalf("upgraded=%d want 0", s.UpgradedPkgs)
+	}
+}
+
+// A KEPT A4 bench (OK=true) lights up the bench line and overrides the snapshot
+// throughput delta with the measured PRE→POST medians.
+func TestApplyBenchKept(t *testing.T) {
+	sum := Summary{Before: &stats.Snapshot{}, After: &stats.Snapshot{}}
+	b := &steps.BenchResult{PreMBs: 10, PostMBs: 18, Ratio: 1.8, OK: true}
+	applySnapshotBench(&sum, b)
+	applyBench(&sum, b)
+	if !sum.BenchOK {
+		t.Fatalf("BenchOK=false, want true for a kept bench")
+	}
+	if sum.BenchPostMBs != 18 || sum.BenchRatio != 1.8 {
+		t.Fatalf("bench fields not copied: %+v", sum)
+	}
+	if sum.After.SpeedMBs != 18 {
+		t.Fatalf("snapshot After.SpeedMBs=%g want 18", sum.After.SpeedMBs)
+	}
+}
+
+// A REVERTED A4 bench (OK=false, Reverted=true) must leave BenchOK false so the
+// "internet improved" line is omitted, and must NOT override the snapshot speed
+// (the regressed measurement is not a real "after" the box is left in).
+func TestApplyBenchReverted(t *testing.T) {
+	sum := Summary{Before: &stats.Snapshot{SpeedMBs: 0}, After: &stats.Snapshot{SpeedMBs: 0}}
+	b := &steps.BenchResult{PreMBs: 15, PostMBs: 2, Ratio: 0.13, OK: false, Reverted: true}
+	applySnapshotBench(&sum, b)
+	applyBench(&sum, b)
+	if sum.BenchOK {
+		t.Fatalf("BenchOK=true, want false for a reverted bench")
+	}
+	if sum.After.SpeedMBs != 0 {
+		t.Fatalf("reverted bench must not override snapshot speed; got %g", sum.After.SpeedMBs)
 	}
 }

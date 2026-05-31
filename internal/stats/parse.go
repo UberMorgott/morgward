@@ -167,8 +167,10 @@ func parseSnapshot(raw string) *Snapshot {
 			s.FirewallActive = val == "yes"
 		case "F2B":
 			s.Fail2banActive = val == "active"
-		case "PING":
-			s.PingMs = parsePingMs(val)
+		case "PINGGW":
+			s.GatewayPingMs = parsePingMs(val)
+		case "PINGNET":
+			s.InternetPingMs = parsePingMs(val)
 		}
 	}
 	s.RootLogin, s.KeyOnly = parseSSHD(sshdLines.String())

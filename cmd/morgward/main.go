@@ -103,9 +103,12 @@ func main() {
 	fs := flag.NewFlagSet("morgward", flag.ExitOnError)
 	fs.Usage = func() { fmt.Print(usage) }
 	bindFlags(fs, cfg, &modeStr)
-	_ = fs.Parse(args)
+	// Go's flag package stops at the first non-flag arg, so flags placed after
+	// positional step IDs (e.g. `step A4 A6.5 --host X`) would never be parsed.
+	// Partition args into flags and positionals first so flag order is irrelevant.
+	flagArgs, stepIDs := partitionArgs(args)
+	_ = fs.Parse(flagArgs)
 	cfg.Mode = config.Mode(strings.ToLower(modeStr))
-	stepIDs := fs.Args() // positional args after flags (step IDs)
 
 	// Secrets via env (no leak into shell history / process args / transcripts).
 	if cfg.Password == "" {
@@ -157,6 +160,46 @@ func printKeyBlock(pem string) {
 		fmt.Println()
 	}
 	fmt.Println("----- END KEY -----")
+}
+
+// valueFlags lists the value-taking flag names bound in bindFlags (everything
+// except the sole bool flag --assume-yes).
+var valueFlags = map[string]bool{
+	"host":       true,
+	"port":       true,
+	"user":       true,
+	"password":   true,
+	"key":        true,
+	"mode":       true,
+	"admin-user": true,
+	"log-file":   true,
+}
+
+// partitionArgs splits args into flag tokens (and their values) and positional
+// tokens (step IDs), independent of order. A value-taking flag in space form
+// (`--host X`) consumes the following token as its value; `--name=value` and the
+// bool `--assume-yes` consume no separate token.
+func partitionArgs(args []string) (flagArgs, positional []string) {
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if len(tok) > 1 && tok[0] == '-' {
+			name := strings.TrimLeft(tok, "-")
+			if strings.IndexByte(name, '=') >= 0 {
+				// --name=value form: self-contained flag token.
+				flagArgs = append(flagArgs, tok)
+				continue
+			}
+			flagArgs = append(flagArgs, tok)
+			if valueFlags[name] && i+1 < len(args) {
+				// Space form: next token is this flag's value.
+				i++
+				flagArgs = append(flagArgs, args[i])
+			}
+			continue
+		}
+		positional = append(positional, tok)
+	}
+	return flagArgs, positional
 }
 
 func bindFlags(fs *flag.FlagSet, cfg *config.Config, modeStr *string) {

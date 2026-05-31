@@ -49,8 +49,8 @@ func TestStatsLinesKernel(t *testing.T) {
 
 func TestStatsLinesDiskAndNet(t *testing.T) {
 	s := Summary{
-		Before: &stats.Snapshot{DiskUsedKB: 2 * 1024 * 1024, DiskTotalKB: 20 * 1024 * 1024, ZramActive: false, SpeedMBs: 10, PingMs: 12.5},
-		After:  &stats.Snapshot{DiskUsedKB: 3 * 1024 * 1024, DiskTotalKB: 20 * 1024 * 1024, ZramActive: true, SpeedMBs: 40, PingMs: 11.0},
+		Before: &stats.Snapshot{DiskUsedKB: 2 * 1024 * 1024, DiskTotalKB: 20 * 1024 * 1024, ZramActive: false, SpeedMBs: 10, GatewayPingMs: 0.3, InternetPingMs: 26.0},
+		After:  &stats.Snapshot{DiskUsedKB: 3 * 1024 * 1024, DiskTotalKB: 20 * 1024 * 1024, ZramActive: true, SpeedMBs: 40, GatewayPingMs: 0.2, InternetPingMs: 24.0},
 	}
 	joined := strings.Join(s.statsLines(), "\n")
 	if !strings.Contains(joined, "→") {
@@ -66,8 +66,8 @@ func TestStatsLinesDiskAndNet(t *testing.T) {
 
 func TestStatsLinesNetSkipsZero(t *testing.T) {
 	s := Summary{
-		Before: &stats.Snapshot{SpeedMBs: 0, PingMs: 0},
-		After:  &stats.Snapshot{SpeedMBs: 0, PingMs: 0},
+		Before: &stats.Snapshot{SpeedMBs: 0, GatewayPingMs: 0, InternetPingMs: 0},
+		After:  &stats.Snapshot{SpeedMBs: 0, GatewayPingMs: 0, InternetPingMs: 0},
 	}
 	joined := strings.Join(s.statsLines(), "\n")
 	if strings.Contains(joined, "MB/s") {

@@ -23,7 +23,8 @@ type Snapshot struct {
 	KeyOnly        bool
 	FirewallActive bool
 	Fail2banActive bool
-	PingMs         float64
+	GatewayPingMs  float64 // RTT to the default-route gateway (datacenter link)
+	InternetPingMs float64 // RTT to 8.8.8.8 (real internet latency)
 	SpeedMBs       float64 // filled by the engine from A4 BenchResult, not the script
 }
 
@@ -53,7 +54,11 @@ else
   printf 'FW\t%s\n' no
 fi
 printf 'F2B\t%s\n' "$(systemctl is-active fail2ban 2>/dev/null)"
-printf 'PING\t%s\n' "$(ping -c3 -w5 1.1.1.1 2>/dev/null | tail -1)"
+GW=$(ip route 2>/dev/null | awk '/^default/{print $3; exit}')
+if [ -n "$GW" ]; then
+  printf 'PINGGW\t%s\n' "$(ping -c3 -w5 "$GW" 2>/dev/null | tail -1)"
+fi
+printf 'PINGNET\t%s\n' "$(ping -c3 -w5 8.8.8.8 2>/dev/null | tail -1)"
 `
 
 // Capture runs the snapshot script (via Sudo, so it works whether the client is

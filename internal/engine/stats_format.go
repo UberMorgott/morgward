@@ -97,10 +97,13 @@ func (s Summary) statsLines() []string {
 	// СЕТЬ.
 	net := []string{}
 	if b.SpeedMBs > 0 || a.SpeedMBs > 0 {
-		net = append(net, formatDelta("скорость, MB/s", speedStr(b.SpeedMBs), speedStr(a.SpeedMBs)))
+		net = append(net, formatDelta("скорость, MB/s (до зеркала)", speedStr(b.SpeedMBs), speedStr(a.SpeedMBs)))
 	}
-	if b.PingMs > 0 || a.PingMs > 0 {
-		net = append(net, formatDelta("ping, ms", pingStr(b.PingMs), pingStr(a.PingMs)))
+	if b.GatewayPingMs > 0 || a.GatewayPingMs > 0 {
+		net = append(net, formatDelta("задержка ДЦ, ms", pingStr(b.GatewayPingMs), pingStr(a.GatewayPingMs)))
+	}
+	if b.InternetPingMs > 0 || a.InternetPingMs > 0 {
+		net = append(net, formatDelta("интернет, ms", pingStr(b.InternetPingMs), pingStr(a.InternetPingMs)))
 	}
 	if len(net) > 0 {
 		out = append(out, "СЕТЬ:")
