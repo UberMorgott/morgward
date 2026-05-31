@@ -324,6 +324,31 @@ func TestFormViewPadding(t *testing.T) {
 	}
 }
 
+// TestFormValidationFramed asserts an empty Host fails validation, sets errMsg,
+// and surfaces a frErr row after the inputs and Start button.
+func TestFormValidationFramed(t *testing.T) {
+	m := formModel(80, 24)
+	m.inputs[fHost].SetValue("")
+	m.inputs[fPass].SetValue("secret") // provide auth so host is the failing field
+	next, _ := m.start()
+	mm := next.(model)
+	if mm.errMsg == "" {
+		t.Fatalf("empty host did not set errMsg")
+	}
+	if mm.phase != phaseForm {
+		t.Fatalf("validation failure should stay on phaseForm, got %v", mm.phase)
+	}
+	rows := mm.formRows()
+	errIdx := kindIndex(rows, frErr)
+	if errIdx < 0 {
+		t.Fatalf("no frErr row after failed validation")
+	}
+	startIdx := kindIndex(rows, frStart)
+	if errIdx < startIdx {
+		t.Fatalf("frErr idx=%d should be after frStart=%d", errIdx, startIdx)
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width
