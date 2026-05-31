@@ -150,6 +150,37 @@ func TestActionRemovedFromForm(t *testing.T) {
 	}
 }
 
+// kindIndex returns the slice index of the first row of the given kind, or -1.
+func kindIndex(rows []formRow, k formRowKind) int {
+	for i, r := range rows {
+		if r.kind == k {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestSaveLogTogglePosition asserts the save-log toggle carries its label and is
+// positioned in the lower-right cluster (after Mode and its contextual Help row).
+func TestSaveLogTogglePosition(t *testing.T) {
+	m := formModel(80, 24)
+	m.advancedOpen = false
+	m.saveLog = false
+	rows := m.formRows()
+	logIdx := kindIndex(rows, frLog)
+	if logIdx < 0 {
+		t.Fatalf("no frLog row")
+	}
+	if !strings.Contains(rows[logIdx].text, t2(m.lang, kSaveLogLabel)) {
+		t.Fatalf("frLog row missing save-log label: %q", rows[logIdx].text)
+	}
+	modeIdx := kindIndex(rows, frMode)
+	helpIdx := kindIndex(rows, frHelp)
+	if !(logIdx > modeIdx && logIdx > helpIdx) {
+		t.Fatalf("frLog idx=%d should be after frMode=%d and frHelp=%d", logIdx, modeIdx, helpIdx)
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width

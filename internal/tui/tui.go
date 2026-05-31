@@ -1428,15 +1428,16 @@ func (m model) formRows() []formRow {
 		[]string{"soft", "strict"},
 		[]string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)},
 		string(m.mode), m.focus == rowMode, colW)})
-	// Save-log-to-file toggle: writes the full run log to a file (cfg.LogFile) when
-	// on, off by default. Canonical tokens on/off; localized yes/no pill names.
+	// Contextual toggle help: accent-tinted/italic (tipStyle) so it reads as form
+	// body, distinct from the gray bottom control hint. Indented to the value column.
+	rows = append(rows, formRow{kind: frHelp, text: indent + tipStyle.Render(m.toggleHelp())})
+	// Save-log-to-file toggle: a session preference placed in the lower-right cluster
+	// (after Mode + its help). Writes the full run log to cfg.LogFile when on, off by
+	// default. Canonical tokens on/off; localized yes/no pill names.
 	rows = append(rows, formRow{kind: frLog, text: renderToggle(t(m.lang, kSaveLogLabel),
 		[]string{"on", "off"},
 		[]string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)},
 		saveLogToken(m.saveLog), m.focus == rowLog, colW)})
-	// Contextual toggle help: accent-tinted/italic (tipStyle) so it reads as form
-	// body, distinct from the gray bottom control hint. Indented to the value column.
-	rows = append(rows, formRow{kind: frHelp, text: indent + tipStyle.Render(m.toggleHelp())})
 	rows = append(rows, formRow{kind: frBlank})
 
 	// Start + Cancel buttons on one line, aligned to the value column (col colW+1).
