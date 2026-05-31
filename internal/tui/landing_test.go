@@ -133,6 +133,23 @@ func TestDisclosureToggleClickable(t *testing.T) {
 	}
 }
 
+// TestActionRemovedFromForm asserts the run/detect/verify selector is gone from
+// the form while m.command stays "run" (still used by the engine).
+func TestActionRemovedFromForm(t *testing.T) {
+	m := formModel(80, 24)
+	if hasKind(m.formRows(), frAction) {
+		t.Fatalf("frAction row still present in formRows")
+	}
+	if m.command != "run" {
+		t.Fatalf("m.command=%q want \"run\"", m.command)
+	}
+	// also with advanced open
+	m.advancedOpen = true
+	if hasKind(m.formRows(), frAction) {
+		t.Fatalf("frAction row present when advancedOpen")
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width

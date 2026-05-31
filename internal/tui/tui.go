@@ -90,7 +90,7 @@ const (
 func (m model) labelColW() int {
 	keys := []stringKey{
 		kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey,
-		kLabelMode, kLabelAction, kSaveLogLabel,
+		kLabelMode, kSaveLogLabel,
 	}
 	w := 0
 	for _, k := range keys {
@@ -133,10 +133,9 @@ const (
 const (
 	rowDisclosure = nInputs     // "▸ Дополнительно" advanced-inputs toggle
 	rowMode       = nInputs + 1 // soft/strict toggle
-	rowCommand    = nInputs + 2 // run/detect/verify toggle
-	rowLog        = nInputs + 3 // save-log-to-file toggle
-	rowStart      = nInputs + 4 // start button
-	nRows         = nInputs + 5
+	rowLog        = nInputs + 2 // save-log-to-file toggle
+	rowStart      = nInputs + 3 // start button
+	nRows         = nInputs + 4
 )
 
 // focusableRows returns the ordered list of currently-focusable row indices.
@@ -154,10 +153,7 @@ func (m model) focusableRows() []int {
 		rows = append(rows, i)
 	}
 	rows = append(rows, rowDisclosure)
-	rows = append(rows, rowCommand)
-	if m.command != "detect" {
-		rows = append(rows, rowMode)
-	}
+	rows = append(rows, rowMode)
 	rows = append(rows, rowLog)
 	rows = append(rows, rowStart)
 	return rows
@@ -207,8 +203,7 @@ type model struct {
 	inputs  []textinput.Model
 	focus   int
 	mode    config.Mode
-	command string
-	cmds    []string
+	command string // engine command token; the form no longer exposes a selector (stays "run")
 	errMsg  string
 	saveLog bool // form toggle: write the full run log to a file (sets cfg.LogFile)
 	// advancedOpen is the landing "▸ Дополнительно" disclosure state: when true the
@@ -306,7 +301,6 @@ func newModel() model {
 		inputs:  ins,
 		mode:    config.ModeSoft,
 		command: "run",
-		cmds:    []string{"run", "detect", "verify"},
 		logs:    make(chan string, 4096),
 		done:    make(chan error, 1),
 		connCh:  make(chan monitor.ConnInfo, 1),
@@ -685,19 +679,6 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case rowLog:
 			m.saveLog = !m.saveLog
-		case rowCommand:
-			i := indexOf(m.cmds, m.command)
-			if msg.String() == "right" {
-				i = (i + 1) % len(m.cmds)
-			} else {
-				i = (i - 1 + len(m.cmds)) % len(m.cmds)
-			}
-			m.command = m.cmds[i]
-			// If switching to detect hides the Mode row, never leave focus
-			// stranded on it (defensive: focus is on rowCommand here).
-			if m.command == "detect" && m.focus == rowMode {
-				m.focus = rowCommand
-			}
 		}
 		return m, nil
 	case "enter":
@@ -1173,7 +1154,6 @@ type formHit struct {
 	kind  formRowKind
 	field int    // frInput: input index
 	mode  string // frMode: "soft"/"strict"
-	cmd   string // frAction: "run"/"detect"/"verify"
 	log   bool   // frLog: true=on (save log), false=off
 	pill  int    // frStart: 0=Start, 1=Cancel
 	ok    bool
@@ -1204,11 +1184,6 @@ func (m model) formHitAtClick(x, y int) formHit {
 		opts := []string{"soft", "strict"}
 		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
 			return formHit{kind: frMode, mode: opts[i], ok: true}
-		}
-	case frAction:
-		names := []string{t(m.lang, kOptRun), t(m.lang, kOptDetect), t(m.lang, kOptVerify)}
-		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
-			return formHit{kind: frAction, cmd: m.cmds[i], ok: true}
 		}
 	case frLog:
 		names := []string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)}
@@ -1291,13 +1266,6 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 	case frMode:
 		m.mode = config.Mode(hit.mode)
 		m.focus = rowMode
-		return m, nil
-	case frAction:
-		m.command = hit.cmd
-		// Clicking the Action row always lands focus on rowCommand, so the keyboard
-		// handler's "detect hides Mode → don't strand focus on rowMode" guard is
-		// satisfied unconditionally here.
-		m.focus = rowCommand
 		return m, nil
 	case frLog:
 		m.saveLog = hit.log
@@ -1454,18 +1422,12 @@ func (m model) formRows() []formRow {
 	rows = append(rows, formRow{kind: frDisclosure, text: indent + disStyle.Render(disLabel)})
 
 	rows = append(rows, formRow{kind: frBlank})
-	rows = append(rows, formRow{kind: frAction, text: renderToggle(t(m.lang, kLabelAction),
-		m.cmds,
-		[]string{t(m.lang, kOptRun), t(m.lang, kOptDetect), t(m.lang, kOptVerify)},
-		m.command, m.focus == rowCommand, colW)})
-	// Mode only matters for run/verify; the engine ignores it for the read-only
-	// detect, so the row is hidden (and unfocusable) when Action is detect.
-	if m.command != "detect" {
-		rows = append(rows, formRow{kind: frMode, text: renderToggle(t(m.lang, kLabelMode),
-			[]string{"soft", "strict"},
-			[]string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)},
-			string(m.mode), m.focus == rowMode, colW)})
-	}
+	// The run/detect/verify action selector is intentionally NOT shown on the
+	// landing form (m.command stays "run"; engine tokens are unaffected).
+	rows = append(rows, formRow{kind: frMode, text: renderToggle(t(m.lang, kLabelMode),
+		[]string{"soft", "strict"},
+		[]string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)},
+		string(m.mode), m.focus == rowMode, colW)})
 	// Save-log-to-file toggle: writes the full run log to a file (cfg.LogFile) when
 	// on, off by default. Canonical tokens on/off; localized yes/no pill names.
 	rows = append(rows, formRow{kind: frLog, text: renderToggle(t(m.lang, kSaveLogLabel),
@@ -1557,24 +1519,14 @@ func (m model) formView() string {
 // toggleHelp returns a one-line explanation of the toggle option currently in
 // focus (Mode or Action), so the operator knows what each pill does.
 func (m model) toggleHelp() string {
-	// Mode is hidden for detect; don't surface any Mode guidance then.
-	modeShown := m.command != "detect"
+	// The action selector is gone from the form; only Mode carries contextual help.
 	switch {
-	case modeShown && m.focus == rowMode && m.mode == config.ModeStrict:
+	case m.focus == rowMode && m.mode == config.ModeStrict:
 		return t(m.lang, kHelpModeStrict)
-	case modeShown && m.focus == rowMode:
+	case m.focus == rowMode:
 		return t(m.lang, kHelpModeSoft)
-	case m.focus == rowCommand && m.command == "detect":
-		return t(m.lang, kHelpActDetect)
-	case m.focus == rowCommand && m.command == "verify":
-		return t(m.lang, kHelpActVerify)
-	case m.focus == rowCommand:
-		return t(m.lang, kHelpActRun)
 	default:
-		if !modeShown {
-			return fmt.Sprintf(t(m.lang, kHelpActionOnly), langActionName(m.lang, m.command))
-		}
-		return fmt.Sprintf(t(m.lang, kHelpModeAction), langModeName(m.lang, string(m.mode)), langActionName(m.lang, m.command))
+		return fmt.Sprintf(t(m.lang, kHelpModeOnly), langModeName(m.lang, string(m.mode)))
 	}
 }
 
@@ -2429,9 +2381,9 @@ func (m model) progressLine(innerW int) string {
 	case m.total > 0:
 		return m.barLine(innerW)
 	default:
-		// No step list yet (detect/verify, or before the first step). Still show
-		// the live spinner + elapsed timer so the view never looks frozen.
-		label := langActionName(m.lang, m.command) + " · " + strings.TrimSpace(m.inputs[fHost].Value())
+		// No step list yet (before the first step). Still show the live spinner +
+		// elapsed timer so the view never looks frozen.
+		label := strings.TrimSpace(m.inputs[fHost].Value())
 		if p := m.livePrefix(); p != "" {
 			label = p + label
 		}
@@ -2897,15 +2849,6 @@ func stepFocus(rows []int, cur, dir int) int {
 	}
 	n := len(rows)
 	return rows[(at+dir+n)%n]
-}
-
-func indexOf(s []string, v string) int {
-	for i, x := range s {
-		if x == v {
-			return i
-		}
-	}
-	return 0
 }
 
 // validHost accepts an IP literal or a syntactically valid hostname.

@@ -51,10 +51,6 @@ const (
 	kLabelMode
 	kOptSoft
 	kOptStrict
-	kLabelAction
-	kOptRun
-	kOptDetect
-	kOptVerify
 
 	// start button
 	kStart
@@ -64,11 +60,7 @@ const (
 	// toggle help (contextual)
 	kHelpModeStrict
 	kHelpModeSoft
-	kHelpActDetect
-	kHelpActVerify
-	kHelpActRun
-	kHelpActionOnly // "action=%s — focus a pill (tab) for details"
-	kHelpModeAction // "mode=%s · action=%s — focus a pill (tab) for details"
+	kHelpModeOnly // "mode=%s — focus a pill (tab) for details"
 
 	// option names interpolated into the above (lowercase, stable per language)
 	kModeSoftName
@@ -215,13 +207,9 @@ var tr = map[Lang]map[stringKey]string{
 		kPhPass: "пароль SSH",
 		kPhKey:  "путь к приватному ключу (пусто — использовать пароль)",
 
-		kLabelMode:   "Режим",
-		kOptSoft:     "мягкий",
-		kOptStrict:   "строгий",
-		kLabelAction: "Действие",
-		kOptRun:      "запуск",
-		kOptDetect:   "разведка",
-		kOptVerify:   "анализ",
+		kLabelMode: "Режим",
+		kOptSoft:   "мягкий",
+		kOptStrict: "строгий",
 
 		kStart:      "Старт",
 		kCancel:     "Отмена",
@@ -229,11 +217,7 @@ var tr = map[Lang]map[stringKey]string{
 
 		kHelpModeStrict: "строгий: заблокировать пароль root и отключить вход root по SSH",
 		kHelpModeSoft:   "мягкий: оставить резервный пароль на консоли (root не блокируется) — безопаснее по умолчанию",
-		kHelpActDetect:  "разведка: только чтение — инвентаризация, ничего не меняет",
-		kHelpActVerify:  "проверка: запустить только матрицу верификации §V",
-		kHelpActRun:     "запуск: полное усиление Фазы A + верификация §V",
-		kHelpActionOnly: "действие=%s — выберите пункт (tab) для подробностей",
-		kHelpModeAction: "режим=%s · действие=%s — выберите пункт (tab) для подробностей",
+		kHelpModeOnly:   "режим=%s — выберите пункт (tab) для подробностей",
 
 		kModeSoftName:   "мягкий",
 		kModeStrictName: "строгий",
@@ -345,13 +329,9 @@ var tr = map[Lang]map[stringKey]string{
 		kPhPass: "ssh password",
 		kPhKey:  "private key path (leave empty to use password)",
 
-		kLabelMode:   "Mode",
-		kOptSoft:     "soft",
-		kOptStrict:   "strict",
-		kLabelAction: "Action",
-		kOptRun:      "run",
-		kOptDetect:   "detect",
-		kOptVerify:   "verify",
+		kLabelMode: "Mode",
+		kOptSoft:   "soft",
+		kOptStrict: "strict",
 
 		kStart:      "Start",
 		kCancel:     "Cancel",
@@ -359,11 +339,7 @@ var tr = map[Lang]map[stringKey]string{
 
 		kHelpModeStrict: "strict: lock the root password & disable root SSH login",
 		kHelpModeSoft:   "soft: keep a console password fallback (root not locked) — safer default",
-		kHelpActDetect:  "detect: read-only discovery & inventory — changes nothing",
-		kHelpActVerify:  "verify: run only the §V verification matrix",
-		kHelpActRun:     "run: full Phase A hardening + §V verification",
-		kHelpActionOnly: "action=%s — focus a pill (tab) for details",
-		kHelpModeAction: "mode=%s · action=%s — focus a pill (tab) for details",
+		kHelpModeOnly:   "mode=%s — focus a pill (tab) for details",
 
 		kModeSoftName:   "soft",
 		kModeStrictName: "strict",
@@ -485,18 +461,6 @@ func langModeName(lang Lang, m string) string {
 		return t(lang, kModeStrictName)
 	default:
 		return t(lang, kModeSoftName)
-	}
-}
-
-// langActionName maps the canonical command token to its localized display name.
-func langActionName(lang Lang, cmd string) string {
-	switch cmd {
-	case "detect":
-		return t(lang, kOptDetect)
-	case "verify":
-		return t(lang, kOptVerify)
-	default:
-		return t(lang, kOptRun)
 	}
 }
 
