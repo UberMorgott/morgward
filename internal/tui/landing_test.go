@@ -396,6 +396,35 @@ func TestModesUnchanged(t *testing.T) {
 	}
 }
 
+// TestLandingFormRenderComplete drives the whole View() path on a phaseForm model
+// and asserts the rendered content carries the version header, an input frame, the
+// disclosure toggle, the mode selector, the save-log toggle, and the Start button.
+func TestLandingFormRenderComplete(t *testing.T) {
+	m := newModel()
+	m.w, m.h = 80, 24
+	v := m.View()
+	out := v.Content
+	if strings.TrimSpace(out) == "" {
+		t.Fatalf("View() returned empty content")
+	}
+	checks := map[string]string{
+		"version name": version.Name + " v" + version.Version,
+		"tagline":      t2(m.lang, kVersionTagline),
+		"host label":   t2(m.lang, kLabelHost),
+		"password":     t2(m.lang, kLabelPassword),
+		"disclosure":   "Дополнительно",
+		"mode label":   t2(m.lang, kLabelMode),
+		"save-log":     t2(m.lang, kSaveLogLabel),
+		"start button": t2(m.lang, kStart),
+		"catalog link": t2(m.lang, kCatalogLink),
+	}
+	for name, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Fatalf("rendered landing missing %s (%q)", name, want)
+		}
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width
