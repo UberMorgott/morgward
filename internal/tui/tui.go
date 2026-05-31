@@ -1618,22 +1618,56 @@ var (
 // handled by the caller — this always returns a value.
 func humanKB64(kb int64) string { return humanKB(float64(kb)) }
 
-// sumDelta renders "label  before → after" with the same suppression rules as the
-// engine's formatDelta: arrow only when both sides are known and differ; lone value
-// when one side is empty; "" when both are empty so the caller skips the row.
-func sumDelta(label, before, after string) string {
+// sumRowIndent is the leading indent of every metric row under a group header, and
+// sumRowGap is the spacing between the (padded) label column and the value column.
+const (
+	sumRowIndent = "  "
+	sumRowGap    = "  "
+)
+
+// sumOldStyle dims the pre-run ("old") value of a before→after pair so the eye lands
+// on the new value; the arrow stays plain. Reuses the monitor's dim color (240).
+var sumOldStyle = monDimStyle
+
+// sumValue renders the value column of a metric row with the same suppression rules
+// as the engine's formatDelta: "" when both sides are empty (caller drops the row),
+// a lone value when only one side is known or both are equal, and a dimmed
+// "old → new" pair when both are known and differ.
+func sumValue(before, after string) string {
 	switch {
 	case before == "" && after == "":
 		return ""
 	case before == "":
-		return fmt.Sprintf("  %s  %s", label, after)
+		return after
 	case after == "":
-		return fmt.Sprintf("  %s  %s", label, before)
+		return before
 	case before == after:
-		return fmt.Sprintf("  %s  %s", label, before)
+		return before
 	default:
-		return fmt.Sprintf("  %s  %s → %s", label, before, after)
+		return sumOldStyle.Render(before) + " → " + after
 	}
+}
+
+// sumRow lays out one aligned metric row: indent + label padded to labelW display
+// cells + gap + value. The label pad is clamped so the value column never starts past
+// innerW, and the whole line is truncated as a final guard so it can never overflow
+// the box. Returns "" when value is empty so the caller skips the row.
+func sumRow(label, value string, labelW, innerW int) string {
+	if value == "" {
+		return ""
+	}
+	// Clamp the label column so indent + label + gap + value fits innerW; never pad
+	// the label narrower than its own text.
+	rawW := lipgloss.Width(label)
+	maxLabelW := innerW - lipgloss.Width(sumRowIndent) - lipgloss.Width(sumRowGap) - lipgloss.Width(value)
+	if labelW > maxLabelW {
+		labelW = maxLabelW
+	}
+	if labelW < rawW {
+		labelW = rawW
+	}
+	line := sumRowIndent + padLabel(label, labelW) + sumRowGap + value
+	return truncDisplay(line, innerW)
 }
 
 // summaryHeader builds the localized one-line tally:
@@ -1662,7 +1696,7 @@ func (m model) boolWordL(v bool) string {
 // disk/memory, network, security). Both snapshots may be nil — when both are nil
 // it returns nil so summaryView shows only the header + fix list. Mirrors the
 // engine's statsLines suppression: rows with unknown data are dropped.
-func (m model) summaryStatLines() []string {
+func (m model) summaryStatLines(innerW int) []string {
 	s := m.summary
 	if s.Before == nil && s.After == nil {
 		return nil
@@ -1676,60 +1710,77 @@ func (m model) summaryStatLines() []string {
 		a = empty
 	}
 
+	// statRow is a label + already-rendered value column; empty values are dropped.
+	type statRow struct{ label, value string }
+
+	// emitGroup renders a header followed by its rows, aligning every row's value to
+	// the group's widest label (display cells, Cyrillic-aware). A group with no
+	// non-empty rows still emits its header (mirrors the prior always-on sections);
+	// the network block decides on its own whether to call this at all.
 	var out []string
-	add := func(line string) {
-		if line != "" {
-			out = append(out, line)
+	emitGroup := func(headK stringKey, rows []statRow) {
+		if len(out) > 0 {
+			out = append(out, "") // one blank line between groups
+		}
+		out = append(out, sumHeadStyle.Render(t(m.lang, headK)))
+		labelW := 0
+		for _, r := range rows {
+			if r.value == "" {
+				continue
+			}
+			if w := lipgloss.Width(r.label); w > labelW {
+				labelW = w
+			}
+		}
+		for _, r := range rows {
+			if line := sumRow(r.label, r.value, labelW, innerW); line != "" {
+				out = append(out, line)
+			}
 		}
 	}
-	head := func(k stringKey) { out = append(out, sumHeadStyle.Render(t(m.lang, k))) }
 
 	// ПАКЕТЫ И ЯДРО.
-	head(kSecPkgKernel)
+	var pkg []statRow
 	if s.UpgradedPkgs > 0 {
-		add(fmt.Sprintf("  %s  %d", t(m.lang, kRowUpgraded), s.UpgradedPkgs))
+		pkg = append(pkg, statRow{t(m.lang, kRowUpgraded), strconv.Itoa(s.UpgradedPkgs)})
 	}
-	add(sumDelta(t(m.lang, kRowKernel), b.KernelVer, a.KernelVer))
+	pkg = append(pkg, statRow{t(m.lang, kRowKernel), sumValue(b.KernelVer, a.KernelVer)})
 	if s.PurgedPkgs > 0 {
-		add(fmt.Sprintf("  %s  %d", t(m.lang, kRowPurged), s.PurgedPkgs))
+		pkg = append(pkg, statRow{t(m.lang, kRowPurged), strconv.Itoa(s.PurgedPkgs)})
 	}
+	emitGroup(kSecPkgKernel, pkg)
 
 	// ДИСК И ПАМЯТЬ.
-	head(kSecDiskMem)
-	add(sumDelta(t(m.lang, kRowDiskUsed), sumDiskStr(b), sumDiskStr(a)))
+	disk := []statRow{{t(m.lang, kRowDiskUsed), sumValue(sumDiskStr(b), sumDiskStr(a))}}
 	if !b.ZramActive && a.ZramActive {
-		add(fmt.Sprintf("  %s  %s", t(m.lang, kRowZram), t(m.lang, kZramAdded)))
+		disk = append(disk, statRow{t(m.lang, kRowZram), t(m.lang, kZramAdded)})
 	}
+	emitGroup(kSecDiskMem, disk)
 
 	// СЕТЬ (whole block dropped when there is no speed/ping data on either side).
-	var net []string
+	var net []statRow
 	if b.SpeedMBs > 0 || a.SpeedMBs > 0 {
-		if l := sumDelta(t(m.lang, kRowSpeed), sumSpeedStr(b.SpeedMBs), sumSpeedStr(a.SpeedMBs)); l != "" {
-			net = append(net, l)
-		}
+		net = append(net, statRow{t(m.lang, kRowSpeed), sumValue(sumSpeedStr(b.SpeedMBs), sumSpeedStr(a.SpeedMBs))})
 	}
 	if b.GatewayPingMs > 0 || a.GatewayPingMs > 0 {
-		if l := sumDelta(t(m.lang, kRowPingGW), sumSpeedStr(b.GatewayPingMs), sumSpeedStr(a.GatewayPingMs)); l != "" {
-			net = append(net, l)
-		}
+		net = append(net, statRow{t(m.lang, kRowPingGW), sumValue(sumSpeedStr(b.GatewayPingMs), sumSpeedStr(a.GatewayPingMs))})
 	}
 	if b.InternetPingMs > 0 || a.InternetPingMs > 0 {
-		if l := sumDelta(t(m.lang, kRowPingNet), sumSpeedStr(b.InternetPingMs), sumSpeedStr(a.InternetPingMs)); l != "" {
-			net = append(net, l)
-		}
+		net = append(net, statRow{t(m.lang, kRowPingNet), sumValue(sumSpeedStr(b.InternetPingMs), sumSpeedStr(a.InternetPingMs))})
 	}
 	if len(net) > 0 {
-		head(kSecNetwork)
-		out = append(out, net...)
+		emitGroup(kSecNetwork, net)
 	}
 
 	// БЕЗОПАСНОСТЬ.
-	head(kSecSecurity)
-	add(sumDelta(t(m.lang, kRowPorts), sumPortsStr(b.OpenPorts), sumPortsStr(a.OpenPorts)))
-	add(sumDelta(t(m.lang, kRowRootLogin), b.RootLogin, a.RootLogin))
-	add(sumDelta(t(m.lang, kRowKeyOnly), m.boolWordL(b.KeyOnly), m.boolWordL(a.KeyOnly)))
-	add(sumDelta(t(m.lang, kRowFirewall), m.boolWordL(b.FirewallActive), m.boolWordL(a.FirewallActive)))
-	add(sumDelta(t(m.lang, kRowFail2ban), m.boolWordL(b.Fail2banActive), m.boolWordL(a.Fail2banActive)))
+	sec := []statRow{
+		{t(m.lang, kRowPorts), sumValue(sumPortsStr(b.OpenPorts), sumPortsStr(a.OpenPorts))},
+		{t(m.lang, kRowRootLogin), sumValue(b.RootLogin, a.RootLogin)},
+		{t(m.lang, kRowKeyOnly), sumValue(m.boolWordL(b.KeyOnly), m.boolWordL(a.KeyOnly))},
+		{t(m.lang, kRowFirewall), sumValue(m.boolWordL(b.FirewallActive), m.boolWordL(a.FirewallActive))},
+		{t(m.lang, kRowFail2ban), sumValue(m.boolWordL(b.Fail2banActive), m.boolWordL(a.Fail2banActive))},
+	}
+	emitGroup(kSecSecurity, sec)
 
 	return out
 }
@@ -1896,7 +1947,7 @@ func (m model) matrixBodyLines(innerW int) []string {
 func (m model) summaryBodyLines() []string {
 	var body []string
 	body = append(body, m.summaryHeader())
-	if blocks := m.summaryStatLines(); len(blocks) > 0 {
+	if blocks := m.summaryStatLines(innerWidth(m.boxWidth())); len(blocks) > 0 {
 		body = append(body, "")
 		body = append(body, blocks...)
 	}
