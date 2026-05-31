@@ -164,7 +164,7 @@ func kindIndex(rows []formRow, k formRowKind) int {
 }
 
 // TestSaveLogTogglePosition asserts the save-log toggle carries its label and is
-// positioned in the lower-right cluster (after Mode and its contextual Help row).
+// positioned after the disclosure toggle and before the Connect button.
 func TestSaveLogTogglePosition(t *testing.T) {
 	m := formModel(80, 24)
 	m.advancedOpen = false
@@ -177,10 +177,10 @@ func TestSaveLogTogglePosition(t *testing.T) {
 	if !strings.Contains(rows[logIdx].text, t2(m.lang, kSaveLogLabel)) {
 		t.Fatalf("frLog row missing save-log label: %q", rows[logIdx].text)
 	}
-	modeIdx := kindIndex(rows, frMode)
-	helpIdx := kindIndex(rows, frHelp)
-	if !(logIdx > modeIdx && logIdx > helpIdx) {
-		t.Fatalf("frLog idx=%d should be after frMode=%d and frHelp=%d", logIdx, modeIdx, helpIdx)
+	disIdx := kindIndex(rows, frDisclosure)
+	startIdx := kindIndex(rows, frStart)
+	if !(logIdx > disIdx && logIdx < startIdx) {
+		t.Fatalf("frLog idx=%d should be after frDisclosure=%d and before frStart=%d", logIdx, disIdx, startIdx)
 	}
 }
 
@@ -232,11 +232,6 @@ func TestFormHitTestAccuracy(t *testing.T) {
 			hit := m.formHitAtClick(0, y)
 			if !hit.ok || hit.kind != frDisclosure {
 				t.Fatalf("row %d (frDisclosure): hit=%+v", i, hit)
-			}
-		case frMode:
-			hit := m.formHitAtClick(pillX, y)
-			if !hit.ok || hit.kind != frMode {
-				t.Fatalf("row %d (frMode): hit=%+v", i, hit)
 			}
 		case frLog:
 			hit := m.formHitAtClick(pillX, y)
@@ -379,26 +374,52 @@ func TestUpdateStripKeysExist(t *testing.T) {
 	}
 }
 
-// TestModesUnchanged asserts the soft/strict Mode selector still renders on the
-// landing form (P1 keeps it; P4 will redesign Security and remove modes).
-func TestModesUnchanged(t *testing.T) {
+// TestModeSelectorAbsent asserts the soft/strict Mode selector is NOT rendered on
+// the landing form (it moved out of the landing — access lockdown lives in the
+// Security menu), while m.mode is still defaulted so the engine can read it. The
+// primary button label is now "Подключиться" / "Connect".
+func TestModeSelectorAbsent(t *testing.T) {
 	m := formModel(80, 24)
-	m.mode = config.ModeSoft
-	m.advancedOpen = false
-	rows := m.formRows()
-	idx := kindIndex(rows, frMode)
-	if idx < 0 {
-		t.Fatalf("no frMode row")
+	// The model still carries a mode (engine reads it); it just must default to soft
+	// and never appear on the landing.
+	if m.mode != config.ModeSoft {
+		t.Fatalf("m.mode=%q want default config.ModeSoft", m.mode)
 	}
-	txt := rows[idx].text
-	if !strings.Contains(txt, t2(m.lang, kOptSoft)) || !strings.Contains(txt, t2(m.lang, kOptStrict)) {
-		t.Fatalf("frMode row missing soft/strict pills: %q", txt)
+	for _, adv := range []bool{false, true} {
+		m.advancedOpen = adv
+		rows := m.formRows()
+		if hasKind(rows, frMode) {
+			t.Fatalf("frMode row present (advancedOpen=%v) — landing must not show the mode selector", adv)
+		}
+		// The mode pill labels must not leak onto the form via any other row.
+		for _, r := range rows {
+			if strings.Contains(r.text, t2(m.lang, kOptStrict)) {
+				t.Fatalf("mode pill %q leaked into row kind=%v: %q", t2(m.lang, kOptStrict), r.kind, r.text)
+			}
+		}
+	}
+	// Primary button label is "Подключиться" / "Connect".
+	if got := t2(langRU, kStart); got != "Подключиться" {
+		t.Fatalf("RU primary button = %q, want \"Подключиться\"", got)
+	}
+	if got := t2(langEN, kStart); got != "Connect" {
+		t.Fatalf("EN primary button = %q, want \"Connect\"", got)
+	}
+	// The Connect label must actually appear on the rendered Connect row.
+	rows := m.formRows()
+	si := kindIndex(rows, frStart)
+	if si < 0 {
+		t.Fatalf("no frStart row")
+	}
+	if !strings.Contains(rows[si].text, t2(m.lang, kStart)) {
+		t.Fatalf("frStart row missing connect label %q: %q", t2(m.lang, kStart), rows[si].text)
 	}
 }
 
 // TestLandingFormRenderComplete drives the whole View() path on a phaseForm model
 // and asserts the rendered content carries the version header, an input frame, the
-// disclosure toggle, the mode selector, the save-log toggle, and the Start button.
+// disclosure toggle, the save-log toggle, and the Connect button — and that the
+// Mode label is ABSENT (the selector was removed from the landing).
 func TestLandingFormRenderComplete(t *testing.T) {
 	m := newModel()
 	m.w, m.h = 80, 24
@@ -408,20 +429,23 @@ func TestLandingFormRenderComplete(t *testing.T) {
 		t.Fatalf("View() returned empty content")
 	}
 	checks := map[string]string{
-		"version name": version.Name + " v" + version.Version,
-		"tagline":      t2(m.lang, kVersionTagline),
-		"host label":   t2(m.lang, kLabelHost),
-		"password":     t2(m.lang, kLabelPassword),
-		"disclosure":   "Дополнительно",
-		"mode label":   t2(m.lang, kLabelMode),
-		"save-log":     t2(m.lang, kSaveLogLabel),
-		"start button": t2(m.lang, kStart),
-		"catalog link": t2(m.lang, kCatalogLink),
+		"version name":   version.Name + " v" + version.Version,
+		"tagline":        t2(m.lang, kVersionTagline),
+		"host label":     t2(m.lang, kLabelHost),
+		"password":       t2(m.lang, kLabelPassword),
+		"disclosure":     "Дополнительно",
+		"save-log":       t2(m.lang, kSaveLogLabel),
+		"connect button": t2(m.lang, kStart),
+		"catalog link":   t2(m.lang, kCatalogLink),
 	}
 	for name, want := range checks {
 		if !strings.Contains(out, want) {
 			t.Fatalf("rendered landing missing %s (%q)", name, want)
 		}
+	}
+	// The Mode label must NOT appear anywhere on the landing.
+	if strings.Contains(out, t2(m.lang, kLabelMode)) {
+		t.Fatalf("rendered landing still shows the Mode label %q", t2(m.lang, kLabelMode))
 	}
 }
 

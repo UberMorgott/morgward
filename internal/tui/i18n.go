@@ -224,7 +224,7 @@ var tr = map[Lang]map[stringKey]string{
 		kOptSoft:   "мягкий",
 		kOptStrict: "строгий",
 
-		kStart:      "Старт",
+		kStart:      "Подключиться",
 		kCancel:     "Отмена",
 		kBackToMain: " ↩  Назад в меню ",
 
@@ -235,7 +235,7 @@ var tr = map[Lang]map[stringKey]string{
 		kModeSoftName:   "мягкий",
 		kModeStrictName: "строгий",
 
-		kFormHint:       "tab/↑↓ переход · ←/→ переключить · enter: следующее поле, запуск (на Старте) · l: язык · esc выход",
+		kFormHint:       "tab/↑↓ переход · ←/→ переключить · enter: следующее поле, подключение (на «Подключиться») · l: язык · esc выход",
 		kRunHintRunning: "l: язык · ctrl+c выход",
 		kRunHintIdle:    "enter/esc назад · ↑/↓ прокрутка · l: язык · ctrl+c выход",
 
@@ -354,7 +354,7 @@ var tr = map[Lang]map[stringKey]string{
 		kOptSoft:   "soft",
 		kOptStrict: "strict",
 
-		kStart:      "Start",
+		kStart:      "Connect",
 		kCancel:     "Cancel",
 		kBackToMain: " ↩  Back to main ",
 
@@ -365,7 +365,7 @@ var tr = map[Lang]map[stringKey]string{
 		kModeSoftName:   "soft",
 		kModeStrictName: "strict",
 
-		kFormHint:       "tab/↑↓ move · ←/→ toggle · enter: next field, run (on Start) · l: lang · esc quit",
+		kFormHint:       "tab/↑↓ move · ←/→ toggle · enter: next field, connect (on Connect) · l: lang · esc quit",
 		kRunHintRunning: "l: lang · ctrl+c quit",
 		kRunHintIdle:    "enter/esc back · ↑/↓ scroll · l: lang · ctrl+c quit",
 

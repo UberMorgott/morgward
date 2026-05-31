@@ -132,16 +132,14 @@ const (
 // extra focusable rows after the inputs.
 const (
 	rowDisclosure = nInputs     // "▸ Дополнительно" advanced-inputs toggle
-	rowMode       = nInputs + 1 // soft/strict toggle
-	rowLog        = nInputs + 2 // save-log-to-file toggle
-	rowStart      = nInputs + 3 // start button
-	nRows         = nInputs + 4
+	rowLog        = nInputs + 1 // save-log-to-file toggle
+	rowStart      = nInputs + 2 // connect button
+	nRows         = nInputs + 3
 )
 
 // focusableRows returns the ordered list of currently-focusable row indices.
-// The Mode row only matters for run/verify (the engine ignores Mode for the
-// read-only detect), so it's omitted when command == "detect"; navigation runs
-// over this slice so focus never lands on a hidden row.
+// Navigation runs over this slice so focus never lands on a hidden row (the
+// advanced Port/User/Key inputs are included only when advancedOpen).
 func (m model) focusableRows() []int {
 	rows := make([]int, 0, nRows)
 	// Visible inputs: Host + Password always; Port/User/Key only when advancedOpen,
@@ -153,7 +151,6 @@ func (m model) focusableRows() []int {
 		rows = append(rows, i)
 	}
 	rows = append(rows, rowDisclosure)
-	rows = append(rows, rowMode)
 	rows = append(rows, rowLog)
 	rows = append(rows, rowStart)
 	return rows
@@ -671,12 +668,6 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch m.focus {
 		case rowDisclosure:
 			m.advancedOpen = !m.advancedOpen
-		case rowMode:
-			if m.mode == config.ModeSoft {
-				m.mode = config.ModeStrict
-			} else {
-				m.mode = config.ModeSoft
-			}
 		case rowLog:
 			m.saveLog = !m.saveLog
 		}
@@ -1155,10 +1146,9 @@ func (m model) langAtClick(x, y int) (Lang, bool) {
 // formHit is the resolved click target inside the form body.
 type formHit struct {
 	kind  formRowKind
-	field int    // frInput: input index
-	mode  string // frMode: "soft"/"strict"
-	log   bool   // frLog: true=on (save log), false=off
-	pill  int    // frStart: 0=Start, 1=Cancel
+	field int  // frInput: input index
+	log   bool // frLog: true=on (save log), false=off
+	pill  int  // frStart: 0=Connect, 1=Cancel
 	ok    bool
 }
 
@@ -1182,12 +1172,6 @@ func (m model) formHitAtClick(x, y int) formHit {
 	case frDisclosure:
 		// The whole disclosure line is one click target (toggles advancedOpen).
 		return formHit{kind: frDisclosure, ok: true}
-	case frMode:
-		names := []string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)}
-		opts := []string{"soft", "strict"}
-		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
-			return formHit{kind: frMode, mode: opts[i], ok: true}
-		}
 	case frLog:
 		names := []string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)}
 		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
@@ -1266,10 +1250,6 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 		m.advancedOpen = !m.advancedOpen
 		m.focus = rowDisclosure
 		return m, nil
-	case frMode:
-		m.mode = config.Mode(hit.mode)
-		m.focus = rowMode
-		return m, nil
 	case frLog:
 		m.saveLog = hit.log
 		m.focus = rowLog
@@ -1289,17 +1269,17 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 type formRowKind int
 
 const (
-	frInput      formRowKind = iota // a text-input row; field holds the input index
-	frBlank                         // spacer line (kept in the slice so Y math stays exact)
-	frMode                          // soft/strict pill row
-	frAction                        // run/detect/verify pill row
-	frLog                           // save-log-to-file on/off pill row
-	frHelp                          // contextual toggle-help line
-	frStart                         // Start + Cancel button line
-	frErr                           // validation error line
-	frDisclosure                    // "▸ Дополнительно" toggle revealing Port/User/Key
-	frCatalogLink                   // "Что настраивает программа ▸" label (P5 nav stub)
-	frVersion                       // version-frame line (titled top / tagline / bottom)
+	frInput       formRowKind = iota // a text-input row; field holds the input index
+	frBlank                          // spacer line (kept in the slice so Y math stays exact)
+	frMode                           // soft/strict pill row
+	frAction                         // run/detect/verify pill row
+	frLog                            // save-log-to-file on/off pill row
+	frHelp                           // contextual toggle-help line
+	frStart                          // Start + Cancel button line
+	frErr                            // validation error line
+	frDisclosure                     // "▸ Дополнительно" toggle revealing Port/User/Key
+	frCatalogLink                    // "Что настраивает программа ▸" label (P5 nav stub)
+	frVersion                        // version-frame line (titled top / tagline / bottom)
 )
 
 // formRow is one rendered body line plus its kind (+ field index for inputs). The
@@ -1453,18 +1433,13 @@ func (m model) formRows() []formRow {
 	rows = append(rows, formRow{kind: frDisclosure, text: indent + disStyle.Render(disLabel)})
 
 	rows = append(rows, formRow{kind: frBlank})
-	// The run/detect/verify action selector is intentionally NOT shown on the
-	// landing form (m.command stays "run"; engine tokens are unaffected).
-	rows = append(rows, formRow{kind: frMode, text: renderToggle(t(m.lang, kLabelMode),
-		[]string{"soft", "strict"},
-		[]string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)},
-		string(m.mode), m.focus == rowMode, colW)})
-	// Contextual toggle help: accent-tinted/italic (tipStyle) so it reads as form
-	// body, distinct from the gray bottom control hint. Indented to the value column.
-	rows = append(rows, formRow{kind: frHelp, text: indent + tipStyle.Render(m.toggleHelp())})
-	// Save-log-to-file toggle: a session preference placed in the lower-right cluster
-	// (after Mode + its help). Writes the full run log to cfg.LogFile when on, off by
-	// default. Canonical tokens on/off; localized yes/no pill names.
+	// The soft/strict Mode selector and the run/detect/verify action selector are
+	// intentionally NOT shown on the landing form: m.mode stays config.ModeSoft and
+	// m.command stays "run" (engine tokens are unaffected). Access lockdown moves to
+	// the Security menu in a later phase.
+	// Save-log-to-file toggle: a session preference. Writes the full run log to
+	// cfg.LogFile when on, off by default. Canonical tokens on/off; localized
+	// yes/no pill names.
 	rows = append(rows, formRow{kind: frLog, text: renderToggle(t(m.lang, kSaveLogLabel),
 		[]string{"on", "off"},
 		[]string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)},
@@ -1489,8 +1464,8 @@ func (m model) formRows() []formRow {
 	return rows
 }
 
-// startCancelLabels returns the two pill display names (Start, Cancel) — the single
-// source the render path and pillRanges/the hit-test both consume. The Start name
+// startCancelLabels returns the two pill display names (Connect, Cancel) — the single
+// source the render path and pillRanges/the hit-test both consume. The Connect name
 // carries the focus caret/leading space so its rendered width matches what the user
 // clicks; Cancel is a plain padded label.
 func (m model) startCancelLabels() []string {
@@ -1503,7 +1478,7 @@ func (m model) startCancelLabels() []string {
 	return []string{start, t(m.lang, kCancel)}
 }
 
-// startCancelPills renders the Start + Cancel button line (pills joined by one
+// startCancelPills renders the Connect + Cancel button line (pills joined by one
 // space), matching the geometry pillRanges assumes.
 func (m model) startCancelPills() string {
 	names := m.startCancelLabels()
@@ -1554,20 +1529,6 @@ func (m model) formView() string {
 	out.WriteString(contentLine(bd, hint, innerW) + "\n")
 	out.WriteString(borderLine(bd.BottomLeft, bd.Bottom, bd.BottomRight, bw))
 	return out.String()
-}
-
-// toggleHelp returns a one-line explanation of the toggle option currently in
-// focus (Mode or Action), so the operator knows what each pill does.
-func (m model) toggleHelp() string {
-	// The action selector is gone from the form; only Mode carries contextual help.
-	switch {
-	case m.focus == rowMode && m.mode == config.ModeStrict:
-		return t(m.lang, kHelpModeStrict)
-	case m.focus == rowMode:
-		return t(m.lang, kHelpModeSoft)
-	default:
-		return fmt.Sprintf(t(m.lang, kHelpModeOnly), langModeName(m.lang, string(m.mode)))
-	}
 }
 
 // renderToggle draws a labelled pill row. opts are the canonical (engine) tokens
