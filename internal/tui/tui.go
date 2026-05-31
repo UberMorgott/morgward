@@ -20,10 +20,12 @@ import (
 	"github.com/atotto/clipboard"
 
 	"github.com/UberMorgott/morgward/internal/config"
+	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/stats"
 	"github.com/UberMorgott/morgward/internal/steps"
+	"github.com/UberMorgott/morgward/internal/tweaks"
 	"github.com/UberMorgott/morgward/internal/version"
 	"github.com/UberMorgott/morgward/internal/wiki"
 )
@@ -63,10 +65,11 @@ type phase int
 const (
 	phaseForm phase = iota
 	phaseRun
-	phaseSummary // post-finish stats summary + clickable fix list
-	phaseWiki    // a single fix's what/why/risk description
-	phaseKey     // shows the generated SSH private key + a clipboard "Copy key" button
-	phaseMatrix  // per-tweak audit table (the "анализ" action result)
+	phaseSummary   // post-finish stats summary + clickable fix list
+	phaseWiki      // a single fix's what/why/risk description
+	phaseKey       // shows the generated SSH private key + a clipboard "Copy key" button
+	phaseMatrix    // per-tweak audit table (the "анализ" action result)
+	phaseDashboard // post-connect server card + live tweak audit + apply/security/catalog buttons
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -200,7 +203,8 @@ type model struct {
 	inputs  []textinput.Model
 	focus   int
 	mode    config.Mode
-	command string // engine command token; the form no longer exposes a selector (stays "run")
+	command string   // engine command token; the form no longer exposes a selector (stays "run")
+	cmds    []string // step IDs for the "step" command (Dashboard "Применить твики"); nil otherwise
 	errMsg  string
 	saveLog bool // form toggle: write the full run log to a file (sets cfg.LogFile)
 	// advancedOpen is the landing "▸ Дополнительно" disclosure state: when true the
@@ -258,6 +262,20 @@ type model struct {
 	sumScroll  int
 	wikiScroll int
 	matScroll  int // анализ matrix scroll offset, clamped like sumScroll
+
+	// Dashboard state (phaseDashboard). All value-copyable: bools/ints, a plain
+	// []tweaks.Result (slice of plain structs), and a *detect.Facts (read-only after
+	// detection — never mutated, so the pointer copy is safe). dashFacts is nil until
+	// the Audit's final Done lands. dashApplyConfirm gates the A8 reboot warning before
+	// "Применить твики" launches the apply.
+	dashAuditRunning bool
+	dashAuditDone    bool
+	dashAuditTotal   int
+	dashAuditApplied int
+	dashAuditResults []tweaks.Result
+	dashFacts        *detect.Facts
+	dashScroll       int  // audit list scroll offset (clamped like sumScroll)
+	dashApplyConfirm bool // true while the A8 reboot-warning confirm is shown
 
 	finalErr error
 	finished bool
@@ -369,6 +387,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.phase {
 		case phaseForm:
 			return m.formClick(mc.X, mc.Y)
+		case phaseDashboard:
+			return m.dashboardClick(mc.X, mc.Y)
 		case phaseSummary:
 			// A click on a fix row opens its wiki description.
 			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
@@ -436,6 +456,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				d = wheelStep
 			}
 			m.matScroll = clampScroll(m.matScroll+d, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+		case phaseDashboard:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 		}
 		return m, nil
 
@@ -491,6 +519,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.matScroll = clampScroll(m.matScroll-1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			case "down", "j":
 				m.matScroll = clampScroll(m.matScroll+1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			}
+			return m, nil
+		case phaseDashboard:
+			// Dashboard: "back" returns to the form/menu (stops the sampler); ↑↓/k/j
+			// scroll the audit list. enter confirms the pending A8-reboot apply, esc
+			// cancels it; with no pending confirm, esc/b go back.
+			switch msg.String() {
+			case "enter":
+				if m.dashApplyConfirm {
+					m.dashApplyConfirm = false
+					return m.launchApplyTweaks()
+				}
+				return m, nil
+			case "esc", "b":
+				if m.dashApplyConfirm {
+					m.dashApplyConfirm = false
+					return m, nil
+				}
+				return m.goBack()
+			case "up", "k":
+				m.dashScroll = clampScroll(m.dashScroll-1, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			case "down", "j":
+				m.dashScroll = clampScroll(m.dashScroll+1, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			}
 			return m, nil
 		case phaseKey:
@@ -557,12 +608,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// an early connect/auth abort (no summary) stays on the run log for the
 		// operator to read, and on phaseRun so a generated-key view isn't yanked away.
 		if m.haveSummary && m.phase == phaseRun {
-			if len(m.summary.Tweaks) > 0 {
-				m.phase = phaseMatrix
-				m.matScroll = 0
-			} else {
-				m.phase = phaseSummary
-			}
+			m = m.advanceFromRun()
 		}
 		return m, nil
 
@@ -607,16 +653,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = p.Summary
 			m.haveSummary = true
 			m.running = false
-			// Auto-advance to the summary once BOTH completion signals have landed
-			// (see doneMsg). Guard on finished so a summary that somehow precedes
-			// doneMsg waits, and on phaseRun so the key view isn't yanked away.
+			// Audit (read-only) lands on the Dashboard, carrying the server facts +
+			// the full tweak audit. Capture them from the final Done's Summary.
+			if m.command == "audit" {
+				m.captureAudit(p.Summary)
+			}
+			// Auto-advance once BOTH completion signals have landed (see doneMsg).
+			// Guard on finished so a summary that somehow precedes doneMsg waits, and
+			// on phaseRun so the key view isn't yanked away.
 			if m.finished && m.phase == phaseRun {
-				if len(m.summary.Tweaks) > 0 {
-					m.phase = phaseMatrix
-					m.matScroll = 0
-				} else {
-					m.phase = phaseSummary
-				}
+				m = m.advanceFromRun()
 			}
 		} else {
 			m.index = p.Index
@@ -624,6 +670,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.curID = p.ID
 			m.curTitle = p.Title
 			m.running = p.Status == "running"
+			// During an audit, the per-tweak progress drives the connecting-state
+			// counter/spinner shown on the Dashboard once it opens.
+			if m.command == "audit" {
+				m.dashAuditRunning = true
+				m.dashAuditTotal = p.Total
+			}
 		}
 		return m, m.listenProg()
 
@@ -674,6 +726,9 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if m.focus == rowStart {
+			// The landing "Подключиться" button is READ-ONLY: it runs the audit
+			// (dial → detect → tweaks audit → Dashboard), never the apply path.
+			m.command = "audit"
 			return m.start()
 		}
 		if m.focus == rowDisclosure {
@@ -829,8 +884,57 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.vp.SetContent("")
 	m.sumScroll = 0
 	m.wikiScroll = 0
+	m.matScroll = 0
 	m.titleK = titleIdle
+	// Reset Dashboard audit state so a fresh connect re-audits cleanly.
+	m.dashAuditRunning = false
+	m.dashAuditDone = false
+	m.dashAuditTotal = 0
+	m.dashAuditApplied = 0
+	m.dashAuditResults = nil
+	m.dashFacts = nil
+	m.dashScroll = 0
+	m.dashApplyConfirm = false
+	// command resets to the read-only audit so a subsequent Connect never applies.
+	m.command = "audit"
 	return m, m.refocus()
+}
+
+// advanceFromRun performs the post-finish phase transition out of phaseRun once
+// both completion signals (doneMsg + progMsg Done) have landed. The destination
+// depends on the command: an "audit" lands on the Dashboard (read-only), a verify/
+// tweak audit with results lands on the matrix, otherwise the stats summary.
+func (m model) advanceFromRun() model {
+	if m.command == "audit" {
+		m.phase = phaseDashboard
+		m.dashScroll = 0
+		return m
+	}
+	if len(m.summary.Tweaks) > 0 {
+		m.phase = phaseMatrix
+		m.matScroll = 0
+		return m
+	}
+	m.phase = phaseSummary
+	return m
+}
+
+// captureAudit folds the audit's final Summary into the Dashboard state: the server
+// facts, the full per-tweak results, and the applied/total tally. Called when an
+// "audit" command finishes (its Done carries Summary.Facts + Summary.Tweaks).
+func (m *model) captureAudit(sum engine.Summary) {
+	m.dashFacts = sum.Facts
+	m.dashAuditResults = sum.Tweaks
+	m.dashAuditTotal = len(sum.Tweaks)
+	applied := 0
+	for _, r := range sum.Tweaks {
+		if r.Applied {
+			applied++
+		}
+	}
+	m.dashAuditApplied = applied
+	m.dashAuditRunning = false
+	m.dashAuditDone = true
 }
 
 func (m *model) refocus() tea.Cmd {
@@ -899,8 +1003,9 @@ func (m model) start() (tea.Model, tea.Cmd) {
 	// Engine runs in a goroutine; log lines stream into m.logs, finish into m.done.
 	// Hook callbacks run on the engine goroutine, so they must NOT touch the model —
 	// each only hands its value to the bubbletea loop via a buffered channel.
+	ids := m.cmds
 	go func() {
-		err := engine.Execute(cfg, cmd, nil, engine.Hooks{
+		err := engine.Execute(cfg, cmd, ids, engine.Hooks{
 			Sink: func(line string) { m.logs <- line },
 			OnConnect: func(info monitor.ConnInfo) {
 				select {
@@ -1056,6 +1161,8 @@ func (m model) viewString() string {
 		return m.summaryView()
 	case phaseMatrix:
 		return m.matrixView()
+	case phaseDashboard:
+		return m.dashboardView()
 	case phaseWiki:
 		return m.wikiView()
 	case phaseKey:
@@ -1259,6 +1366,9 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.focus = rowStart
+		// The landing "Подключиться" button is READ-ONLY: it runs the audit
+		// (dial → detect → tweaks audit → Dashboard), never the apply path.
+		m.command = "audit"
 		return m.start()
 	}
 	return m, nil
@@ -1960,6 +2070,346 @@ func (m model) matrixView() string {
 
 	sb.WriteString(m.monitorBox(innerW))
 	return sb.String()
+}
+
+// --- Dashboard (phaseDashboard) -----------------------------------------------
+//
+// dashboardView renders the post-connect Dashboard: a framed server card
+// (OS/kernel/RAM/disk/ports/IPv6 from m.dashFacts + the live monitor sample), the
+// live tweak-audit status line + a ✓/• grid (from m.dashAuditResults), and three
+// action button pills. The monitor footer is pinned at the bottom. Chrome (titled
+// top, switcher, scroll region, hint, bottom border, monitor box) mirrors
+// summaryView/matrixView exactly so the footer never moves and the body scrolls.
+//
+// The clickable rows (audit grid rows → wiki detail, the three button pills) are
+// resolved against the SAME ordered body slice the renderer iterates
+// (dashBodyLines), so the hit-test geometry can never drift.
+func (m model) dashboardView() string {
+	bw := m.boxWidth()
+	innerW := innerWidth(bw)
+	b := lipgloss.RoundedBorder()
+
+	body := m.dashBodyLines(innerW)
+
+	var sb strings.Builder
+	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
+	sb.WriteByte('\n')
+	sb.WriteString(m.switcherLine(b, innerW))
+	sb.WriteByte('\n')
+
+	viewH := m.bodyViewH()
+	off := clampScroll(m.dashScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
+
+	hint := t(m.lang, kDashHint)
+	if m.dashApplyConfirm {
+		hint = t(m.lang, kDashApplyConfirm)
+	}
+	sb.WriteString(contentLine(b, helpStyle.Render(hint), innerW))
+	sb.WriteByte('\n')
+	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
+	sb.WriteByte('\n')
+
+	sb.WriteString(m.monitorBox(innerW))
+	return sb.String()
+}
+
+// dashButtonNames is the ordered list of the three Dashboard action-button labels
+// (Apply / Security / Catalog). It is the SINGLE source consumed by both the
+// render path (dashButtonsLine) and the hit-test (dashButtonAtClick), so their
+// x-geometry cannot diverge.
+func (m model) dashButtonNames() []string {
+	return []string{
+		t(m.lang, kDashApplyButton),
+		t(m.lang, kDashSecButton),
+		t(m.lang, kDashCatalogButton),
+	}
+}
+
+// dashButtonStartCol is the absolute X where the first button pill begins on the
+// buttons row: 2 (left border + space) + 1 (the leading indent space in the row).
+const dashButtonStartCol = 3
+
+// dashButtonsLine renders the three action pills joined by a single space, with a
+// one-space indent so the first pill begins at dashButtonStartCol. All three use
+// the dim pill style; pillRanges over dashButtonNames recovers their x-geometry.
+func (m model) dashButtonsLine() string {
+	names := m.dashButtonNames()
+	pills := make([]string, len(names))
+	for i, n := range names {
+		pills[i] = pillStyle.Render(n)
+	}
+	return " " + strings.Join(pills, " ")
+}
+
+// dashBodyLines builds the ordered Dashboard body slice — the single source of
+// truth for BOTH dashboardView's render and the hit-tests (dashAuditRowAtClick /
+// dashButtonRowIndex). Order: server card (framed), blank, audit status line,
+// blank, audit grid rows (one per result), blank, buttons line. Every width uses
+// lipgloss.Width.
+func (m model) dashBodyLines(innerW int) []string {
+	var body []string
+	body = append(body, m.dashServerCard(innerW)...)
+	body = append(body, "")
+
+	// Live audit status line: "Анализ твиков ⠹  применено N из M · можно применить K".
+	applied, total := m.dashAuditApplied, m.dashAuditTotal
+	canApply := total - applied
+	if canApply < 0 {
+		canApply = 0
+	}
+	label := t(m.lang, kDashAuditLabel)
+	if m.dashAuditRunning && !m.dashAuditDone {
+		label += " " + string(spinnerFrames[m.spin%len(spinnerFrames)])
+	}
+	status := fmt.Sprintf("%s  %s · %s",
+		label,
+		fmt.Sprintf(t(m.lang, kDashAuditStatus), applied, total),
+		fmt.Sprintf(t(m.lang, kDashCanApply), canApply),
+	)
+	body = append(body, truncDisplay(status, innerW))
+	body = append(body, "")
+
+	// Audit grid: one row per result, "  ✓/•  name". The rows are the clickable
+	// tail used by dashAuditRowAtClick (each maps to its Probe.ID → wiki detail).
+	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	canStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	for _, r := range m.dashAuditResults {
+		glyph := canStyle.Render("•")
+		if r.Applied {
+			glyph = okStyle.Render("✓")
+		}
+		name := localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
+		body = append(body, truncDisplay("  "+glyph+" "+name, innerW))
+	}
+
+	body = append(body, "")
+	body = append(body, m.dashButtonsLine())
+	return body
+}
+
+// dashServerCard renders the framed "Сервер: HOST" card with the OS/kernel/RAM/
+// disk/ports/IPv6 facts (from m.dashFacts + the live monitor sample), as content
+// lines fitted to innerW. Missing facts are omitted, never rendered as blanks.
+func (m model) dashServerCard(innerW int) []string {
+	bd := lipgloss.RoundedBorder()
+	fw := innerW
+	if fw < minBoxWidth {
+		fw = minBoxWidth
+	}
+	finner := fw - 2 // cells between the card's border runes
+
+	title := " " + t(m.lang, kDashTitle) + ": " + m.host + " "
+	top := titledTop(bd, title, fw)
+	bottom := borderLine(bd.BottomLeft, bd.Bottom, bd.BottomRight, fw)
+
+	// Build the facts line(s) from whatever is known. Order mirrors the mockup.
+	var parts []string
+	f := m.dashFacts
+	if f != nil {
+		if f.ID != "" {
+			osStr := f.ID
+			if f.VersionID != "" {
+				osStr += " " + f.VersionID
+			}
+			parts = append(parts, t(m.lang, kDashOS)+" "+osStr)
+		}
+		if f.HasIPv6 {
+			parts = append(parts, t(m.lang, kDashIPv6)+" "+m.boolWordL(true))
+		}
+	}
+	// RAM/disk from the live monitor sample (best-effort; the sampler fills them
+	// once connected). The sample is the same source the footer uses.
+	s := m.sample
+	if m.haveSample {
+		if s.RAMTotalKB > 0 {
+			parts = append(parts, t(m.lang, kDashMemory)+" "+humanKB(s.RAMUsedKB)+"/"+humanKB(s.RAMTotalKB))
+		}
+		if s.DiskTotalKB > 0 {
+			parts = append(parts, t(m.lang, kDashDisk)+" "+humanKB(s.DiskUsedKB)+"/"+humanKB(s.DiskTotalKB))
+		}
+	}
+
+	mid := func(content string) string {
+		content = " " + content
+		content = truncDisplay(content, finner)
+		if pad := finner - lipgloss.Width(content); pad > 0 {
+			content += strings.Repeat(" ", pad)
+		}
+		return borderStyle.Render(bd.Left) + content + borderStyle.Render(bd.Right)
+	}
+
+	lines := []string{top}
+	if len(parts) == 0 {
+		lines = append(lines, mid(labelStyle.Render("…")))
+	} else {
+		lines = append(lines, mid(strings.Join(parts, "   ")))
+	}
+	lines = append(lines, bottom)
+	return lines
+}
+
+// dashGridStartIndex is the body-slice index of the FIRST audit grid row. The body
+// prefix is: server card (N lines) + blank + status + blank, so the grid begins at
+// len(card)+3. dashButtonsIndex is the body index of the buttons row: grid start +
+// number of results + 1 (the blank before the buttons line).
+func (m model) dashGridStartIndex(innerW int) int {
+	return len(m.dashServerCard(innerW)) + 3
+}
+
+func (m model) dashButtonsIndex(innerW int) int {
+	return m.dashGridStartIndex(innerW) + len(m.dashAuditResults) + 1
+}
+
+// dashRowYToBodyIdx maps a screen Y to a Dashboard body-slice index, honoring the
+// scroll offset, or returns ok=false when Y is in the chrome (switcher/hint/border/
+// monitor) rather than the scrollable body region.
+func (m model) dashRowYToBodyIdx(y int) (int, bool) {
+	body := m.dashBodyLines(innerWidth(m.boxWidth()))
+	viewH := m.bodyViewH()
+	off := clampScroll(m.dashScroll, len(body), viewH)
+	rowInRegion := y - summaryBodyTopRow
+	if rowInRegion < 0 || rowInRegion >= viewH {
+		return 0, false
+	}
+	idx := off + rowInRegion
+	if idx < 0 || idx >= len(body) {
+		return 0, false
+	}
+	return idx, true
+}
+
+// dashAuditRowAtClick maps a click at (x,y) to an audit result's Probe.ID (for the
+// wiki detail), or ok=false on a miss. The grid rows are the contiguous block of
+// len(results) lines starting at dashGridStartIndex.
+func (m model) dashAuditRowAtClick(x, y int) (string, bool) {
+	if m.phase != phaseDashboard || len(m.dashAuditResults) == 0 {
+		return "", false
+	}
+	innerW := innerWidth(m.boxWidth())
+	bodyIdx, ok := m.dashRowYToBodyIdx(y)
+	if !ok {
+		return "", false
+	}
+	gridStart := m.dashGridStartIndex(innerW)
+	resIdx := bodyIdx - gridStart
+	if resIdx < 0 || resIdx >= len(m.dashAuditResults) {
+		return "", false
+	}
+	// X must fall within the rendered row width (rows are content from column 2).
+	const contentX0 = 2
+	r := m.dashAuditResults[resIdx]
+	glyph := "•"
+	if r.Applied {
+		glyph = "✓"
+	}
+	row := "  " + glyph + " " + localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
+	w := lipgloss.Width(truncDisplay(row, innerW))
+	if x >= contentX0 && x < contentX0+w {
+		return r.Probe.ID, true
+	}
+	return "", false
+}
+
+// dashButton enumerates the three Dashboard actions resolved by dashButtonAtClick.
+type dashButton int
+
+const (
+	dashBtnNone dashButton = iota
+	dashBtnApply
+	dashBtnSecurity
+	dashBtnCatalog
+)
+
+// dashButtonAtClick maps a click at (x,y) to one of the three action buttons, using
+// pillRanges over dashButtonNames (the same geometry dashButtonsLine renders), or
+// dashBtnNone on a miss.
+func (m model) dashButtonAtClick(x, y int) dashButton {
+	if m.phase != phaseDashboard {
+		return dashBtnNone
+	}
+	innerW := innerWidth(m.boxWidth())
+	bodyIdx, ok := m.dashRowYToBodyIdx(y)
+	if !ok || bodyIdx != m.dashButtonsIndex(innerW) {
+		return dashBtnNone
+	}
+	switch pillIndexAt(m.dashButtonNames(), dashButtonStartCol, x) {
+	case 0:
+		return dashBtnApply
+	case 1:
+		return dashBtnSecurity
+	case 2:
+		return dashBtnCatalog
+	}
+	return dashBtnNone
+}
+
+// tweakBucketIDs is the canonical Tweaks-bucket step ID set applied by the
+// Dashboard "Применить твики" action (everything EXCEPT the security/access steps
+// A2/A2.5, which live behind the Security menu). selectSteps re-orders these into
+// the load-bearing apply order, so the literal order here is not significant.
+func tweakBucketIDs() []string {
+	return []string{"A1", "A3", "A4", "A5", "A6", "A6.5", "A6.7", "A7", "A8", "A9", "A10"}
+}
+
+// bucketHasA8 reports whether the apply bucket includes A8 (full upgrade + reboot),
+// which warrants the explicit reboot-warning confirm before launching.
+func bucketHasA8(ids []string) bool {
+	for _, id := range ids {
+		if strings.EqualFold(id, "A8") {
+			return true
+		}
+	}
+	return false
+}
+
+// launchApplyTweaks starts the apply over the Tweaks-bucket IDs via the engine's
+// "step" command (RunSteps, allowBrownfield=true). It reuses start() so the run
+// streams into the same log view and lands on the summary on completion. The
+// credentials are taken from the still-populated landing inputs.
+func (m model) launchApplyTweaks() (tea.Model, tea.Cmd) {
+	m.command = "step"
+	m.cmds = tweakBucketIDs()
+	return m.start()
+}
+
+// dashboardClick resolves a Dashboard click: an audit row opens its wiki detail; a
+// button pill triggers its action. "Применить твики" first shows the A8 reboot
+// warning (Enter to confirm). "Безопасность ▸" and "Каталог твиков" navigate to
+// their phases — until those phases land (P4/P5) they are harmless no-op stubs.
+func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
+	// A pending apply-confirm swallows clicks (use Enter/esc on the hint to resolve).
+	if m.dashApplyConfirm {
+		return m, nil
+	}
+	// Button pills take priority over the (overlapping-Y-impossible) audit grid.
+	switch m.dashButtonAtClick(x, y) {
+	case dashBtnApply:
+		ids := tweakBucketIDs()
+		if bucketHasA8(ids) {
+			// Show the explicit reboot warning; the apply launches on Enter (see the
+			// phaseDashboard key handler), not on this click.
+			m.dashApplyConfirm = true
+			return m, nil
+		}
+		return m.launchApplyTweaks()
+	case dashBtnSecurity:
+		// P4 stub: phaseSecurity is not built yet — harmless no-op. MUST NOT apply
+		// anything. (Wired to navigate in P4.)
+		return m, nil
+	case dashBtnCatalog:
+		// P5 stub: phaseCatalog is not built yet — harmless no-op nav.
+		return m, nil
+	}
+	// Audit row → wiki detail for that tweak.
+	if id, ok := m.dashAuditRowAtClick(x, y); ok {
+		m.wikiStep = id
+		m.wikiReturn = phaseDashboard
+		m.wikiScroll = 0
+		m.phase = phaseWiki
+		return m, nil
+	}
+	return m, nil
 }
 
 // matrixBodyLines renders the анализ audit: results grouped by step, each row

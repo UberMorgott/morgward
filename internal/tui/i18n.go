@@ -203,6 +203,23 @@ const (
 	kUpdateAvailable   // "Обновления: vX.Y доступна" (carries a %s for the version)
 	kUpdateError       // "не удалось проверить (офлайн)"
 	kUpdateButtonLabel // clickable button: "Обновить ⬇"
+
+	// --- dashboard (phaseDashboard, P3) ----------------------------------
+	kDashTitle         // server card header prefix: "Сервер" / "Server"
+	kDashAuditLabel    // live audit line label: "Анализ твиков" / "Analyzing tweaks"
+	kDashAuditStatus   // "применено %d из %d" / "applied %d of %d"
+	kDashCanApply      // "можно применить %d" / "can apply %d"
+	kDashApplyButton   // "Применить твики" / "Apply tweaks"
+	kDashSecButton     // "Безопасность ▸" / "Security ▸"
+	kDashCatalogButton // "Каталог твиков" / "Tweak Catalog"
+	kDashOS            // "ОС" / "OS"
+	kDashKernel        // "Ядро" / "Kernel"
+	kDashMemory        // "Память" / "Memory"
+	kDashDisk          // "Диск" / "Disk"
+	kDashPorts         // "Порты" / "Ports"
+	kDashIPv6          // "IPv6"
+	kDashHint          // dashboard control hint
+	kDashApplyConfirm  // A8 reboot warning shown before applying tweaks
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -336,6 +353,22 @@ var tr = map[Lang]map[stringKey]string{
 		kUpdateAvailable:   "Обновления: v%s доступна",
 		kUpdateError:       "не удалось проверить (офлайн)",
 		kUpdateButtonLabel: "Обновить ⬇",
+
+		kDashTitle:         "Сервер",
+		kDashAuditLabel:    "Анализ твиков",
+		kDashAuditStatus:   "применено %d из %d",
+		kDashCanApply:      "можно применить %d",
+		kDashApplyButton:   "Применить твики",
+		kDashSecButton:     "Безопасность ▸",
+		kDashCatalogButton: "Каталог твиков",
+		kDashOS:            "ОС",
+		kDashKernel:        "Ядро",
+		kDashMemory:        "Память",
+		kDashDisk:          "Диск",
+		kDashPorts:         "Порты",
+		kDashIPv6:          "IPv6",
+		kDashHint:          "↑/↓ прокрутка · enter описание твика · esc назад",
+		kDashApplyConfirm:  "Включает полное обновление и перезагрузку (A8) — несколько минут. Enter — применить, esc — отмена.",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -466,6 +499,22 @@ var tr = map[Lang]map[stringKey]string{
 		kUpdateAvailable:   "Updates: v%s available",
 		kUpdateError:       "failed to check (offline)",
 		kUpdateButtonLabel: "Update ⬇",
+
+		kDashTitle:         "Server",
+		kDashAuditLabel:    "Analyzing tweaks",
+		kDashAuditStatus:   "applied %d of %d",
+		kDashCanApply:      "can apply %d",
+		kDashApplyButton:   "Apply tweaks",
+		kDashSecButton:     "Security ▸",
+		kDashCatalogButton: "Tweak Catalog",
+		kDashOS:            "OS",
+		kDashKernel:        "Kernel",
+		kDashMemory:        "Memory",
+		kDashDisk:          "Disk",
+		kDashPorts:         "Ports",
+		kDashIPv6:          "IPv6",
+		kDashHint:          "↑/↓ scroll · enter tweak detail · esc back",
+		kDashApplyConfirm:  "Includes a full upgrade and reboot (A8) — several minutes. Enter to apply, esc to cancel.",
 	},
 }
 
