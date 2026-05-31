@@ -1299,6 +1299,7 @@ const (
 	frErr                           // validation error line
 	frDisclosure                    // "▸ Дополнительно" toggle revealing Port/User/Key
 	frCatalogLink                   // "Что настраивает программа ▸" label (P5 nav stub)
+	frVersion                       // version-frame line (titled top / tagline / bottom)
 )
 
 // formRow is one rendered body line plus its kind (+ field index for inputs). The
@@ -1372,6 +1373,33 @@ func (m model) framedInputRow(idx int, lang Lang, label string, input textinput.
 	return []string{top, mid, bottom}
 }
 
+// versionFrame renders the landing version sub-box as three content lines (titled
+// top "─ Morgward vX.Y ─", a tagline line, bottom border), each sized to fit the
+// box content width innerW. It is emitted as the first rows of formRows so the
+// switcher/formBodyTopRow geometry is unchanged and the hit-test stays aligned.
+func (m model) versionFrame(innerW int) []string {
+	bd := lipgloss.RoundedBorder()
+	// Inner frame width: full content width, but bounded so titledTop/borderLine
+	// (which clamp to minBoxWidth) never draw wider than the content area.
+	fw := innerW
+	if fw < minBoxWidth {
+		fw = minBoxWidth
+	}
+	finner := fw - 2 // cells between the frame's border runes
+	title := " " + version.Name + " v" + version.Version + " "
+	top := titledTop(bd, title, fw)
+	// Middle line: left border + " "+tagline padded to (finner) + right border, so
+	// the line is exactly fw cells (2 border + finner content).
+	tagline := " " + labelStyle.Render(t(m.lang, kVersionTagline))
+	tagline = truncDisplay(tagline, finner)
+	if pad := finner - lipgloss.Width(tagline); pad > 0 {
+		tagline += strings.Repeat(" ", pad)
+	}
+	mid := borderStyle.Render(bd.Left) + tagline + borderStyle.Render(bd.Right)
+	bottom := borderLine(bd.BottomLeft, bd.Bottom, bd.BottomRight, fw)
+	return []string{top, mid, bottom}
+}
+
 // formRows builds the ordered form body as a slice of row specs (INCLUDING blank
 // rows) in exact render order. formView renders by iterating this; the hit-test
 // iterates the same slice, so geometry can never drift.
@@ -1382,6 +1410,14 @@ func (m model) formRows() []formRow {
 	indent := strings.Repeat(" ", colW+1)
 
 	var rows []formRow
+	// Version sub-frame (name + tagline) at the very top of the body, so the
+	// switcher/formBodyTopRow geometry stays fixed and the hit-test slice still
+	// includes every rendered line.
+	for _, ln := range m.versionFrame(innerWidth(m.boxWidth())) {
+		rows = append(rows, formRow{kind: frVersion, text: ln})
+	}
+	rows = append(rows, formRow{kind: frBlank})
+
 	labels := []stringKey{kLabelHost, kLabelPort, kLabelUser, kLabelPassword, kLabelKey}
 	// appendFramedInput emits the 3 rows of one framed input; all three carry the
 	// same field index so a click on any of them focuses that input (the hit-test
@@ -1485,7 +1521,10 @@ func (m model) formView() string {
 	innerW := innerWidth(bw)
 	bd := lipgloss.RoundedBorder()
 	var out strings.Builder
-	out.WriteString(titledTop(bd, " "+version.Name+" v"+version.Version+" ", bw) + "\n")
+	// Plain outer top border: the program name + version now lives in the inner
+	// version frame (see versionFrame), so the outer box stays untitled per the
+	// landing mockup.
+	out.WriteString(borderLine(bd.TopLeft, bd.Top, bd.TopRight, bw) + "\n")
 
 	// First content line (screen row 1): the RU/EN switcher, right-aligned. Drawn
 	// before the form body so the click hit-test row (switcherRow=1) always matches.

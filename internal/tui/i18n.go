@@ -193,6 +193,9 @@ const (
 
 	// catalog navigation link (P5 stub: rendered as a label on the landing form)
 	kCatalogLink // "Что настраивает программа ▸"
+
+	// landing version-frame tagline under the "Morgward vX.Y" header
+	kVersionTagline // "VPS guardian · защита свежего Ubuntu VPS"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -319,6 +322,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDisclosureLabel: "▸ Дополнительно (порт · пользователь · SSH-ключ)",
 		kDisclosureOpen:  "▼",
 		kCatalogLink:     "Что настраивает программа ▸",
+		kVersionTagline:  "VPS guardian · защита свежего Ubuntu VPS",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -442,6 +446,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDisclosureLabel: "▸ Advanced (port · user · SSH key)",
 		kDisclosureOpen:  "▼",
 		kCatalogLink:     "What the program configures ▸",
+		kVersionTagline:  "VPS guardian · fresh Ubuntu VPS protection",
 	},
 }
 

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/UberMorgott/morgward/internal/version"
 )
 
 // formModel builds a form-phase model sized for layout tests.
@@ -346,6 +348,20 @@ func TestFormValidationFramed(t *testing.T) {
 	startIdx := kindIndex(rows, frStart)
 	if errIdx < startIdx {
 		t.Fatalf("frErr idx=%d should be after frStart=%d", errIdx, startIdx)
+	}
+}
+
+// TestVersionFrameHeader asserts the landing renders a version frame carrying the
+// "Morgward v<ver>" name and the localized tagline.
+func TestVersionFrameHeader(t *testing.T) {
+	m := formModel(80, 24)
+	out := m.formView()
+	wantName := version.Name + " v" + version.Version
+	if !strings.Contains(out, wantName) {
+		t.Fatalf("formView missing version name %q", wantName)
+	}
+	if !strings.Contains(out, t2(m.lang, kVersionTagline)) {
+		t.Fatalf("formView missing tagline %q", t2(m.lang, kVersionTagline))
 	}
 }
 
