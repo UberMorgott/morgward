@@ -131,11 +131,12 @@ const (
 
 // extra focusable rows after the inputs.
 const (
-	rowMode    = nInputs     // soft/strict toggle
-	rowCommand = nInputs + 1 // run/detect/verify toggle
-	rowLog     = nInputs + 2 // save-log-to-file toggle
-	rowStart   = nInputs + 3 // start button
-	nRows      = nInputs + 4
+	rowDisclosure = nInputs     // "▸ Дополнительно" advanced-inputs toggle
+	rowMode       = nInputs + 1 // soft/strict toggle
+	rowCommand    = nInputs + 2 // run/detect/verify toggle
+	rowLog        = nInputs + 3 // save-log-to-file toggle
+	rowStart      = nInputs + 4 // start button
+	nRows         = nInputs + 5
 )
 
 // focusableRows returns the ordered list of currently-focusable row indices.
@@ -144,9 +145,15 @@ const (
 // over this slice so focus never lands on a hidden row.
 func (m model) focusableRows() []int {
 	rows := make([]int, 0, nRows)
+	// Visible inputs: Host + Password always; Port/User/Key only when advancedOpen,
+	// so focus never strands on a hidden field.
 	for i := range nInputs {
+		if !m.advancedOpen && (i == fPort || i == fUser || i == fKey) {
+			continue
+		}
 		rows = append(rows, i)
 	}
+	rows = append(rows, rowDisclosure)
 	rows = append(rows, rowCommand)
 	if m.command != "detect" {
 		rows = append(rows, rowMode)
@@ -668,6 +675,8 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.refocus()
 	case "left", "right":
 		switch m.focus {
+		case rowDisclosure:
+			m.advancedOpen = !m.advancedOpen
 		case rowMode:
 			if m.mode == config.ModeSoft {
 				m.mode = config.ModeStrict
@@ -694,6 +703,10 @@ func (m model) updateForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.focus == rowStart {
 			return m.start()
+		}
+		if m.focus == rowDisclosure {
+			m.advancedOpen = !m.advancedOpen
+			return m, nil
 		}
 		// Enter advances focus only WITHIN the text inputs and stops at the first
 		// non-input row. This prevents a multiline paste (which on terminals without
@@ -1183,6 +1196,9 @@ func (m model) formHitAtClick(x, y int) formHit {
 	case frInput:
 		// A whole input row is clickable (any X) to focus that field.
 		return formHit{kind: frInput, field: r.field, ok: true}
+	case frDisclosure:
+		// The whole disclosure line is one click target (toggles advancedOpen).
+		return formHit{kind: frDisclosure, ok: true}
 	case frMode:
 		names := []string{t(m.lang, kOptSoft), t(m.lang, kOptStrict)}
 		opts := []string{"soft", "strict"}
@@ -1268,6 +1284,10 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 	case frInput:
 		m.focus = hit.field
 		return m, m.refocus()
+	case frDisclosure:
+		m.advancedOpen = !m.advancedOpen
+		m.focus = rowDisclosure
+		return m, nil
 	case frMode:
 		m.mode = config.Mode(hit.mode)
 		m.focus = rowMode
@@ -1298,14 +1318,15 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 type formRowKind int
 
 const (
-	frInput  formRowKind = iota // a text-input row; field holds the input index
-	frBlank                     // spacer line (kept in the slice so Y math stays exact)
-	frMode                      // soft/strict pill row
-	frAction                    // run/detect/verify pill row
-	frLog                       // save-log-to-file on/off pill row
-	frHelp                      // contextual toggle-help line
-	frStart                     // Start + Cancel button line
-	frErr                       // validation error line
+	frInput      formRowKind = iota // a text-input row; field holds the input index
+	frBlank                         // spacer line (kept in the slice so Y math stays exact)
+	frMode                          // soft/strict pill row
+	frAction                        // run/detect/verify pill row
+	frLog                           // save-log-to-file on/off pill row
+	frHelp                          // contextual toggle-help line
+	frStart                         // Start + Cancel button line
+	frErr                           // validation error line
+	frDisclosure                    // "▸ Дополнительно" toggle revealing Port/User/Key
 )
 
 // formRow is one rendered body line plus its kind (+ field index for inputs). The
@@ -1408,9 +1429,29 @@ func (m model) formRows() []formRow {
 			rows = append(rows, formRow{kind: frInput, field: i, text: ln})
 		}
 	}
-	for i := range m.inputs {
-		appendFramedInput(i)
+	// Novice default: Host + Password only. The disclosure toggle reveals the
+	// advanced Port/User/SSH-key inputs.
+	appendFramedInput(fHost)
+	appendFramedInput(fPass)
+	if m.advancedOpen {
+		appendFramedInput(fPort)
+		appendFramedInput(fUser)
+		appendFramedInput(fKey)
 	}
+
+	// "▸ Дополнительно" disclosure toggle: clicking/▶ toggles m.advancedOpen. The
+	// caret reflects state (▸ closed, ▼ open). Focusable (rowDisclosure) and aligned
+	// to the value column.
+	disLabel := t(m.lang, kDisclosureLabel)
+	if m.advancedOpen {
+		// swap the leading "▸" for the open glyph "▼"
+		disLabel = t(m.lang, kDisclosureOpen) + strings.TrimPrefix(disLabel, "▸")
+	}
+	disStyle := tipStyle
+	if m.focus == rowDisclosure {
+		disStyle = focusStyle
+	}
+	rows = append(rows, formRow{kind: frDisclosure, text: indent + disStyle.Render(disLabel)})
 
 	rows = append(rows, formRow{kind: frBlank})
 	rows = append(rows, formRow{kind: frAction, text: renderToggle(t(m.lang, kLabelAction),

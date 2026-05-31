@@ -67,6 +67,72 @@ func TestFramedInputRender3Rows(t *testing.T) {
 	}
 }
 
+// rowFields returns, for the given kind, the set of field indices present among
+// frInput rows (deduplicated, in order of first appearance).
+func inputFieldsInRows(rows []formRow) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, r := range rows {
+		if r.kind == frInput && !seen[r.field] {
+			seen[r.field] = true
+			out = append(out, r.field)
+		}
+	}
+	return out
+}
+
+func hasKind(rows []formRow, k formRowKind) bool {
+	for _, r := range rows {
+		if r.kind == k {
+			return true
+		}
+	}
+	return false
+}
+
+// disclosureRowIndex returns the slice index of the first frDisclosure row, or -1.
+func disclosureRowIndex(rows []formRow) int {
+	for i, r := range rows {
+		if r.kind == frDisclosure {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestDisclosureToggleClickable verifies the disclosure row exists, is clickable,
+// and toggling advancedOpen reveals the Port/User/Key inputs.
+func TestDisclosureToggleClickable(t *testing.T) {
+	m := formModel(80, 24)
+	m.advancedOpen = false
+	rows := m.formRows()
+	// Novice default: only Host + Password inputs are present.
+	got := inputFieldsInRows(rows)
+	want := []int{fHost, fPass}
+	if len(got) != len(want) {
+		t.Fatalf("advancedOpen=false input fields=%v want %v", got, want)
+	}
+	di := disclosureRowIndex(rows)
+	if di < 0 {
+		t.Fatalf("no frDisclosure row found")
+	}
+	// Click the disclosure row.
+	hit := m.formHitAtClick(0, formBodyTopRow+di)
+	if !hit.ok || hit.kind != frDisclosure {
+		t.Fatalf("click on disclosure row: ok=%v kind=%v", hit.ok, hit.kind)
+	}
+	// Apply the click and confirm advanced inputs appear.
+	m2, _ := m.formClick(0, formBodyTopRow+di)
+	mm := m2.(model)
+	if !mm.advancedOpen {
+		t.Fatalf("disclosure click did not set advancedOpen")
+	}
+	got2 := inputFieldsInRows(mm.formRows())
+	if len(got2) != nInputs {
+		t.Fatalf("advancedOpen=true input fields=%v want all %d", got2, nInputs)
+	}
+}
+
 func init() {
 	// keep lipgloss import referenced for later tasks even before first use
 	_ = lipgloss.Width
