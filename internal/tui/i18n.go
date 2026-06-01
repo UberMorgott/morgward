@@ -155,9 +155,11 @@ const (
 	kWikiProbeWhat // per-probe detail label: "ЧТО ПРОВЕРЯЕТ" / "WHAT THIS CHECKS"
 
 	// --- wiki PROBE-detail action buttons (only when m.wikiProbeID != "") --------
-	kWikiApplyButton  // clickable: apply THIS tweak's step ("Применить" / "Apply")
-	kWikiUpdateButton // clickable: full upgrade + reboot ("Обновить и перезагрузить" / "Update & reboot")
-	kWikiUpdateWarn   // warning line shown when dashFacts.PendingUpgrades > 0
+	kWikiApplyButton   // clickable: apply THIS tweak's step ("Применить" / "Apply")
+	kWikiRevertButton  // clickable: revert THIS tweak's step ("Откатить" / "Revert")
+	kWikiUpdateButton  // clickable: full upgrade + reboot ("Обновить и перезагрузить" / "Update & reboot")
+	kWikiUpdateWarn    // warning line shown when dashFacts.PendingUpgrades > 0
+	kWikiUpdateConfirm // A8 reboot confirm prompt shown after the first update-button activation
 
 	// --- live tweak status words (shared by the wiki status line) --------
 	kStatusApplied     // "✓ применено" / "✓ applied"
@@ -332,9 +334,11 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiBack:      "← Назад",
 		kWikiProbeWhat: "ЧТО ПРОВЕРЯЕТ",
 
-		kWikiApplyButton:  "Применить",
-		kWikiUpdateButton: "Обновить и перезагрузить",
-		kWikiUpdateWarn:   "Система не обновлена — рекомендуем обновить перед применением твиков",
+		kWikiApplyButton:   "Применить",
+		kWikiRevertButton:  "Откатить",
+		kWikiUpdateButton:  "Обновить и перезагрузить",
+		kWikiUpdateWarn:    "Система не обновлена — рекомендуем обновить перед применением твиков",
+		kWikiUpdateConfirm: "Полное обновление и перезагрузка (A8) — несколько минут. Enter — обновить и перезагрузить, Esc — отмена.",
 
 		kStatusApplied:     "✓ применено",
 		kStatusCanApply:    "• можно",
@@ -493,9 +497,11 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiBack:      "← Back",
 		kWikiProbeWhat: "WHAT THIS CHECKS",
 
-		kWikiApplyButton:  "Apply",
-		kWikiUpdateButton: "Update & reboot",
-		kWikiUpdateWarn:   "System is not up to date — update before applying tweaks",
+		kWikiApplyButton:   "Apply",
+		kWikiRevertButton:  "Revert",
+		kWikiUpdateButton:  "Update & reboot",
+		kWikiUpdateWarn:    "System is not up to date — update before applying tweaks",
+		kWikiUpdateConfirm: "Full upgrade and reboot (A8) — several minutes. Enter to update & reboot, Esc to cancel.",
 
 		kStatusApplied:     "✓ applied",
 		kStatusCanApply:    "• available",

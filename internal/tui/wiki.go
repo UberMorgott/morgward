@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/version"
 	"github.com/UberMorgott/morgward/internal/wiki"
 )
@@ -25,6 +26,7 @@ const (
 	wikiRowUpdateWarn   wikiActionKind = iota // non-clickable warning text line
 	wikiRowUpdateButton                       // clickable "Обновить и перезагрузить" pill
 	wikiRowApplyButton                        // clickable "Применить" pill
+	wikiRowRevertButton                       // clickable "Откатить" pill (applied + revertable probes)
 	wikiRowBack                               // clickable "← Назад" pill (always last)
 )
 
@@ -46,8 +48,16 @@ func (m model) wikiActionRows() []wikiActionKind {
 		if m.dashFacts != nil && m.dashFacts.PendingUpgrades > 0 {
 			rows = append(rows, wikiRowUpdateWarn, wikiRowUpdateButton)
 		}
-		if applied, info, ok := m.wikiProbeState(); ok && !applied && !info {
+		applied, info, ok := m.wikiProbeState()
+		if ok && !applied && !info {
 			rows = append(rows, wikiRowApplyButton)
+		}
+		// Revert is offered only for an APPLIED probe (not informational) whose step
+		// has an engine revert snippet. Placed after the apply button, before back.
+		if ok && applied && !info {
+			if step, has := m.wikiProbeStep(); has && engine.IsRevertable(step) {
+				rows = append(rows, wikiRowRevertButton)
+			}
 		}
 	}
 	rows = append(rows, wikiRowBack)
@@ -125,6 +135,20 @@ func (m model) wikiApplyAtClick(x, y int) bool {
 	return pillIndexAt([]string{t(m.lang, kWikiApplyButton)}, wikiBackStartCol, x) == 0
 }
 
+// wikiRevertAtClick reports whether (x,y) hit the "[Откатить]" pill — present only
+// when wikiActionRows includes it (per-PROBE path, probe APPLIED + not informational
+// + step is engine-revertable). Mirrors wikiApplyAtClick's geometry.
+func (m model) wikiRevertAtClick(x, y int) bool {
+	if m.phase != phaseWiki {
+		return false
+	}
+	ry, ok := m.wikiActionRowY(wikiRowRevertButton)
+	if !ok || y != ry {
+		return false
+	}
+	return pillIndexAt([]string{t(m.lang, kWikiRevertButton)}, wikiBackStartCol, x) == 0
+}
+
 // wikiUpdateAtClick reports whether (x,y) hit the "[Обновить и перезагрузить]" pill —
 // present only when there are pending upgrades (m.dashFacts.PendingUpgrades > 0).
 func (m model) wikiUpdateAtClick(x, y int) bool {
@@ -178,6 +202,16 @@ func (m model) startSteps(ids []string) (tea.Model, tea.Cmd) {
 	return m.start()
 }
 
+// startRevert starts a per-tweak revert over the given engine step IDs via the
+// engine's "revert" command (RunRevert, allowBrownfield=true). It mirrors startSteps:
+// set the command + id list, then reuse start() so the run streams into the same log
+// view and lands on the summary on completion. The wiki [Откатить] button funnels here.
+func (m model) startRevert(ids []string) (tea.Model, tea.Cmd) {
+	m.command = "revert"
+	m.cmds = ids
+	return m.start()
+}
+
 // wikiView renders one fix's what/why/risk description inside the run frame: a
 // "[ID] Title" header, then three word-wrapped labeled blocks (WHAT IT DOES / WHY /
 // WITHOUT IT). On an unknown step it shows the localized no-description line. The
@@ -216,13 +250,20 @@ func (m model) wikiView() string {
 			line = pillOnStyle.Render(t(m.lang, kWikiUpdateButton))
 		case wikiRowApplyButton:
 			line = pillOnStyle.Render(t(m.lang, kWikiApplyButton))
+		case wikiRowRevertButton:
+			// Distinct (dim) style so revert reads as a secondary action vs apply/update.
+			line = pillStyle.Render(t(m.lang, kWikiRevertButton))
 		case wikiRowBack:
 			line = pillOnStyle.Render(t(m.lang, kWikiBack))
 		}
 		sb.WriteString(contentLine(b, line, innerW))
 		sb.WriteByte('\n')
 	}
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
+	hintKey := kWikiHint
+	if m.wikiUpdateConfirm {
+		hintKey = kWikiUpdateConfirm
+	}
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, hintKey)), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')

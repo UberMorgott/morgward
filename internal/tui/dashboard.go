@@ -442,6 +442,7 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.wikiProbeID = r.Probe.ID // per-probe description path
 		m.wikiReturn = phaseDashboard
 		m.wikiScroll = 0
+		m.wikiUpdateConfirm = false // fresh page never carries a stale reboot confirm
 		m.phase = phaseWiki
 		return m, nil
 	}

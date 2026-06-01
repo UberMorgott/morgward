@@ -186,6 +186,8 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 		return Audit(cfg, log, h)
 	case "step":
 		return RunSteps(cfg, log, ids, h)
+	case "revert":
+		return RunRevert(cfg, log, ids, h)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}

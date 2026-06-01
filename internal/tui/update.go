@@ -53,16 +53,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
 		case phaseWiki:
-			// On the per-PROBE detail, the [Применить] / [Обновить и перезагрузить]
-			// action pills take priority over the back pill (their rows never overlap).
-			// [Применить] applies THIS probe's step; [Обновить] runs A8 (upgrade+reboot).
-			// Both reuse startSteps → the run streams to phaseRun → summary.
+			// On the per-PROBE detail, the [Применить] / [Откатить] / [Обновить и
+			// перезагрузить] action pills take priority over the back pill (their rows
+			// never overlap). [Применить] applies THIS probe's step; [Откатить] reverts it;
+			// [Обновить] runs A8 (upgrade+reboot) behind a reboot confirm.
+			//
+			// [Обновить] is a two-step confirm (A8 reboots): the FIRST click arms the
+			// confirm (hint switches to the prompt); the launch happens only on Enter in
+			// the key handler. While the confirm is armed, every OTHER click cancels it and
+			// is otherwise harmless (no apply/revert/back fires on the arming interaction).
 			if m.wikiUpdateAtClick(mc.X, mc.Y) {
-				return m.startSteps([]string{"A8"})
+				m.wikiUpdateConfirm = true
+				return m, nil
+			}
+			if m.wikiUpdateConfirm {
+				// A pending reboot confirm swallows any other click (cancel it; resolve via
+				// Enter/Esc on the hint). This keeps apply/revert/back harmless while armed.
+				m.wikiUpdateConfirm = false
+				return m, nil
 			}
 			if m.wikiApplyAtClick(mc.X, mc.Y) {
 				if step, ok := m.wikiProbeStep(); ok {
 					return m.startSteps([]string{step})
+				}
+				return m, nil
+			}
+			if m.wikiRevertAtClick(mc.X, mc.Y) {
+				if step, ok := m.wikiProbeStep(); ok {
+					return m.startRevert([]string{step})
 				}
 				return m, nil
 			}
@@ -78,7 +96,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.wikiTweak = ""   // summary path: real step id, plain step header
 				m.wikiProbeID = "" // summary path: step-level doc, no per-probe text
 				m.wikiReturn = phaseSummary
-				m.wikiScroll = 0 // fresh page starts at the top
+				m.wikiScroll = 0            // fresh page starts at the top
+				m.wikiUpdateConfirm = false // fresh page never carries a stale reboot confirm
 				m.phase = phaseWiki
 			}
 			return m, nil
@@ -171,6 +190,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.phase {
 		case phaseWiki:
+			// A pending A8 reboot confirm is resolved here FIRST: Enter launches the
+			// upgrade+reboot (A8), Esc/any other key cancels it (and does NOT navigate
+			// back — the confirm owns esc while armed). This mirrors dashApplyConfirm.
+			if m.wikiUpdateConfirm {
+				switch msg.String() {
+				case "enter":
+					m.wikiUpdateConfirm = false
+					return m.startSteps([]string{"A8"})
+				default:
+					// Esc / b / any other key cancels the confirm and stays on the page.
+					m.wikiUpdateConfirm = false
+				}
+				return m, nil
+			}
 			// Any "back" key returns to wherever the wiki was opened from (summary);
 			// ↑↓/k/j scroll the description when it overflows the middle region.
 			switch msg.String() {
@@ -183,10 +216,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.startSteps([]string{step})
 					}
 				}
+			case "r":
+				// Revert THIS probe's step — only when the [Откатить] row is actually shown.
+				if _, shown := m.wikiActionRowY(wikiRowRevertButton); shown {
+					if step, ok := m.wikiProbeStep(); ok {
+						return m.startRevert([]string{step})
+					}
+				}
 			case "u":
-				// Update & reboot (A8) — only when the [Обновить] row is actually shown.
+				// Update & reboot (A8) — arm the reboot confirm only when the [Обновить] row
+				// is actually shown; the launch happens on the next Enter (see above).
 				if _, shown := m.wikiActionRowY(wikiRowUpdateButton); shown {
-					return m.startSteps([]string{"A8"})
+					m.wikiUpdateConfirm = true
 				}
 			case "up", "k":
 				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
@@ -570,6 +611,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.sumScroll = 0
 	m.wikiScroll = 0
 	m.wikiProbeID = ""
+	m.wikiUpdateConfirm = false
 	m.matScroll = 0
 	m.titleK = titleIdle
 	// Reset Dashboard audit state so a fresh connect re-audits cleanly.

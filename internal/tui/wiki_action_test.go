@@ -87,6 +87,8 @@ func TestWikiApplyAndUpdateHitTest(t *testing.T) {
 	}
 
 	// APPLIED probe → no apply pill, and (with pending=0) no update pill either.
+	// A3 IS engine-revertable, so an applied A3 probe now shows the [Откатить] pill
+	// (added after the apply slot, before back).
 	ma := wikiProbeModel(100, 40, "a3.installed", "A3", true, 0)
 	if _, shown := ma.wikiActionRowY(wikiRowApplyButton); shown {
 		t.Fatalf("applied probe must not show the apply pill")
@@ -94,8 +96,8 @@ func TestWikiApplyAndUpdateHitTest(t *testing.T) {
 	if _, shown := ma.wikiActionRowY(wikiRowUpdateButton); shown {
 		t.Fatalf("with no pending upgrades the update pill must be hidden")
 	}
-	if got := ma.wikiActionRows(); len(got) != 1 || got[0] != wikiRowBack {
-		t.Fatalf("applied + no-pending action rows = %v, want [back only]", got)
+	if got := ma.wikiActionRows(); len(got) != 2 || got[0] != wikiRowRevertButton || got[1] != wikiRowBack {
+		t.Fatalf("applied + revertable + no-pending action rows = %v, want [revert, back]", got)
 	}
 	// Hit-tests for the hidden pills must always miss.
 	if ma.wikiApplyAtClick(4, ma.wikiBackRow()) {

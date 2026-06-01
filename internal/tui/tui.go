@@ -173,6 +173,12 @@ type model struct {
 	// step-level wiki.Doc. Empty on the summary path => step-level doc. Plain
 	// string, value-copyable.
 	wikiProbeID string
+	// wikiUpdateConfirm gates the A8 (full upgrade + REBOOT) launch from the wiki
+	// [Обновить и перезагрузить] button: the first activation flips it true (the hint
+	// switches to a confirm prompt), Enter then launches startSteps(["A8"]); any other
+	// interaction (esc / back / a different action) cancels it. Plain bool, value-copy
+	// safe. Reset in goBack and whenever phaseWiki is (re)entered.
+	wikiUpdateConfirm bool
 
 	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
 	// memory; never logged), the copy-to-clipboard status, where esc returns to,
