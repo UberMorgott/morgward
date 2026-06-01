@@ -35,5 +35,15 @@ for %%T in (
 
 set "GOOS="
 set "GOARCH="
+
+rem Emit dist\checksums.txt in the sha256sum format go-selfupdate's ChecksumValidator
+rem parses: lowercase hex sha256, two spaces, then the bare artifact filename.
+powershell -NoProfile -Command "$lines = foreach ($f in Get-ChildItem -Path dist -File -Filter 'morgward-*' | Sort-Object Name) { $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLower(); \"$h  $($f.Name)\" }; Set-Content -Path 'dist/checksums.txt' -Value $lines -Encoding ascii"
+if errorlevel 1 (
+    echo CHECKSUM GENERATION FAILED
+    endlocal
+    exit /b 1
+)
+
 echo done -^> .\dist
 endlocal
