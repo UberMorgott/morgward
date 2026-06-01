@@ -20,5 +20,5 @@ func setConsoleTitle(title string) {
 	if err != nil {
 		return
 	}
-	_, _, _ = procSetConsoleTitleW.Call(uintptr(unsafe.Pointer(p)))
+	_, _, _ = procSetConsoleTitleW.Call(uintptr(unsafe.Pointer(p))) // #nosec G103 -- required unsafe.Pointer for the Win32 SetConsoleTitleW syscall
 }

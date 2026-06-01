@@ -40,12 +40,12 @@ func New(path string) *Logger {
 		return l
 	}
 	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: cannot create log directory %q: %v (continuing without a log file)\n", dir, err)
 			return l
 		}
 	}
-	f, err := os.Create(path)
+	f, err := os.Create(path) // #nosec G304 -- path is operator-supplied (--log flag), not network/attacker input
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: cannot create log file %q: %v (continuing without a log file)\n", path, err)
 		return l
