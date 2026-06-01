@@ -210,18 +210,22 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	if err := freshLogin(ctx, admin); err != nil {
 		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh lockdown locked out admin")
 	}
-	disarmSSHRevert(ctx)
 
-	// 5. Lock the root password ONLY after the admin key login is proven.
-	ctx.Cli.Sudo("passwd -l root")
-
-	// 6. Executor handoff: root SSH is now closed; switch the controller to admin.
+	// 5. Executor handoff FIRST, while ssh-revert is still armed and root not yet
+	// locked (F12): if the handoff fails here the box self-heals via the 300s timer
+	// and root is still usable, instead of being left admin-only with the timer
+	// already disarmed. Only after a successful handoff do we disarm + lock root.
 	if ctx.Cli.User == "root" {
 		if err := ctx.Cli.SwitchUser(admin); err != nil {
-			return StatusFail, "executor handoff to admin failed: " + err.Error(), fmt.Errorf("handoff failed")
+			return StatusFail, "executor handoff to admin failed: " + err.Error() + " (ssh-revert still armed; root not yet locked — box will self-restore in <300s)", fmt.Errorf("handoff failed")
 		}
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
 	}
+
+	// 6. Handoff proven (or already non-root) — disarm the fail-safe and lock the
+	// root password. Both run as admin+sudo when handoff happened.
+	disarmSSHRevert(ctx)
+	ctx.Cli.Sudo("passwd -l root")
 
 	return StatusOK, "SSH locked down (key-only, root blocked); "+effectivePolicy(ctx), nil
 }
