@@ -112,6 +112,40 @@ func TestSecurityButtonHitTest(t *testing.T) {
 	}
 }
 
+// TestSecurityScrollHitTest is the F10 guard: on a terminal too short to show the
+// whole menu, the bottom DANGER button is below the fold at scroll 0 (not hittable),
+// and scrolling down brings it into the view region where its hit-test resolves at the
+// SCROLLED screen Y. Covers both the offset-aware render geometry and secRowYToBodyIdx
+// tracking m.dashScroll (the bug: render+hit-test used a hardcoded offset 0).
+func TestSecurityScrollHitTest(t *testing.T) {
+	// h=16 → bodyViewH = max(16-7,1) = 9; the menu body is 11 rows, so it overflows.
+	m := secModel(100, 16)
+	innerW := innerWidth(m.boxWidth())
+	body := m.securityBodyLines(innerW)
+	viewH := m.bodyViewH()
+	if len(body) <= viewH {
+		t.Fatalf("test precondition: body (%d) must overflow viewH (%d)", len(body), viewH)
+	}
+
+	dangerIdx := m.secDangerButtonsIndex(innerW)
+	dx := pillRanges(m.securityDangerButtonNames(), secButtonStartCol)[0][0] + 1
+
+	// At scroll 0 the DANGER row sits below the fold: even a click at the absolute
+	// (unscrolled) row must NOT resolve to the button — it is not rendered there.
+	m.dashScroll = 0
+	if got := m.secButtonAtClick(dx, summaryBodyTopRow+dangerIdx); got == secBtnKeyOnlyDanger {
+		t.Fatalf("DANGER button hittable at scroll 0 while below the fold")
+	}
+
+	// Scroll so the DANGER row enters the view region, then click at its SCROLLED Y.
+	m.dashScroll = clampScroll(len(body)-viewH, len(body), viewH)
+	off := clampScroll(m.dashScroll, len(body), viewH)
+	scrolledY := summaryBodyTopRow + (dangerIdx - off)
+	if got := m.secButtonAtClick(dx, scrolledY); got != secBtnKeyOnlyDanger {
+		t.Fatalf("DANGER button click at scrolled y=%d → %v, want secBtnKeyOnlyDanger", scrolledY, got)
+	}
+}
+
 // TestSecuritySafeButtonsRunSteps asserts the SAFE buttons start the apply over the
 // EXACT engine step IDs: Create admin → ["PRE"], Strengthen crypto → ["PRE","A2-safe"].
 // The host is left empty so start()'s validation short-circuits before any dial; the

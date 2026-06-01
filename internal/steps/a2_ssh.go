@@ -95,7 +95,7 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
 	}
 
-	return StatusOK, "SSH hardened, admin key verified; "+effectivePolicy(ctx), nil
+	return StatusOK, "SSH hardened, admin key verified; " + effectivePolicy(ctx), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ func (A2Safe) Run(ctx *Context) (Status, string, error) {
 	}
 	disarmSSHRevert(ctx)
 
-	return StatusOK, "SSH crypto hardened (access policy unchanged); "+effectivePolicy(ctx), nil
+	return StatusOK, "SSH crypto hardened (access policy unchanged); " + effectivePolicy(ctx), nil
 }
 
 // A2Danger applies the opt-in access lockdown (AllowGroups + key-only + root lock).
@@ -174,6 +174,16 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	// 0. Ensure the admin key is present before we cut off password / root login.
 	if ctx.AuthLine != "" {
 		ctx.Cli.Sudo(installAdminKey(admin, ctx.AuthLine))
+	}
+
+	// 0b. Precondition guard (F04): the lockdown writes `AllowGroups sshusers` +
+	// `PermitRootLogin no`. If the admin user was never created in sshusers (PRE
+	// skipped) or its authorized_keys is empty, the restart activates AllowGroups
+	// with no eligible member and there is no working key — a hard lockout that
+	// only the 300s ssh-revert timer would heal. Refuse up front instead of
+	// leaning on that net. Admin name is charset-validated in config.Validate.
+	if status, detail, err := assertAdminLoginable(ctx, admin); err != nil {
+		return status, detail, err
 	}
 
 	// 1. Write the DANGER drop-in: AllowGroups + PermitRootLogin no + key-only.
@@ -200,20 +210,24 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	if err := freshLogin(ctx, admin); err != nil {
 		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh lockdown locked out admin")
 	}
-	disarmSSHRevert(ctx)
 
-	// 5. Lock the root password ONLY after the admin key login is proven.
-	ctx.Cli.Sudo("passwd -l root")
-
-	// 6. Executor handoff: root SSH is now closed; switch the controller to admin.
+	// 5. Executor handoff FIRST, while ssh-revert is still armed and root not yet
+	// locked (F12): if the handoff fails here the box self-heals via the 300s timer
+	// and root is still usable, instead of being left admin-only with the timer
+	// already disarmed. Only after a successful handoff do we disarm + lock root.
 	if ctx.Cli.User == "root" {
 		if err := ctx.Cli.SwitchUser(admin); err != nil {
-			return StatusFail, "executor handoff to admin failed: " + err.Error(), fmt.Errorf("handoff failed")
+			return StatusFail, "executor handoff to admin failed: " + err.Error() + " (ssh-revert still armed; root not yet locked — box will self-restore in <300s)", fmt.Errorf("handoff failed")
 		}
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
 	}
 
-	return StatusOK, "SSH locked down (key-only, root blocked); "+effectivePolicy(ctx), nil
+	// 6. Handoff proven (or already non-root) — disarm the fail-safe and lock the
+	// root password. Both run as admin+sudo when handoff happened.
+	disarmSSHRevert(ctx)
+	ctx.Cli.Sudo("passwd -l root")
+
+	return StatusOK, "SSH locked down (key-only, root blocked); " + effectivePolicy(ctx), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +292,37 @@ func buildDangerWrite(ctx *Context) string {
 // danger99 is the access-lockdown drop-in content (no crypto — A2Safe owns that).
 func danger99() string {
 	return "PermitRootLogin no\nAllowGroups sshusers\n"
+}
+
+// assertAdminLoginable is the F04 precondition guard for the A2-danger lockdown.
+// It verifies, BEFORE the AllowGroups sshusers + PermitRootLogin no drop-in is
+// written, that the admin user (a) is a member of sshusers and (b) has a
+// non-empty authorized_keys. Either failing means PRE never ran for this box, so
+// the lockdown would cut every login path; we StatusFail with a "run PRE first"
+// message rather than relying on the ssh-revert timer. The admin name is already
+// charset-validated in config.Validate, so the unquoted interpolation is safe.
+func assertAdminLoginable(ctx *Context, admin string) (Status, string, error) {
+	groups := ctx.Cli.Sudo(fmt.Sprintf("id -nG %s 2>/dev/null", admin))
+	if groups.RC != 0 {
+		return StatusFail, fmt.Sprintf("admin user %q not found — run the PRE step first", admin),
+			fmt.Errorf("admin precondition: user missing")
+	}
+	inGroup := false
+	for _, g := range strings.Fields(groups.Out()) {
+		if g == "sshusers" {
+			inGroup = true
+			break
+		}
+	}
+	if !inGroup {
+		return StatusFail, fmt.Sprintf("admin user %q not in sshusers — run the PRE step first (AllowGroups would lock everyone out)", admin),
+			fmt.Errorf("admin precondition: not in sshusers")
+	}
+	if r := ctx.Cli.Sudo(fmt.Sprintf("test -s /home/%s/.ssh/authorized_keys", admin)); r.RC != 0 {
+		return StatusFail, fmt.Sprintf("admin %q has no authorized_keys — run the PRE step first (key-only login would fail)", admin),
+			fmt.Errorf("admin precondition: empty authorized_keys")
+	}
+	return StatusOK, "", nil
 }
 
 // syntaxGate runs `sshd -t`; on failure it removes the drop-ins this package
@@ -353,8 +398,12 @@ ClientAliveCountMax 2
 func cryptoBlock(ctx *Context) string {
 	var b strings.Builder
 	// KexAlgorithms: mlkem first on 26.04 (OpenSSH 10.x); dropped on 24.04 (9.6p1).
+	// F20: gate strictly on a CONFIRMED 26.04. An unknown/misdetected version now
+	// falls back to the conservative 24.04 set (no mlkem) rather than assuming
+	// newest — the 24.04 KEX list is valid on 26.04 too, so a glitched os-release
+	// probe degrades safely instead of emitting OpenSSH-10-only tokens.
 	kex := "sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256"
-	if ctx.Facts.Is2604 || (!ctx.Facts.Is2404 && !ctx.Facts.Is2604) {
+	if ctx.Facts.Is2604 {
 		kex = "mlkem768x25519-sha256," + kex
 	}
 	fmt.Fprintf(&b, "KexAlgorithms %s\n", kex)
@@ -373,7 +422,9 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 HostKey /etc/ssh/ssh_host_rsa_key
 `)
 	// PerSourcePenalties: OpenSSH >= 9.8 only (26.04). 9.6p1 (24.04) rejects them.
-	if ctx.Facts.Is2604 || (!ctx.Facts.Is2404 && !ctx.Facts.Is2604) {
+	// F20: confirmed 26.04 only — an unknown version conservatively omits them
+	// (sshd -t on a pre-9.8 box would otherwise reject the directive).
+	if ctx.Facts.Is2604 {
 		b.WriteString("PerSourcePenalties authfail:30 noauth:15 grace-exceeded:120\n")
 		if ctx.Facts.ClientIP != "" {
 			fmt.Fprintf(&b, "PerSourcePenaltyExemptList %s\n", ctx.Facts.ClientIP)

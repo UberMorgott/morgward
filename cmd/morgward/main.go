@@ -237,7 +237,7 @@ func performUpdate(targetVer string) error {
 		return fmt.Errorf("update self: %w", err)
 	}
 	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, rel.Version())
-	c := exec.Command(exe, os.Args[1:]...)
+	c := exec.Command(exe, os.Args[1:]...) // #nosec G204 G702 -- args are the local operator's own launch argv; no shell; binary path from os.Executable(); update authenticity is enforced by the F01 checksum validator
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
 		// Propagate the relaunched process's exit code when it failed cleanly.

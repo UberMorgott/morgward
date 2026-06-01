@@ -81,6 +81,32 @@ func TestA2DangerScript(t *testing.T) {
 	}
 }
 
+// TestCryptoBlockVersionGate guards F20: only a CONFIRMED 26.04 box gets the
+// OpenSSH-10-only tokens (mlkem KEX + PerSourcePenalties). A 24.04 box and an
+// UNKNOWN/misdetected version (both flags false) both fall back to the
+// conservative 24.04 set so a glitched os-release probe degrades safely.
+func TestCryptoBlockVersionGate(t *testing.T) {
+	ctx := newTestCtx()
+
+	mk := func(is2404, is2604 bool) string {
+		ctx.Facts.Is2404, ctx.Facts.Is2604 = is2404, is2604
+		return cryptoBlock(ctx)
+	}
+
+	// Confirmed 26.04 → newest.
+	if c := mk(false, true); !strings.Contains(c, "mlkem768x25519-sha256") || !strings.Contains(c, "PerSourcePenalties") {
+		t.Errorf("26.04 must emit mlkem + PerSourcePenalties:\n%s", c)
+	}
+	// Confirmed 24.04 → conservative.
+	if c := mk(true, false); strings.Contains(c, "mlkem768x25519-sha256") || strings.Contains(c, "PerSourcePenalties") {
+		t.Errorf("24.04 must NOT emit mlkem/PerSourcePenalties:\n%s", c)
+	}
+	// Unknown/misdetected (both false) → conservative fallback, NOT newest.
+	if c := mk(false, false); strings.Contains(c, "mlkem768x25519-sha256") || strings.Contains(c, "PerSourcePenalties") {
+		t.Errorf("unknown version must fall back to conservative 24.04 set, not 26.04:\n%s", c)
+	}
+}
+
 // TestA2SSHUnchanged guards the legacy full-run step: build99(strict=false) still
 // emits AllowGroups + prohibit-password (CLI back-compat — A2SSH behavior frozen).
 func TestA2SSHUnchanged(t *testing.T) {

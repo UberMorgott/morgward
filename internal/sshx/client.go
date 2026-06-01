@@ -392,5 +392,5 @@ func (c *Client) WaitForReboot(preBootID string, timeout time.Duration, onTick f
 
 // LoadKeyFile reads a private key file from disk.
 func LoadKeyFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+	return os.ReadFile(path) // #nosec G304 -- path is operator-supplied (--key flag), not network/attacker input
 }

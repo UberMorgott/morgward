@@ -15,4 +15,12 @@ foreach ($t in $targets) {
     go build -trimpath -ldflags '-s -w' -o $out ./cmd/morgward
 }
 Remove-Item Env:GOOS, Env:GOARCH
+
+# Emit dist/checksums.txt in the sha256sum format go-selfupdate's ChecksumValidator
+# parses: lowercase hex sha256, two spaces, then the bare artifact filename.
+$lines = foreach ($f in Get-ChildItem -Path dist -File -Filter 'morgward-*' | Sort-Object Name) {
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLower()
+    "$hash  $($f.Name)"
+}
+Set-Content -Path 'dist/checksums.txt' -Value $lines -Encoding ascii -NoNewline:$false
 Write-Host "done -> ./dist"

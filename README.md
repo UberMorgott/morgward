@@ -140,22 +140,53 @@ Cross-compile (or use `./build.ps1` / `make release`):
 ```sh
 GOOS=linux  GOARCH=amd64 go build -o dist/morgward-linux-amd64   ./cmd/morgward
 GOOS=linux  GOARCH=arm64 go build -o dist/morgward-linux-arm64   ./cmd/morgward
+GOOS=darwin GOARCH=amd64 go build -o dist/morgward-darwin-amd64  ./cmd/morgward
 GOOS=darwin GOARCH=arm64 go build -o dist/morgward-darwin-arm64  ./cmd/morgward
 GOOS=windows GOARCH=amd64 go build -o dist/morgward-windows-amd64.exe ./cmd/morgward
 ```
 
 ### Releases
 
-> ⚠️ Every release **must** publish a `checksums.txt` asset alongside the binaries
-> (goreleaser's `checksum` block emits this by default). Self-update verifies each
-> downloaded binary's SHA-256 against `checksums.txt` before applying it — a release
-> without that asset fails the update with a validation error (fail-closed) rather
-> than applying an unverified binary.
->
-> No `.goreleaser` config ships in the repo yet, so this asset is **not produced
-> automatically**. Until a release pipeline emits `checksums.txt`, self-update will
-> refuse every release. Add the release config (or attach `checksums.txt` manually)
-> before cutting a release that operators are expected to update to.
+Build all artifacts with **one** of (each now also emits `dist/checksums.txt`):
+
+```sh
+make release        # Linux/macOS — uses sha256sum --text
+.\build.ps1         # Windows dev host — Get-FileHash SHA256
+build.bat           # Windows — wraps PowerShell Get-FileHash
+```
+
+This produces **six** files in `dist/` — five binaries plus `checksums.txt`:
+
+```
+morgward-linux-amd64
+morgward-linux-arm64
+morgward-darwin-amd64
+morgward-darwin-arm64
+morgward-windows-amd64.exe
+checksums.txt
+```
+
+`checksums.txt` is standard `sha256sum --text` output — one line per binary,
+`<lowercase-sha256-hex><two spaces><bare filename>` (no `dist/` prefix, no version
+suffix).
+
+> ⚠️ **Uploading the GitHub release assets — releasers MUST attach all six files**
+> (every `dist/*` binary **and** `dist/checksums.txt`) to the release, with the asset
+> names left **exactly as built** (bare — no version suffix, no `dist/` prefix).
+> Self-update (`selfupdate.ChecksumValidator{UniqueFilename:"checksums.txt"}`) matches
+> the downloaded asset name against its line in `checksums.txt` and **fails closed**:
+> if `checksums.txt` is missing from the release, or a binary's name doesn't match its
+> line, the update is **rejected and not applied** — operators stay on their current
+> build rather than receiving an unverified binary. Verified end-to-end against
+> go-selfupdate v1.5.2.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push and pull request (single
+`ubuntu-latest` job, Go 1.26.3): `go build` → `go vet` → `go test` →
+`go test -race` (`CGO_ENABLED=1`) → `govulncheck`. The race detector runs on Linux
+because it needs CGO + a C compiler, which the Windows dev host lacks. CI does **not**
+generate `checksums.txt` — that is part of the release scripts above, not CI.
 
 ## Layout
 

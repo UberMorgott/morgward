@@ -119,6 +119,13 @@ func (m model) keyCopyAtClick(x, y int) bool {
 		return false
 	}
 	_, buttonIdx := m.keyBodyLines(innerWidth(m.boxWidth()))
+	// keyView renders the body at a fixed offset 0, so only body indices [0, viewH)
+	// are on screen. A button clipped below the fold (buttonIdx >= viewH) is not
+	// drawn, so a click at its absolute Y must NOT register — without this clamp a
+	// click on the chrome of a short window could spuriously trigger copyKey.
+	if buttonIdx >= m.bodyViewH() {
+		return false
+	}
 	if y != keyBodyTopRow+buttonIdx {
 		return false
 	}

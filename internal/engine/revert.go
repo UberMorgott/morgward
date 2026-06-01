@@ -28,15 +28,23 @@ import (
 // (restores the image-default policy) — it never tightens it — so it cannot lock
 // the operator out. It reuses the exact body of the a2_ssh.go ssh-revert payload
 // (armSSHRevert), run immediately instead of via a systemd-run timer.
+//
+// F07: the revert is now FAITHFUL to the A2Danger/strict apply — it also rm's the
+// cloud-init 99-disable-passwords.cfg, restores 50-cloud-init.conf's
+// PasswordAuthentication (no→yes), and `passwd -u root` so the box is not left with
+// root locked + cloud-init forcing password-auth off after a "successful" revert.
+// `passwd -u root` is best-effort (`|| true`): on an image where root has no
+// password it stays locked — that is the image default, not a morgward-introduced
+// state, and SSH access is already restored by the drop-in removal above.
 var revertScript = map[string]string{
 	"A1":   `iptables -F INPUT 2>/dev/null; iptables -P INPUT ACCEPT 2>/dev/null; ip6tables -F INPUT 2>/dev/null; ip6tables -P INPUT ACCEPT 2>/dev/null; rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6 /usr/local/sbin/fw-rollback.sh /root/iptables-backup.v4 /root/iptables-backup.v6; systemctl stop fw-rollback.timer 2>/dev/null || true`,
-	"A2":   `rm -f /etc/ssh/sshd_config.d/00-hardening.conf /etc/ssh/sshd_config.d/98-access.conf /etc/ssh/sshd_config.d/99-hardening.conf; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`,
+	"A2":   `rm -f /etc/ssh/sshd_config.d/00-hardening.conf /etc/ssh/sshd_config.d/98-access.conf /etc/ssh/sshd_config.d/99-hardening.conf /etc/cloud/cloud.cfg.d/99-disable-passwords.cfg; [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ] && sed -ri 's/^\s*PasswordAuthentication\s+no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf 2>/dev/null || true; passwd -u root 2>/dev/null || true; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`,
 	"A3":   `rm -f /etc/fail2ban/jail.local; systemctl restart fail2ban 2>/dev/null || systemctl stop fail2ban 2>/dev/null || true`,
 	"A4":   `rm -f /etc/sysctl.d/99-net-tune.conf /etc/sysctl.d/99-bbr.conf /etc/modules-load.d/bbr.conf /etc/udev/rules.d/60-io-scheduler.rules; sysctl --system >/dev/null 2>&1 || true`,
 	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf; sysctl --system >/dev/null 2>&1 || true`,
 	"A6":   `rm -f /etc/systemd/journald.conf.d/99-vps-cap.conf /etc/needrestart/conf.d/50-autorestart.conf /etc/systemd/system.conf.d/limits.conf; systemctl restart systemd-journald 2>/dev/null || true`,
 	"A6.5": `rm -f /etc/systemd/resolved.conf.d/99-morgward-dns.conf; systemctl restart systemd-resolved 2>/dev/null || true`,
-	"A6.7": `rm -f /etc/systemd/zram-generator.conf /etc/sysctl.d/99-zram.conf; swapoff /dev/zram0 2>/dev/null || true; sed -i '/^#.*\sswap\s/s/^#//' /etc/fstab 2>/dev/null || true; swapon -a 2>/dev/null || true; systemctl disable --now earlyoom 2>/dev/null || true`,
+	"A6.7": `rm -f /etc/systemd/zram-generator.conf /etc/sysctl.d/99-zram.conf; swapoff /dev/zram0 2>/dev/null || true; sed -i -E '/# morgward-disabled-swap$/{s/^#//;s/[[:space:]]*# morgward-disabled-swap$//}' /etc/fstab 2>/dev/null || true; swapon -a 2>/dev/null || true; systemctl disable --now earlyoom 2>/dev/null || true`,
 	"A9":   `rm -f /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/52-unattended-upgrades-local`,
 	"A10":  `rm -f /etc/audit/rules.d/99-vps.rules /usr/local/sbin/ssh-login-notify.sh; sed -i '/ssh-login-notify/d' /etc/pam.d/sshd 2>/dev/null || true; systemctl restart auditd 2>/dev/null || true`,
 }

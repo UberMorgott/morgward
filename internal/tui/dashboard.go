@@ -431,6 +431,7 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.populateSecurityState()
 		m.secDangerConfirm = false
 		m.phase = phaseSecurity
+		m.dashScroll = 0 // security menu reuses dashScroll; start at the top
 		return m, nil
 	}
 	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's

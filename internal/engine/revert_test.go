@@ -97,6 +97,41 @@ func TestRevertA2OpensAccess(t *testing.T) {
 	}
 }
 
+// TestRevertA67SwapScopedToMarker guards F06: the A6.7 revert must re-enable ONLY
+// swap morgward disabled (tagged with the morgward marker), never blanket-uncomment
+// every commented swap line. It must match on the marker and strip it before
+// swapon -a, and must NOT use the old broad `/^#.*swap/` uncomment.
+func TestRevertA67SwapScopedToMarker(t *testing.T) {
+	snip := revertScript["A6.7"]
+	if !strings.Contains(snip, "morgward-disabled-swap") {
+		t.Errorf("A6.7 revert must key off the morgward-disabled-swap marker: %q", snip)
+	}
+	if strings.Contains(snip, `/^#.*\sswap\s/`) || strings.Contains(snip, `/^#.*swap/`) {
+		t.Errorf("A6.7 revert must NOT blanket-uncomment every commented swap line: %q", snip)
+	}
+	if !strings.Contains(snip, "swapon -a") {
+		t.Errorf("A6.7 revert must swapon -a after re-enabling tagged lines: %q", snip)
+	}
+}
+
+// TestRevertA2Faithful guards F07: the A2 revert must fully undo the
+// A2Danger/strict apply — remove the cloud-init 99-disable-passwords.cfg, restore
+// 50-cloud-init.conf PasswordAuthentication, and unlock root — not just drop the
+// sshd drop-ins. Each is access-OPENING so the OpensAccess invariant still holds.
+func TestRevertA2Faithful(t *testing.T) {
+	snip := revertScript["A2"]
+	for _, want := range []string{
+		"99-disable-passwords.cfg",   // rm the cloud-init pw-off override
+		"50-cloud-init.conf",         // restore the stock cloud-init drop-in
+		"PasswordAuthentication yes", // re-open password auth there
+		"passwd -u root",             // unlock root password
+	} {
+		if !strings.Contains(snip, want) {
+			t.Errorf("A2 revert missing faithful-undo component %q: %q", want, snip)
+		}
+	}
+}
+
 // TestCanonicalStepID maps mixed-case ids to the canonical step IDs.
 func TestCanonicalStepID(t *testing.T) {
 	cases := map[string]string{

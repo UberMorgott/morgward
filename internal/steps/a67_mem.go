@@ -22,9 +22,11 @@ stdbuf -oL -eL apt-get install -y systemd-zram-generator earlyoom
 ` + putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +
 		putFile("/etc/sysctl.d/99-zram.conf", zramSysctl, "0644") +
 		`# Disable disk swap if present (don't run zram alongside disk swap).
+# Tag each line we comment with a morgward marker so the A6.7 revert re-enables
+# ONLY swap morgward disabled — never swap the operator turned off themselves.
 if swapon --show=NAME --noheadings | grep -vq zram; then
   swapoff -a 2>/dev/null || true
-  sed -i '/\sswap\s/s/^/#/' /etc/fstab 2>/dev/null || true
+  sed -i -E '/^[[:space:]]*#/!{/[[:space:]]swap[[:space:]]/{s/[[:space:]]*$/ # morgward-disabled-swap/;s/^/#/}}' /etc/fstab 2>/dev/null || true
 fi
 systemctl daemon-reload
 systemctl start systemd-zram-setup@zram0.service 2>/dev/null || true
