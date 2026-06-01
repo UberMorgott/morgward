@@ -36,7 +36,7 @@ var revertScript = map[string]string{
 	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf; sysctl --system >/dev/null 2>&1 || true`,
 	"A6":   `rm -f /etc/systemd/journald.conf.d/99-vps-cap.conf /etc/needrestart/conf.d/50-autorestart.conf /etc/systemd/system.conf.d/limits.conf; systemctl restart systemd-journald 2>/dev/null || true`,
 	"A6.5": `rm -f /etc/systemd/resolved.conf.d/99-morgward-dns.conf; systemctl restart systemd-resolved 2>/dev/null || true`,
-	"A6.7": `rm -f /etc/systemd/zram-generator.conf /etc/sysctl.d/99-zram.conf; swapoff /dev/zram0 2>/dev/null || true; sed -i '/^#.*\sswap\s/s/^#//' /etc/fstab 2>/dev/null || true; swapon -a 2>/dev/null || true; systemctl disable --now earlyoom 2>/dev/null || true`,
+	"A6.7": `rm -f /etc/systemd/zram-generator.conf /etc/sysctl.d/99-zram.conf; swapoff /dev/zram0 2>/dev/null || true; sed -i -E '/# morgward-disabled-swap$/{s/^#//;s/[[:space:]]*# morgward-disabled-swap$//}' /etc/fstab 2>/dev/null || true; swapon -a 2>/dev/null || true; systemctl disable --now earlyoom 2>/dev/null || true`,
 	"A9":   `rm -f /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/52-unattended-upgrades-local`,
 	"A10":  `rm -f /etc/audit/rules.d/99-vps.rules /usr/local/sbin/ssh-login-notify.sh; sed -i '/ssh-login-notify/d' /etc/pam.d/sshd 2>/dev/null || true; systemctl restart auditd 2>/dev/null || true`,
 }
