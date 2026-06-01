@@ -168,6 +168,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			iw := innerWidth(m.boxWidth())
 			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
+		case phaseSecurity:
+			d := 0
+			if up {
+				d = -wheelStep
+			} else if down {
+				d = wheelStep
+			}
+			iw := innerWidth(m.boxWidth())
+			m.dashScroll = clampScroll(m.dashScroll+d, len(m.securityBodyLines(iw)), m.bodyViewH())
 		}
 		return m, nil
 

@@ -73,7 +73,8 @@ func (m model) securityView() string {
 	sb.WriteByte('\n')
 
 	viewH := m.bodyViewH()
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, 0)
+	off := clampScroll(m.dashScroll, len(body), viewH)
+	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
 	hint := t(m.lang, kSecHint)
 	if m.secDangerConfirm {
@@ -199,17 +200,19 @@ const (
 	secBtnKeyOnlyDanger
 )
 
-// secRowYToBodyIdx maps a screen Y to a Security-menu body-slice index (no scroll on
-// this screen — off is 0), or ok=false when Y is in the chrome. Mirrors
-// dashRowYToBodyIdx with a fixed zero offset.
+// secRowYToBodyIdx maps a screen Y to a Security-menu body-slice index, honoring the
+// scroll offset (m.dashScroll, clamped against the body), or ok=false when Y is in the
+// chrome. Mirrors dashRowYToBodyIdx so button hit-tests track the ↑↓/wheel scroll —
+// otherwise the bottom DANGER/SAFE buttons clip unreachable on a short terminal.
 func (m model) secRowYToBodyIdx(y int) (int, bool) {
 	body := m.securityBodyLines(innerWidth(m.boxWidth()))
 	viewH := m.bodyViewH()
+	off := clampScroll(m.dashScroll, len(body), viewH)
 	rowInRegion := y - summaryBodyTopRow
 	if rowInRegion < 0 || rowInRegion >= viewH {
 		return 0, false
 	}
-	idx := rowInRegion
+	idx := off + rowInRegion
 	if idx < 0 || idx >= len(body) {
 		return 0, false
 	}
