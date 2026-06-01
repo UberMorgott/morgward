@@ -95,7 +95,7 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
 	}
 
-	return StatusOK, "SSH hardened, admin key verified; "+effectivePolicy(ctx), nil
+	return StatusOK, "SSH hardened, admin key verified; " + effectivePolicy(ctx), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ func (A2Safe) Run(ctx *Context) (Status, string, error) {
 	}
 	disarmSSHRevert(ctx)
 
-	return StatusOK, "SSH crypto hardened (access policy unchanged); "+effectivePolicy(ctx), nil
+	return StatusOK, "SSH crypto hardened (access policy unchanged); " + effectivePolicy(ctx), nil
 }
 
 // A2Danger applies the opt-in access lockdown (AllowGroups + key-only + root lock).
@@ -227,7 +227,7 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	disarmSSHRevert(ctx)
 	ctx.Cli.Sudo("passwd -l root")
 
-	return StatusOK, "SSH locked down (key-only, root blocked); "+effectivePolicy(ctx), nil
+	return StatusOK, "SSH locked down (key-only, root blocked); " + effectivePolicy(ctx), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -398,8 +398,12 @@ ClientAliveCountMax 2
 func cryptoBlock(ctx *Context) string {
 	var b strings.Builder
 	// KexAlgorithms: mlkem first on 26.04 (OpenSSH 10.x); dropped on 24.04 (9.6p1).
+	// F20: gate strictly on a CONFIRMED 26.04. An unknown/misdetected version now
+	// falls back to the conservative 24.04 set (no mlkem) rather than assuming
+	// newest — the 24.04 KEX list is valid on 26.04 too, so a glitched os-release
+	// probe degrades safely instead of emitting OpenSSH-10-only tokens.
 	kex := "sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256"
-	if ctx.Facts.Is2604 || (!ctx.Facts.Is2404 && !ctx.Facts.Is2604) {
+	if ctx.Facts.Is2604 {
 		kex = "mlkem768x25519-sha256," + kex
 	}
 	fmt.Fprintf(&b, "KexAlgorithms %s\n", kex)
@@ -418,7 +422,9 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 HostKey /etc/ssh/ssh_host_rsa_key
 `)
 	// PerSourcePenalties: OpenSSH >= 9.8 only (26.04). 9.6p1 (24.04) rejects them.
-	if ctx.Facts.Is2604 || (!ctx.Facts.Is2404 && !ctx.Facts.Is2604) {
+	// F20: confirmed 26.04 only — an unknown version conservatively omits them
+	// (sshd -t on a pre-9.8 box would otherwise reject the directive).
+	if ctx.Facts.Is2604 {
 		b.WriteString("PerSourcePenalties authfail:30 noauth:15 grace-exceeded:120\n")
 		if ctx.Facts.ClientIP != "" {
 			fmt.Fprintf(&b, "PerSourcePenaltyExemptList %s\n", ctx.Facts.ClientIP)
