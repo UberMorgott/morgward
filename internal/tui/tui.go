@@ -45,9 +45,8 @@ const (
 	phaseWiki      // a single fix's what/why/risk description
 	phaseKey       // shows the generated SSH private key + a clipboard "Copy key" button
 	phaseMatrix    // per-tweak audit table (the "анализ" action result)
-	phaseDashboard // post-connect server card + live tweak audit + apply/security/catalog buttons
+	phaseDashboard // post-connect server card + live tweak audit + apply/security buttons
 	phaseSecurity  // security + access menu: access-state card + SAFE actions + DANGER key-only lock
-	phaseCatalog   // tweak catalog: domain-grouped step list, works pre- and post-connect
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -168,14 +167,6 @@ type model struct {
 	wikiStep   string
 	wikiTweak  string
 	wikiReturn phase
-
-	// Catalog screen (phaseCatalog). catalogScroll is the scroll offset (clamped
-	// like the other directly-rendered screens); catalogReturn is the phase to go
-	// back to on esc/back (phaseForm pre-connect, phaseDashboard post-connect). Both
-	// plain value-copyable types — status is read from the existing dashAudit slices,
-	// no map is added (the model is copied by value every Update).
-	catalogScroll int
-	catalogReturn phase
 
 	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
 	// memory; never logged), the copy-to-clipboard status, where esc returns to,
@@ -386,8 +377,6 @@ func (m model) viewString() string {
 		return m.dashboardView()
 	case phaseSecurity:
 		return m.securityView()
-	case phaseCatalog:
-		return m.catalogView()
 	case phaseWiki:
 		return m.wikiView()
 	case phaseKey:

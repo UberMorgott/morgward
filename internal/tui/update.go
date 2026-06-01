@@ -52,8 +52,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.dashboardClick(mc.X, mc.Y)
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
-		case phaseCatalog:
-			return m.catalogClick(mc.X, mc.Y)
 		case phaseWiki:
 			// The clickable "← Назад" pill returns to wherever the wiki was opened from.
 			if m.wikiBackAtClick(mc.X, mc.Y) {
@@ -136,14 +134,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				d = wheelStep
 			}
 			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
-		case phaseCatalog:
-			d := 0
-			if up {
-				d = -wheelStep
-			} else if down {
-				d = wheelStep
-			}
-			m.catalogScroll = clampScroll(m.catalogScroll+d, len(m.catalogBodyLines(innerWidth(m.boxWidth()))), m.catalogBodyViewH())
 		}
 		return m, nil
 
@@ -255,20 +245,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dashScroll = clampScroll(m.dashScroll-1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
 			case "down", "j":
 				m.dashScroll = clampScroll(m.dashScroll+1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
-			}
-			return m, nil
-		case phaseCatalog:
-			// Catalog: "back" returns to wherever it was opened from (catalogReturn);
-			// ↑↓/k/j scroll the domain list when it overflows the middle region. The
-			// catalog does NOT stop the sampler — it can be opened pre- or post-connect
-			// and the Dashboard/footer stay alive behind it.
-			switch msg.String() {
-			case "enter", "esc", "b":
-				m.phase = m.catalogReturn
-			case "up", "k":
-				m.catalogScroll = clampScroll(m.catalogScroll-1, len(m.catalogBodyLines(innerWidth(m.boxWidth()))), m.catalogBodyViewH())
-			case "down", "j":
-				m.catalogScroll = clampScroll(m.catalogScroll+1, len(m.catalogBodyLines(innerWidth(m.boxWidth()))), m.catalogBodyViewH())
 			}
 			return m, nil
 		case phaseKey:

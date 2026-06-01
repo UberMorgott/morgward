@@ -184,34 +184,6 @@ func TestSaveLogTogglePosition(t *testing.T) {
 	}
 }
 
-// TestCatalogLinkKeyExists asserts the catalog-link label translates non-empty.
-func TestCatalogLinkKeyExists(t *testing.T) {
-	for _, lang := range []Lang{langRU, langEN} {
-		if s := t2(lang, kCatalogLink); s == "" {
-			t.Fatalf("lang %d kCatalogLink empty", lang)
-		}
-	}
-}
-
-// TestCatalogLinkRendered asserts the catalog-link label appears as a form row and
-// (P5) is a clickable navigation target that opens the catalog (catalogReturn=form).
-func TestCatalogLinkRendered(t *testing.T) {
-	m := formModel(80, 24)
-	rows := m.formRows()
-	idx := kindIndex(rows, frCatalogLink)
-	if idx < 0 {
-		t.Fatalf("no frCatalogLink row in formRows")
-	}
-	if !strings.Contains(rows[idx].text, t2(m.lang, kCatalogLink)) {
-		t.Fatalf("frCatalogLink row missing label: %q", rows[idx].text)
-	}
-	// P5: clicking it is a registered hit target that navigates to phaseCatalog.
-	hit := m.formHitAtClick(0, formBodyTopRow+idx)
-	if !hit.ok || hit.kind != frCatalogLink {
-		t.Fatalf("catalog link should be clickable, got ok=%v kind=%v", hit.ok, hit.kind)
-	}
-}
-
 // TestFormHitTestAccuracy verifies a click at (x, formBodyTopRow+rowIdx) resolves
 // to the correct row kind for every row, with 3-row framed inputs.
 func TestFormHitTestAccuracy(t *testing.T) {
@@ -438,7 +410,6 @@ func TestLandingFormRenderComplete(t *testing.T) {
 		"disclosure":     "Дополнительно",
 		"save-log":       t2(m.lang, kSaveLogLabel),
 		"connect button": t2(m.lang, kStart),
-		"catalog link":   t2(m.lang, kCatalogLink),
 	}
 	for name, want := range checks {
 		if !strings.Contains(out, want) {

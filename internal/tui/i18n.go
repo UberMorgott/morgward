@@ -153,19 +153,10 @@ const (
 	kWikiNoDoc  // "нет описания" / "no description"
 	kWikiBack   // clickable back button: "← Назад" / "← Back"
 
-	// --- catalog screen (phaseCatalog, P5) -------------------------------
-	kCatalogTitle        // box title: "Каталог твиков — что настраивает Morgward"
-	kCatalogNetwork      // domain header: "Сеть и пропускная способность" / "Network & throughput"
-	kCatalogMemory       // domain header: "Память" / "Memory"
-	kCatalogKernelMaint  // domain header: "Ядро и обслуживание" / "Kernel & maintenance"
-	kCatalogFwUpdates    // domain header: "Файрвол и обновления" / "Firewall & updates"
-	kCatalogOther        // domain header: "Прочее" / "Other"
-	kCatalogSecurityNote // "ⓘ Безопасность (SSH, аккаунты) — на отдельном экране."
-	kCatalogDocsOnly     // pre-connect header line: docs only, no live status
-	kCatalogHint         // catalog control hint
-	kStatusApplied       // "✓ применено" / "✓ applied"
-	kStatusCanApply      // "• можно" / "• available"
-	kStatusUnavailable   // "⊘ недоступно" / "⊘ unavailable"
+	// --- live tweak status words (shared by the wiki status line) --------
+	kStatusApplied     // "✓ применено" / "✓ applied"
+	kStatusCanApply    // "• можно" / "• available"
+	kStatusUnavailable // "⊘ недоступно" / "⊘ unavailable"
 
 	// --- SSH key screen (phaseKey) ---------------------------------------
 	// The generated private key lives ONLY in memory; this screen is the one
@@ -195,9 +186,6 @@ const (
 	kDisclosureLabel // collapsible toggle label: "▸ Дополнительно (порт · пользователь · SSH-ключ)"
 	kDisclosureOpen  // open-state indicator glyph "▼" (RU/EN same)
 
-	// catalog navigation link (P5 stub: rendered as a label on the landing form)
-	kCatalogLink // "Что настраивает программа ▸"
-
 	// landing version-frame tagline under the "Morgward vX.Y" header
 	kVersionTagline // "VPS guardian · защита свежего Ubuntu VPS"
 
@@ -209,22 +197,21 @@ const (
 	kUpdateButtonLabel // clickable button: "Обновить ⬇"
 
 	// --- dashboard (phaseDashboard, P3) ----------------------------------
-	kDashTitle         // server card header prefix: "Сервер" / "Server"
-	kDashAuditLabel    // live audit line label: "Анализ твиков" / "Analyzing tweaks"
-	kDashAuditStatus   // "применено %d из %d" / "applied %d of %d"
-	kDashCanApply      // "можно применить %d" / "can apply %d"
-	kDashApplyButton   // "Применить твики" / "Apply tweaks"
-	kDashSecButton     // "Безопасность ▸" / "Security ▸"
-	kDashCatalogButton // "Каталог твиков" / "Tweak Catalog"
-	kDashOS            // "ОС" / "OS"
-	kDashKernel        // "Ядро" / "Kernel"
-	kDashVirt          // "Виртуализация" / "Virt"
-	kDashMemory        // "Память" / "Memory"
-	kDashDisk          // "Диск" / "Disk"
-	kDashPorts         // "Порты" / "Ports"
-	kDashIPv6          // "IPv6"
-	kDashHint          // dashboard control hint
-	kDashApplyConfirm  // A8 reboot warning shown before applying tweaks
+	kDashTitle        // server card header prefix: "Сервер" / "Server"
+	kDashAuditLabel   // live audit line label: "Анализ твиков" / "Analyzing tweaks"
+	kDashAuditStatus  // "применено %d из %d" / "applied %d of %d"
+	kDashCanApply     // "можно применить %d" / "can apply %d"
+	kDashApplyButton  // "Применить твики" / "Apply tweaks"
+	kDashSecButton    // "Безопасность ▸" / "Security ▸"
+	kDashOS           // "ОС" / "OS"
+	kDashKernel       // "Ядро" / "Kernel"
+	kDashVirt         // "Виртуализация" / "Virt"
+	kDashMemory       // "Память" / "Memory"
+	kDashDisk         // "Диск" / "Disk"
+	kDashPorts        // "Порты" / "Ports"
+	kDashIPv6         // "IPv6"
+	kDashHint         // dashboard control hint
+	kDashApplyConfirm // A8 reboot warning shown before applying tweaks
 
 	// --- security menu (phaseSecurity, P4) -------------------------------
 	kSecMenuTitle      // box title: "Безопасность и доступ" / "Security and access"
@@ -338,18 +325,9 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiNoDoc:  "нет описания для этого шага",
 		kWikiBack:   "← Назад",
 
-		kCatalogTitle:        "Каталог твиков — что настраивает Morgward",
-		kCatalogNetwork:      "Сеть и пропускная способность",
-		kCatalogMemory:       "Память",
-		kCatalogKernelMaint:  "Ядро и обслуживание",
-		kCatalogFwUpdates:    "Файрвол и обновления",
-		kCatalogOther:        "Прочее",
-		kCatalogSecurityNote: "ⓘ Безопасность (SSH, аккаунты) — на отдельном экране.",
-		kCatalogDocsOnly:     "Только описания · подключитесь, чтобы увидеть статус",
-		kCatalogHint:         "↑/↓ прокрутка · enter описание · esc назад · l — язык",
-		kStatusApplied:       "✓ применено",
-		kStatusCanApply:      "• можно",
-		kStatusUnavailable:   "⊘ недоступно",
+		kStatusApplied:     "✓ применено",
+		kStatusCanApply:    "• можно",
+		kStatusUnavailable: "⊘ недоступно",
 
 		kKeyTitle:      "Доступ по SSH-ключу",
 		kKeyWarnSoft:   "Режим новичка: вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
@@ -371,7 +349,6 @@ var tr = map[Lang]map[stringKey]string{
 
 		kDisclosureLabel: "▸ Дополнительно (порт · пользователь · SSH-ключ)",
 		kDisclosureOpen:  "▼",
-		kCatalogLink:     "Что настраивает программа ▸",
 		kVersionTagline:  "VPS guardian · защита свежего Ubuntu VPS",
 
 		kUpdateChecking:    "Обновления: проверка… ⠋",
@@ -380,22 +357,21 @@ var tr = map[Lang]map[stringKey]string{
 		kUpdateError:       "не удалось проверить (офлайн)",
 		kUpdateButtonLabel: "Обновить ⬇",
 
-		kDashTitle:         "Сервер",
-		kDashAuditLabel:    "Анализ твиков",
-		kDashAuditStatus:   "применено %d из %d",
-		kDashCanApply:      "можно применить %d",
-		kDashApplyButton:   "Применить твики",
-		kDashSecButton:     "Безопасность ▸",
-		kDashCatalogButton: "Каталог твиков",
-		kDashOS:            "ОС",
-		kDashKernel:        "Ядро",
-		kDashVirt:          "Виртуализация",
-		kDashMemory:        "Память",
-		kDashDisk:          "Диск",
-		kDashPorts:         "Порты",
-		kDashIPv6:          "IPv6",
-		kDashHint:          "↑/↓ прокрутка · enter описание твика · esc назад",
-		kDashApplyConfirm:  "Включает полное обновление и перезагрузку (A8) — несколько минут. Enter — применить, esc — отмена.",
+		kDashTitle:        "Сервер",
+		kDashAuditLabel:   "Анализ твиков",
+		kDashAuditStatus:  "применено %d из %d",
+		kDashCanApply:     "можно применить %d",
+		kDashApplyButton:  "Применить твики",
+		kDashSecButton:    "Безопасность ▸",
+		kDashOS:           "ОС",
+		kDashKernel:       "Ядро",
+		kDashVirt:         "Виртуализация",
+		kDashMemory:       "Память",
+		kDashDisk:         "Диск",
+		kDashPorts:        "Порты",
+		kDashIPv6:         "IPv6",
+		kDashHint:         "↑/↓ прокрутка · enter описание твика · esc назад",
+		kDashApplyConfirm: "Включает полное обновление и перезагрузку (A8) — несколько минут. Enter — применить, esc — отмена.",
 
 		kSecMenuTitle:      " Безопасность и доступ ",
 		kSecRootLogin:      "Вход root",
@@ -505,18 +481,9 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiNoDoc:  "no description for this step",
 		kWikiBack:   "← Back",
 
-		kCatalogTitle:        "Tweak catalog — what Morgward configures",
-		kCatalogNetwork:      "Network & throughput",
-		kCatalogMemory:       "Memory",
-		kCatalogKernelMaint:  "Kernel & maintenance",
-		kCatalogFwUpdates:    "Firewall & updates",
-		kCatalogOther:        "Other",
-		kCatalogSecurityNote: "ⓘ Security (SSH, accounts) — on a separate screen.",
-		kCatalogDocsOnly:     "Docs only · connect to see live status",
-		kCatalogHint:         "↑/↓ scroll · enter detail · esc back · l — lang",
-		kStatusApplied:       "✓ applied",
-		kStatusCanApply:      "• available",
-		kStatusUnavailable:   "⊘ unavailable",
+		kStatusApplied:     "✓ applied",
+		kStatusCanApply:    "• available",
+		kStatusUnavailable: "⊘ unavailable",
 
 		kKeyTitle:      "SSH key access",
 		kKeyWarnSoft:   "Novice mode: password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
@@ -538,7 +505,6 @@ var tr = map[Lang]map[stringKey]string{
 
 		kDisclosureLabel: "▸ Advanced (port · user · SSH key)",
 		kDisclosureOpen:  "▼",
-		kCatalogLink:     "What the program configures ▸",
 		kVersionTagline:  "VPS guardian · fresh Ubuntu VPS protection",
 
 		kUpdateChecking:    "Updates: checking… ⠋",
@@ -547,22 +513,21 @@ var tr = map[Lang]map[stringKey]string{
 		kUpdateError:       "failed to check (offline)",
 		kUpdateButtonLabel: "Update ⬇",
 
-		kDashTitle:         "Server",
-		kDashAuditLabel:    "Analyzing tweaks",
-		kDashAuditStatus:   "applied %d of %d",
-		kDashCanApply:      "can apply %d",
-		kDashApplyButton:   "Apply tweaks",
-		kDashSecButton:     "Security ▸",
-		kDashCatalogButton: "Tweak Catalog",
-		kDashOS:            "OS",
-		kDashKernel:        "Kernel",
-		kDashVirt:          "Virt",
-		kDashMemory:        "Memory",
-		kDashDisk:          "Disk",
-		kDashPorts:         "Ports",
-		kDashIPv6:          "IPv6",
-		kDashHint:          "↑/↓ scroll · enter tweak detail · esc back",
-		kDashApplyConfirm:  "Includes a full upgrade and reboot (A8) — several minutes. Enter to apply, esc to cancel.",
+		kDashTitle:        "Server",
+		kDashAuditLabel:   "Analyzing tweaks",
+		kDashAuditStatus:  "applied %d of %d",
+		kDashCanApply:     "can apply %d",
+		kDashApplyButton:  "Apply tweaks",
+		kDashSecButton:    "Security ▸",
+		kDashOS:           "OS",
+		kDashKernel:       "Kernel",
+		kDashVirt:         "Virt",
+		kDashMemory:       "Memory",
+		kDashDisk:         "Disk",
+		kDashPorts:        "Ports",
+		kDashIPv6:         "IPv6",
+		kDashHint:         "↑/↓ scroll · enter tweak detail · esc back",
+		kDashApplyConfirm: "Includes a full upgrade and reboot (A8) — several minutes. Enter to apply, esc to cancel.",
 
 		kSecMenuTitle:      " Security and access ",
 		kSecRootLogin:      "Root login",

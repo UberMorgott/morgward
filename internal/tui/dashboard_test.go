@@ -129,7 +129,6 @@ func TestDashboardViewRenders(t *testing.T) {
 		t2(m.lang, kDashTitle) + ": 1.2.3.4",    // server card title
 		t2(m.lang, kDashApplyButton),            // apply button
 		t2(m.lang, kDashSecButton),              // security button
-		t2(m.lang, kDashCatalogButton),          // catalog button
 		localTweakName(m.lang, "A4-bbr", "BBR"), // an audit row name
 	}
 	for _, want := range checks {
@@ -139,19 +138,87 @@ func TestDashboardViewRenders(t *testing.T) {
 	}
 }
 
-// TestDashboardButtonHitTest asserts each of the three buttons resolves to the
+// TestDashboardButtonHitTest asserts each of the two buttons resolves to the
 // right action when clicked at its rendered position.
 func TestDashboardButtonHitTest(t *testing.T) {
 	m := dashModel(100, 40)
 	innerW := innerWidth(m.boxWidth())
 	btnRow := summaryBodyTopRow + m.dashButtonsIndex(innerW)
 	ranges := pillRanges(m.dashButtonNames(), dashButtonStartCol)
-	want := []dashButton{dashBtnApply, dashBtnSecurity, dashBtnCatalog}
+	want := []dashButton{dashBtnApply, dashBtnSecurity}
+	if len(ranges) != len(want) {
+		t.Fatalf("dashButtonNames has %d buttons, want %d (Apply, Security)", len(ranges), len(want))
+	}
 	for i, r := range ranges {
 		x := r[0] + 1 // inside the pill
 		if got := m.dashButtonAtClick(x, btnRow); got != want[i] {
 			t.Fatalf("button %d click at x=%d row=%d → %v, want %v", i, x, btnRow, got, want[i])
 		}
+	}
+}
+
+// TestDashAuditTwoColumnHitTest asserts the fluid 2-column audit grid maps a click
+// in the LEFT column and a click in the RIGHT column to the correct Probe. With a
+// wide width (100) and 3 results, the grid is 2 columns × ceil(3/2)=2 lines:
+// line0 = [res0 | res1], line1 = [res2]. Left col → res0/res2, right col → res1.
+func TestDashAuditTwoColumnHitTest(t *testing.T) {
+	m := dashModel(100, 40)
+	innerW := innerWidth(m.boxWidth())
+	cols, colWidth := dashAuditCols(innerW)
+	if cols != 2 {
+		t.Fatalf("at width 100 expected 2 columns, got %d (innerW=%d colWidth=%d)", cols, innerW, colWidth)
+	}
+	if got := m.dashAuditNumGridLines(innerW); got != 2 {
+		t.Fatalf("3 results / 2 cols → %d grid lines, want 2", got)
+	}
+	gridStart := m.dashGridStartIndex(innerW)
+
+	const contentX0 = 2
+	leftX := contentX0 + 1                          // inside the left column's text
+	rightX := contentX0 + colWidth + dashColGap + 1 // inside the right column's text
+
+	// Grid line 0, left column → result[0] (A4-bbr).
+	r0, ok := m.dashAuditRowAtClick(leftX, summaryBodyTopRow+gridStart)
+	if !ok || r0.Probe.ID != "A4-bbr" {
+		t.Fatalf("line0 left click → %q,%v want A4-bbr,true", r0.Probe.ID, ok)
+	}
+	// Grid line 0, right column → result[1] (A6.7-zram).
+	r1, ok := m.dashAuditRowAtClick(rightX, summaryBodyTopRow+gridStart)
+	if !ok || r1.Probe.ID != "A6.7-zram" {
+		t.Fatalf("line0 right click → %q,%v want A6.7-zram,true", r1.Probe.ID, ok)
+	}
+	// Grid line 1, left column → result[2] (A6.7-eoom).
+	r2, ok := m.dashAuditRowAtClick(leftX, summaryBodyTopRow+gridStart+1)
+	if !ok || r2.Probe.ID != "A6.7-eoom" {
+		t.Fatalf("line1 left click → %q,%v want A6.7-eoom,true", r2.Probe.ID, ok)
+	}
+	// Grid line 1, right column has NO result (odd count) → miss.
+	if _, ok := m.dashAuditRowAtClick(rightX, summaryBodyTopRow+gridStart+1); ok {
+		t.Fatalf("line1 right click should miss (no 4th result)")
+	}
+}
+
+// TestDashAuditOneColumnFallback asserts a narrow width collapses the grid to a
+// single column (one result per line) and the left-column hit-test still resolves.
+func TestDashAuditOneColumnFallback(t *testing.T) {
+	m := dashModel(44, 40) // innerW small → each 2-col would be < minDashColWidth
+	innerW := innerWidth(m.boxWidth())
+	cols, _ := dashAuditCols(innerW)
+	if cols != 1 {
+		t.Fatalf("at width 44 expected 1-column fallback, got %d cols (innerW=%d)", cols, innerW)
+	}
+	if got := m.dashAuditNumGridLines(innerW); got != 3 {
+		t.Fatalf("3 results / 1 col → %d grid lines, want 3", got)
+	}
+	gridStart := m.dashGridStartIndex(innerW)
+	const contentX0 = 2
+	r0, ok := m.dashAuditRowAtClick(contentX0+1, summaryBodyTopRow+gridStart)
+	if !ok || r0.Probe.ID != "A4-bbr" {
+		t.Fatalf("1-col line0 click → %q,%v want A4-bbr,true", r0.Probe.ID, ok)
+	}
+	r2, ok := m.dashAuditRowAtClick(contentX0+1, summaryBodyTopRow+gridStart+2)
+	if !ok || r2.Probe.ID != "A6.7-eoom" {
+		t.Fatalf("1-col line2 click → %q,%v want A6.7-eoom,true", r2.Probe.ID, ok)
 	}
 }
 

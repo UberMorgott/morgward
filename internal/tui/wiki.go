@@ -153,7 +153,7 @@ func (m model) wikiBodyLines(innerW int) []string {
 // is "can apply"; if the step has no probe at all it is "unavailable". ok=false
 // pre-connect (no status line should be shown then).
 func (m model) stepStatusWord(stepID string) (string, bool) {
-	if !m.catalogConnected() || stepID == "" {
+	if !m.auditConnected() || stepID == "" {
 		return "", false
 	}
 	total, applied := 0, 0
@@ -183,3 +183,11 @@ func (m model) stepStatusWord(stepID string) (string, bool) {
 // extra fixed-chrome row (the clickable "← Назад" pill) above the hint. Used for
 // BOTH the wiki render and every wiki scroll clamp so geometry never drifts.
 func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+
+// auditConnected reports whether we are post-connect: an audit has completed and
+// carried results. Gates the wiki live-status column (a step's status word is only
+// meaningful once the audit has run). Mirrors how the Dashboard treats
+// dashAuditDone as "connected".
+func (m model) auditConnected() bool {
+	return m.dashAuditDone && len(m.dashAuditRaw) > 0
+}

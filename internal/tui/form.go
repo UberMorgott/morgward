@@ -218,9 +218,6 @@ func (m model) formHitAtClick(x, y int) formHit {
 	case frDisclosure:
 		// The whole disclosure line is one click target (toggles advancedOpen).
 		return formHit{kind: frDisclosure, ok: true}
-	case frCatalogLink:
-		// The whole catalog-link line is one click target (opens the catalog).
-		return formHit{kind: frCatalogLink, ok: true}
 	case frLog:
 		names := []string{t(m.lang, kSaveLogOn), t(m.lang, kSaveLogOff)}
 		if i := pillIndexAt(names, m.pillColStart(), x); i >= 0 {
@@ -318,13 +315,6 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 		m.advancedOpen = !m.advancedOpen
 		m.focus = rowDisclosure
 		return m, nil
-	case frCatalogLink:
-		// "Что настраивает программа ▸" → the tweak catalog (pre-connect: docs only).
-		// Returning from it lands back on the landing form.
-		m.catalogReturn = phaseForm
-		m.catalogScroll = 0
-		m.phase = phaseCatalog
-		return m, nil
 	case frLog:
 		m.saveLog = hit.log
 		m.focus = rowLog
@@ -354,16 +344,15 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 type formRowKind int
 
 const (
-	frInput       formRowKind = iota // a text-input row; field holds the input index
-	frBlank                          // spacer line (kept in the slice so Y math stays exact)
-	frAction                         // run/detect/verify pill row (removed from the form; kept for the negative-assertion guard)
-	frLog                            // save-log-to-file on/off pill row
-	frStart                          // Start + Cancel button line
-	frErr                            // validation error line
-	frDisclosure                     // "▸ Дополнительно" toggle revealing Port/User/Key
-	frCatalogLink                    // "Что настраивает программа ▸" label opening the tweak catalog pre-connect
-	frVersion                        // version-frame line (titled top / tagline / bottom)
-	frUpdate                         // self-update strip line (under the version header)
+	frInput      formRowKind = iota // a text-input row; field holds the input index
+	frBlank                         // spacer line (kept in the slice so Y math stays exact)
+	frAction                        // run/detect/verify pill row (removed from the form; kept for the negative-assertion guard)
+	frLog                           // save-log-to-file on/off pill row
+	frStart                         // Start + Cancel button line
+	frErr                           // validation error line
+	frDisclosure                    // "▸ Дополнительно" toggle revealing Port/User/Key
+	frVersion                       // version-frame line (titled top / tagline / bottom)
+	frUpdate                        // self-update strip line (under the version header)
 )
 
 // formRow is one rendered body line plus its kind (+ field index for inputs). The
@@ -574,11 +563,6 @@ func (m model) formRows() []formRow {
 	// focusable). Both pill labels are wrapped by pillStyle/pillOnStyle, so their
 	// x-geometry is recovered by pillRanges over the same names in the zone mapper.
 	rows = append(rows, formRow{kind: frStart, text: indent + m.startCancelPills()})
-
-	// "Что настраивает программа ▸" — the catalog-link line. The WHOLE row is a click
-	// target (frCatalogLink in formHitAtClick) that opens phaseCatalog pre-connect
-	// (docs only). Styled as a tip label, not a pill, but clickable.
-	rows = append(rows, formRow{kind: frCatalogLink, text: indent + tipStyle.Render(t(m.lang, kCatalogLink))})
 
 	if m.errMsg != "" {
 		rows = append(rows, formRow{kind: frBlank})
