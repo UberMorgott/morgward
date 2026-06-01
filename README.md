@@ -5,6 +5,13 @@ Portable single-binary executor for the
 fresh Ubuntu **24.04 / 26.04** VPS over an embedded SSH client (no external `ssh`,
 `sshpass`, Docker, or web UI) and applies the full hardening + tuning sequence.
 
+> ⚠️ **For FRESH VPS only.** This release targets a clean, newly-provisioned
+> Ubuntu 24.04 / 26.04 box. Run it on a brand-new server before you install
+> anything else. On a box that already has services, users, or hardening in
+> place a full `run` will refuse (brownfield / already-hardened gates) — support
+> for already-provisioned boxes is **not done yet** and is planned for a later
+> release.
+
 ## Features
 
 - **Embedded SSH** (`golang.org/x/crypto/ssh`) — password bootstrap → generate
