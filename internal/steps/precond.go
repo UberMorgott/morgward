@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/UberMorgott/morgward/internal/config"
+	"github.com/UberMorgott/morgward/internal/sshx"
 )
 
 // Precond implements §1 preconditions: apt index refresh, non-root sudo user
@@ -58,13 +59,16 @@ visudo -cf /etc/sudoers.d/90-%[1]s >/dev/null
 
 	// Soft mode: set a console password, generated on-box, surfaced exactly once.
 	if ctx.Cfg.Mode == config.ModeSoft {
+		// The marker line is emitted on stdout but teeLines suppresses it from the
+		// streamed sink (sshx.SecretMarkerPrefix), so the password is captured into
+		// Result.Stdout for extractMarker yet never hits the log file / TUI (F02).
 		pwScript := fmt.Sprintf(`set +o history
 ADMIN_PW="$(openssl rand -base64 18)"
 printf '%%s:%%s\n' %q "$ADMIN_PW" | chpasswd
-printf 'CONSOLE_PW_MARKER:%%s\n' "$ADMIN_PW"
-unset ADMIN_PW`, admin)
+printf '%s%%s\n' "$ADMIN_PW"
+unset ADMIN_PW`, admin, sshx.SecretMarkerPrefix)
 		r := ctx.Cli.Sudo(pwScript)
-		if pw := extractMarker(r.Stdout, "CONSOLE_PW_MARKER:"); pw != "" {
+		if pw := extractMarker(r.Stdout, sshx.SecretMarkerPrefix); pw != "" {
 			ctx.Log.Secret(fmt.Sprintf("CONSOLE PASSWORD for %s (store now — shown once)", admin), pw)
 		} else {
 			ctx.Log.Warn("could not set/extract console password (continuing)")

@@ -19,6 +19,14 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
+// SecretMarkerPrefix tags a stdout line that carries a secret (e.g. the generated
+// console password) the engine must capture but NEVER stream. teeLines still writes
+// such a line to the capture buffer (so the caller can parse the value out of
+// Result.Stdout) but suppresses the live emit, so the raw secret never reaches the
+// output sink → run log / TUI scrollback (F02). The producing remote script prints
+// "CONSOLE_PW_MARKER:<value>"; the consuming step parses it back via this same prefix.
+const SecretMarkerPrefix = "CONSOLE_PW_MARKER:"
+
 // ErrNoMutualAuth is returned (wrapped via %w) when the SSH handshake reaches the
 // server but no offered auth method is accepted — i.e. the server and client share
 // no usable authentication method. This is the classic fresh-VPS symptom: the box
@@ -286,7 +294,10 @@ func teeLines(r io.Reader, capture *strings.Builder, emit func(string)) {
 		line := sc.Text()
 		capture.WriteString(line)
 		capture.WriteByte('\n')
-		if emit != nil {
+		// Secret-marked lines are captured (the caller parses the value back out of
+		// Result.Stdout) but never emitted, so the raw secret cannot reach the
+		// streamed sink → log file / TUI scrollback (F02).
+		if emit != nil && !strings.HasPrefix(strings.TrimSpace(line), SecretMarkerPrefix) {
 			emit(line)
 		}
 	}

@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 )
 
 // Sentinel validation errors. Callers that localize their UI (the TUI) match on
@@ -15,7 +16,17 @@ var (
 	ErrUserRequired = errors.New("user is required")
 	ErrAuthRequired = errors.New("either password or key is required")
 	ErrBadMode      = errors.New("mode must be soft or strict")
+	// ErrBadAdminUser rejects an admin username that is not a strict Linux name.
+	// AdminUser is spliced (unquoted in places) into root-run shell scripts and a
+	// /home/<user> path, so anything outside this charset is a shell-injection
+	// vector (F05/F14) — refuse it before it reaches the box.
+	ErrBadAdminUser = errors.New("admin-user must match ^[a-z_][a-z0-9_-]{0,31}$ (lowercase Linux username)")
 )
+
+// adminUserRe is the portable Linux username pattern (NAME_REGEX-style): a
+// lowercase letter or underscore, then up to 31 of [a-z0-9_-]. Excludes spaces,
+// quotes, $, backticks, and every other shell metacharacter.
+var adminUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 // Mode is the hardening profile selected by the operator.
 type Mode string
@@ -61,6 +72,12 @@ func (c *Config) Validate() error {
 	}
 	if c.AdminUser == "" {
 		c.AdminUser = "vpsadmin"
+	}
+	// Validate the RESOLVED admin user (after the default), so the built-in
+	// vpsadmin passes and any operator-supplied value is charset-checked before it
+	// is spliced into remote root-run scripts.
+	if !adminUserRe.MatchString(c.AdminUser) {
+		return fmt.Errorf("%w, got %q", ErrBadAdminUser, c.AdminUser)
 	}
 	return nil
 }

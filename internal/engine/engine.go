@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -166,10 +167,21 @@ type counts struct {
 	results        []StepResult // every step's outcome, in apply order
 }
 
+// ErrCanceled is returned when a run is halted via the context between steps. It
+// is NOT a lockout-capable failure — it means the operator aborted at a safe step
+// boundary; whatever steps already completed stay applied (the box is in a valid
+// intermediate hardened state, never mid-lockdown).
+var ErrCanceled = errors.New("run canceled at step boundary")
+
 // Execute is the single entrypoint used by both the CLI and the TUI: it opens
 // the log (optionally streaming lines to h.Sink), then dispatches to the command.
-// All hook fields may be nil (only the TUI sets them).
-func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
+// All hook fields may be nil (only the TUI sets them). ctx carries run-scoped
+// cancellation: the CLI passes context.Background(); the TUI passes a cancelable
+// context it cancels on abort so an in-flight run stops at the next step boundary.
+func Execute(ctx context.Context, cfg *config.Config, cmd string, ids []string, h Hooks) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	log := ui.New(cfg.LogFile)
 	defer log.Close()
 	if h.Sink != nil {
@@ -177,17 +189,17 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 	}
 	switch cmd {
 	case "", "run":
-		return Run(cfg, log, h)
+		return Run(ctx, cfg, log, h)
 	case "detect":
-		return DetectOnly(cfg, log, h)
+		return DetectOnly(ctx, cfg, log, h)
 	case "verify":
-		return VerifyOnly(cfg, log, h)
+		return VerifyOnly(ctx, cfg, log, h)
 	case "audit":
-		return Audit(cfg, log, h)
+		return Audit(ctx, cfg, log, h)
 	case "step":
-		return RunSteps(cfg, log, ids, h)
+		return RunSteps(ctx, cfg, log, ids, h)
 	case "revert":
-		return RunRevert(cfg, log, ids, h)
+		return RunRevert(ctx, cfg, log, ids, h)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -203,7 +215,7 @@ func Execute(cfg *config.Config, cmd string, ids []string, h Hooks) error {
 // original credentials (password OR --key) live for the connection and the
 // monitor. notifyConnect still fires (KeyGenerated=false) so the monitor footer
 // works on the password path. Used by Audit; Run/RunSteps/Verify pass false.
-func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield, readOnly bool, h Hooks) (*session, func(), error) {
+func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrownfield, readOnly bool, h Hooks) (*session, func(), error) {
 	cleanup := func() {}
 
 	log.Banner(fmt.Sprintf("morgward — %s@%s:%d  mode=%s", cfg.User, cfg.Host, cfg.Port, cfg.Mode))
@@ -351,11 +363,12 @@ func prepare(cfg *config.Config, log *ui.Logger, allowBrownfield, readOnly bool,
 		chk.Save()
 	}
 
-	ctx := &steps.Context{
+	sctx := &steps.Context{
+		Ctx: ctx,
 		Cli: cli, Log: log, Cfg: cfg, State: chk, Facts: facts,
 		AuthLine: authLine, KeyPEM: keyPEM,
 	}
-	return &session{log: log, cli: cli, ctx: ctx, before: before}, cleanup, nil
+	return &session{log: log, cli: cli, ctx: sctx, before: before}, cleanup, nil
 }
 
 // notifyConnect fires the onConnect callback (if set) with the monitor's
@@ -379,14 +392,14 @@ func notifyConnect(onConnect func(monitor.ConnInfo), cfg *config.Config, keyPEM 
 }
 
 // Run executes a full hardening pass (all Phase A steps + §V verification).
-func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
+func Run(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, false, false, h)
+	s, cleanup, err := prepare(ctx, cfg, log, false, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
 	}
-	cnt, err := runStepList(s, orderedSteps(), true, h)
+	cnt, err := runStepList(ctx, s, orderedSteps(), true, h)
 	if err != nil {
 		return err
 	}
@@ -428,9 +441,9 @@ func Run(cfg *config.Config, log *ui.Logger, h Hooks) error {
 // RunSteps executes only the named step IDs (e.g. "A4", "A5"), respecting their
 // dependencies' on-box state but NOT the load-bearing full order — use for
 // targeted re-tweaks on an already-bootstrapped box (pass --key to reuse a key).
-func RunSteps(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
+func RunSteps(ctx context.Context, cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, true, false, h)
+	s, cleanup, err := prepare(ctx, cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -443,7 +456,7 @@ func RunSteps(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 		return fmt.Errorf("no steps selected; valid ids: %v", allStepIDs())
 	}
 	s.log.Info("running selected steps: %v", ids)
-	cnt, err := runStepList(s, selected, false, h)
+	cnt, err := runStepList(ctx, s, selected, false, h)
 	if err != nil {
 		return err
 	}
@@ -456,9 +469,9 @@ func RunSteps(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 }
 
 // VerifyOnly runs the §V verification matrix without mutating the box.
-func VerifyOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
+func VerifyOnly(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, true, false, h)
+	s, cleanup, err := prepare(ctx, cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -480,9 +493,9 @@ func VerifyOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 
 // DetectOnly connects and runs read-only discovery, writing the inventory but
 // changing nothing.
-func DetectOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
+func DetectOnly(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	_, cleanup, err := prepare(cfg, log, true, false, h)
+	_, cleanup, err := prepare(ctx, cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -499,9 +512,9 @@ func DetectOnly(cfg *config.Config, log *ui.Logger, h Hooks) error {
 // streaming of a single tweaks.Run batch, not real concurrency), and the final
 // Done carries Summary{Facts, Tweaks} so the Dashboard can render the server
 // card + live audit grid.
-func Audit(cfg *config.Config, log *ui.Logger, h Hooks) error {
+func Audit(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, true, true, h)
+	s, cleanup, err := prepare(ctx, cfg, log, true, true, h)
 	defer cleanup()
 	if err != nil {
 		return err
@@ -624,7 +637,7 @@ func emitDone(h Hooks, sum Summary) {
 // runStepList runs steps in order; honorCheckpoint skips already-completed steps.
 // It emits a per-step Progress (running, then final status) when h.OnProgress is
 // set, and returns the OK/SKIP/FAIL tally so the caller can build a Summary.
-func runStepList(s *session, list []steps.Step, honorCheckpoint bool, h Hooks) (counts, error) {
+func runStepList(ctx context.Context, s *session, list []steps.Step, honorCheckpoint bool, h Hooks) (counts, error) {
 	chk := s.ctx.State
 	var c counts
 	total := len(list)
@@ -638,6 +651,15 @@ func runStepList(s *session, list []steps.Step, honorCheckpoint bool, h Hooks) (
 		})
 	}
 	for i, st := range list {
+		// Cancellation is checked ONLY here, at the boundary BEFORE a step starts —
+		// never mid-step. This guarantees the load-bearing SSH-lockdown / firewall /
+		// sysctl sequence inside any step always runs to completion once begun; an
+		// abort halts the run at the next safe boundary, leaving a valid intermediate
+		// state rather than a half-applied lockdown.
+		if err := ctx.Err(); err != nil {
+			s.log.Warn("run canceled before %s — stopping at step boundary (%d/%d done)", st.ID(), i, total)
+			return c, ErrCanceled
+		}
 		if honorCheckpoint && chk.Done(st.ID()) {
 			s.log.Skip("%s — already completed (checkpoint)", st.ID())
 			c.skip++
