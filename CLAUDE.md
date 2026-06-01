@@ -30,48 +30,18 @@ Targets built/verified: linux+darwin × amd64+arm64, windows/amd64. Go `1.26.2`.
 
 ## Architecture
 
+> **Full architecture map + package/step index: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**
+> — read it first to navigate the code (execution flow, entry points, package map,
+> step catalog A1–A10, safety model, known-minor).
+
 **Single entrypoint for CLI *and* TUI:** `engine.Execute(ctx, cfg, cmd, ids, Hooks)`
-(`internal/engine/engine.go`) dispatches `run | detect | verify | step`. The CLI
-passes `context.Background()` + a zero `Hooks{}`; the TUI passes a **cancelable**
-context plus `Sink`/`OnConnect`/`OnProgress` callbacks to stream the run into its
-log pane and footer. Touch one path → check the other.
-
-**Cancellation (F03):** the `ctx` threads through `prepare`/`Run`/`RunSteps`; the
-TUI holds the cancel func and cancels it on abort, so an in-flight `run` stops at the
-**next step boundary** (`runStepList` checks `ctx` before each step → `ErrCanceled`,
-not mid-step). Steps already in progress finish; cancellation is between-step only.
-
-**`prepare()` is the shared front half** of every command: dial → key bootstrap →
-detect → gate → build `steps.Context`. Flow:
-1. Dial via key (`--key`) else password.
-2. **Key bootstrap** (password path): generate ed25519 → push to `/root/.ssh/authorized_keys` → `cli.UseKey()` → clear `cfg.Password`. Key saved as `id_ed25519_<host>`.
-3. `detect.Run()` — §0.5/§2 discovery, writes `/root/vps-inventory.md`.
-4. **Gates:** `AlreadyHardened` (≥2 hardening markers) and brownfield (non-greenfield) both *refuse* a full `run` unless `--assume-yes`. Read-only commands (`detect`/`verify`/`step`) pass `allowBrownfield=true`.
-
-**AdminUser charset (F05):** `config.Validate` rejects any `AdminUser` not matching
-`^[a-z_][a-z0-9_-]{0,31}$` (`ErrBadAdminUser`) — the name is spliced (unquoted in
-places) into root-run shell scripts and a `/home/<user>` path, so the charset gate
-is the injection guard. Empty defaults to `vpsadmin` first, then is re-checked.
-
-**Steps:** one file per runbook block in `internal/steps/` (`a1_firewall.go` …
-`a10_detection.go`). Each implements `Step{ ID(); Title(); Run(*Context) (Status, detail, error) }`.
-A returned non-nil `error` means a **lockout-capable** failure and aborts the whole
-run. `orderedSteps()` in engine.go defines the canonical apply order — selective
-`step <IDs>` runs still execute in that order, never the arg order.
-
-**Idempotency / state (F16, known limitation):** `internal/state` is **in-memory
-only** — `Load` ignores its path argument and `Save` is a no-op, so **no
-`morgward-<host>.state.json` is ever written** and there is **no cross-run step
-skip**. Re-running re-applies every step; each step is independently
-skip-if-already-applied *on the box*, and the `AlreadyHardened` gate is the real
-re-application guard. The on-box configs are the durable checkpoints.
-
-**User handoff:** executor connects as `root`, then `cli.SwitchUser(admin)` after A2
-so later steps run as `vpsadmin` + sudo. On a hardened box root SSH is blocked by
-`AllowGroups sshusers` — connect as the admin user with its key for `detect`/`verify`/`step`.
-
-Packages: `config` (resolved run config + Validate), `ui` (colored terminal + file
-logger, `SetSink` redirects to TUI), `sshx` (client + `Run`/`Sudo`/`SwitchUser`/`UseKey`/`WaitForReboot`, keygen), `detect`, `verify` (§V matrix), `monitor` (live TUI footer metrics), `version`.
+(`internal/engine/engine.go`) dispatches `run | detect | verify | step | audit | revert`.
+The CLI passes `context.Background()` + a zero `Hooks{}`; the TUI passes a **cancelable**
+ctx + `Sink`/`OnConnect`/`OnProgress` to stream the run. `prepare()` is the shared front
+half (dial → key bootstrap → detect → gates → `steps.Context`); steps live one-per-block in
+`internal/steps/` and apply in `orderedSteps()` order. A non-nil step error is
+**lockout-capable** and aborts the run. See `docs/ARCHITECTURE.md` for the rest. Touch one
+path → check the other.
 
 ## Critical gotchas
 
@@ -140,9 +110,8 @@ logger, `SetSink` redirects to TUI), `sshx` (client + `Run`/`Sudo`/`SwitchUser`/
 
 ## Known minor
 
-- Greenfield classifier can report `greenfield=true` on an already-hardened box (only
-  checks listeners/docker/ip_forward, not hardening markers). Cosmetic; the separate
-  `AlreadyHardened` gate handles the real refusal.
+> Cosmetic known-limitations list lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> (§7). The item below is a load-bearing correctness note, kept here.
 
 - **`WaitForReboot` 8s sleep is courtesy-only (F13).** The fixed 8s pre-poll sleep in
   `sshx.WaitForReboot` just avoids racing the still-running pre-reboot sshd; it is
