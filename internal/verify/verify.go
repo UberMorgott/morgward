@@ -16,10 +16,11 @@ import (
 type Status int
 
 const (
-	StatusPass Status = iota
-	StatusWarn        // non-lockout check failed
-	StatusFail        // lockout-capable check failed
-	StatusSkip        // check not applicable (precondition absent) — reason in Detail
+	StatusPass   Status = iota
+	StatusWarn          // non-lockout check failed
+	StatusFail          // lockout-capable check failed
+	StatusSkip          // check not applicable (precondition absent) — reason in Detail
+	StatusUnknown       // transport/exec error — the row could NOT be measured (not a WARN)
 )
 
 func (s Status) String() string {
@@ -30,6 +31,8 @@ func (s Status) String() string {
 		return "WARN"
 	case StatusFail:
 		return "FAIL"
+	case StatusUnknown:
+		return "UNKNOWN"
 	default:
 		return "SKIP"
 	}
@@ -61,6 +64,7 @@ type Result struct {
 	Passed  int
 	Failed  int
 	Skipped int
+	Unknown int // rows that could not be measured (transport/exec error)
 	Abort   bool
 	Rows    []Row // every row, in matrix order — for an aligned final render
 }
@@ -128,26 +132,18 @@ func Run(c *sshx.Client, log *ui.Logger, port int, mode string) Result {
 
 	var res Result
 	for _, ch := range checks {
-		out := c.Sudo(ch.Cmd).Out()
-		row := Row{Name: ch.Name, Detail: truncate(out, 40)}
-		naReason, naSkip := "", false
-		if ch.NA != nil {
-			naReason, naSkip = ch.NA(out)
-		}
-		switch {
-		case naSkip:
-			row.Status = StatusSkip
-			row.Detail = naReason
+		row := classify(ch, c.Sudo(ch.Cmd))
+		switch row.Status {
+		case StatusUnknown:
+			res.Unknown++
+		case StatusSkip:
 			res.Skipped++
-		case ch.Want(out):
-			row.Status = StatusPass
+		case StatusPass:
 			res.Passed++
-		case ch.Lockout:
-			row.Status = StatusFail
+		case StatusFail:
 			res.Failed++
 			res.Abort = true
-		default:
-			row.Status = StatusWarn
+		default: // StatusWarn
 			res.Failed++
 		}
 		res.Rows = append(res.Rows, row)
@@ -155,6 +151,41 @@ func Run(c *sshx.Client, log *ui.Logger, port int, mode string) Result {
 
 	renderMatrix(log, res.Rows)
 	return res
+}
+
+// classify maps one Check's command Result to a verification Row. It is the pure
+// decision core of Run (no SSH, no logging) so the §V status logic is unit-testable.
+//
+// A transport/exec error (RC==-1 or Err!=nil) leaves stdout empty for reasons
+// unrelated to the feature under test. For a NON-lockout row we surface that as
+// StatusUnknown ("could not measure") rather than a misleading WARN/false-RED. Lockout
+// rows still fail closed: an unmeasured lockout-capable check falls through to the
+// predicate (empty stdout → StatusFail → Abort) exactly as before.
+func classify(ch Check, r sshx.Result) Row {
+	out := r.Out()
+	row := Row{Name: ch.Name, Detail: truncate(out, 40)}
+
+	if (r.RC == -1 || r.Err != nil) && !ch.Lockout {
+		row.Status = StatusUnknown
+		row.Detail = transportDetail(r)
+		return row
+	}
+	if ch.NA != nil {
+		if reason, skip := ch.NA(out); skip {
+			row.Status = StatusSkip
+			row.Detail = reason
+			return row
+		}
+	}
+	switch {
+	case ch.Want(out):
+		row.Status = StatusPass
+	case ch.Lockout:
+		row.Status = StatusFail
+	default:
+		row.Status = StatusWarn
+	}
+	return row
 }
 
 // renderMatrix prints the §V matrix as an aligned table to the CLI/log. Column
@@ -180,6 +211,8 @@ func renderMatrix(log *ui.Logger, rows []Row) {
 			log.Skip("%s  %s", name, r.Detail)
 		case StatusFail:
 			log.Fail("%s  LOCKOUT-CAPABLE got=%q", name, r.Detail)
+		case StatusUnknown:
+			log.Warn("%s  UNMEASURED (%s)", name, r.Detail)
 		default: // StatusWarn
 			log.Warn("%s  got=%q", name, r.Detail)
 		}
@@ -193,6 +226,19 @@ func padCells(s string, w int) string {
 		return s + strings.Repeat(" ", pad)
 	}
 	return s
+}
+
+// transportDetail summarizes why a row could not be measured: the transport error
+// when present, else the stderr tail, else a generic exit-code note. Kept short so it
+// fits the matrix detail column.
+func transportDetail(r sshx.Result) string {
+	if r.Err != nil {
+		return truncate(r.Err.Error(), 40)
+	}
+	if s := strings.TrimSpace(r.Stderr); s != "" {
+		return truncate(s, 40)
+	}
+	return fmt.Sprintf("rc=%d", r.RC)
 }
 
 func truncate(s string, n int) string {
