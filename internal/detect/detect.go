@@ -4,6 +4,7 @@
 package detect
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
@@ -30,6 +31,11 @@ type Facts struct {
 	Greenfield  bool
 	Listeners   []string // raw ss lines for public-facing sockets
 	Inventory   string   // full §0.5 inventory dump (written to /root/vps-inventory.md)
+
+	// PendingUpgrades is the count of packages a full-upgrade WOULD install/upgrade
+	// (the "Inst" lines of `apt-get -s full-upgrade`, the same count A8 reports).
+	// Best-effort: a parse/transport miss yields 0 — it never fails the scan.
+	PendingUpgrades int
 
 	AlreadyHardened bool     // box already carries this runbook's hardening markers
 	HardenMarkers   []string // which markers were found
@@ -69,6 +75,14 @@ func Run(c *sshx.Client) *Facts {
 	f.IPForward = fwd == "1"
 
 	f.DockerSeen = c.Run("command -v docker >/dev/null 2>&1 && echo yes").Out() == "yes"
+
+	// Pending-upgrade count: simulate a full-upgrade and count its "Inst" lines (the
+	// exact command A8 uses). Best-effort — a parse/transport miss leaves it at 0 so
+	// the scan never fails on it.
+	if n, err := strconv.Atoi(c.Sudo(
+		"DEBIAN_FRONTEND=noninteractive apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst' || echo 0").Out()); err == nil {
+		f.PendingUpgrades = n
+	}
 
 	// Listening sockets, excluding loopback binds and sshd itself.
 	ss := c.Sudo(`ss -tulpnH 2>/dev/null`).Stdout

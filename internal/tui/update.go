@@ -53,6 +53,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
 		case phaseWiki:
+			// On the per-PROBE detail, the [Применить] / [Обновить и перезагрузить]
+			// action pills take priority over the back pill (their rows never overlap).
+			// [Применить] applies THIS probe's step; [Обновить] runs A8 (upgrade+reboot).
+			// Both reuse startSteps → the run streams to phaseRun → summary.
+			if m.wikiUpdateAtClick(mc.X, mc.Y) {
+				return m.startSteps([]string{"A8"})
+			}
+			if m.wikiApplyAtClick(mc.X, mc.Y) {
+				if step, ok := m.wikiProbeStep(); ok {
+					return m.startSteps([]string{step})
+				}
+				return m, nil
+			}
 			// The clickable "← Назад" pill returns to wherever the wiki was opened from.
 			if m.wikiBackAtClick(mc.X, mc.Y) {
 				m.phase = m.wikiReturn
@@ -163,6 +176,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "enter", "esc", "b":
 				m.phase = m.wikiReturn
+			case "a":
+				// Apply THIS probe's step — only when the [Применить] row is actually shown.
+				if _, shown := m.wikiActionRowY(wikiRowApplyButton); shown {
+					if step, ok := m.wikiProbeStep(); ok {
+						return m.startSteps([]string{step})
+					}
+				}
+			case "u":
+				// Update & reboot (A8) — only when the [Обновить] row is actually shown.
+				if _, shown := m.wikiActionRowY(wikiRowUpdateButton); shown {
+					return m.startSteps([]string{"A8"})
+				}
 			case "up", "k":
 				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
 			case "down", "j":

@@ -10,14 +10,97 @@ import (
 	"github.com/UberMorgott/morgward/internal/wiki"
 )
 
-// wikiBackStartCol is the absolute X where the wiki "← Назад" pill begins: 2
-// (left border + the leading content space added by contentLine).
+// wikiBackStartCol is the absolute X where the wiki "← Назад" pill (and every
+// other wiki action pill) begins: 2 (left border + the leading content space
+// added by contentLine).
 const wikiBackStartCol = 2
 
-// wikiBackRow is the screen Y of the back-button row in wikiView: it sits right
-// after the scrollable middle region (rows [summaryBodyTopRow, +viewH)).
+// wikiActionKind enumerates the fixed-chrome rows the wiki PROBE-detail screen can
+// add BELOW the scrollable description and ABOVE the back pill. The back pill is
+// always present; the others appear only on the per-PROBE path under their own
+// conditions (see wikiActionRows).
+type wikiActionKind int
+
+const (
+	wikiRowUpdateWarn   wikiActionKind = iota // non-clickable warning text line
+	wikiRowUpdateButton                       // clickable "Обновить и перезагрузить" pill
+	wikiRowApplyButton                        // clickable "Применить" pill
+	wikiRowBack                               // clickable "← Назад" pill (always last)
+)
+
+// wikiActionRows is the SINGLE source of truth for the wiki fixed-chrome action
+// rows and their screen order, shared by BOTH the render (wikiView) and the
+// hit-tests (wikiBackAtClick / wikiApplyAtClick / wikiUpdateAtClick) so geometry
+// can never drift. Order top→bottom matches the spec:
+//
+//	[update warning]  — only when m.dashFacts.PendingUpgrades > 0
+//	[update button]   — only when m.dashFacts.PendingUpgrades > 0
+//	[apply button]    — only when the probe is NOT applied and NOT informational
+//	[back pill]       — always
+//
+// The apply/update rows appear ONLY on the per-PROBE path (m.wikiProbeID != "");
+// the summary path (empty probe id) shows just the back pill, unchanged.
+func (m model) wikiActionRows() []wikiActionKind {
+	var rows []wikiActionKind
+	if m.wikiProbeID != "" {
+		if m.dashFacts != nil && m.dashFacts.PendingUpgrades > 0 {
+			rows = append(rows, wikiRowUpdateWarn, wikiRowUpdateButton)
+		}
+		if applied, info, ok := m.wikiProbeState(); ok && !applied && !info {
+			rows = append(rows, wikiRowApplyButton)
+		}
+	}
+	rows = append(rows, wikiRowBack)
+	return rows
+}
+
+// wikiProbeState looks up m.wikiProbeID in m.dashAuditRaw and returns the probe's
+// Applied + Informational verdicts. ok=false when the probe id is empty or has no
+// matching audit Result (e.g. pre-connect or the summary path).
+func (m model) wikiProbeState() (applied, informational, ok bool) {
+	if m.wikiProbeID == "" {
+		return false, false, false
+	}
+	for _, r := range m.dashAuditRaw {
+		if r.Probe.ID == m.wikiProbeID {
+			return r.Applied, r.Informational, true
+		}
+	}
+	return false, false, false
+}
+
+// wikiProbeStep returns the engine step ID of the clicked probe (from m.dashAuditRaw),
+// used by the [Применить] action to launch just that probe's step. ok=false on a miss.
+func (m model) wikiProbeStep() (string, bool) {
+	if m.wikiProbeID == "" {
+		return "", false
+	}
+	for _, r := range m.dashAuditRaw {
+		if r.Probe.ID == m.wikiProbeID {
+			return r.Probe.Step, true
+		}
+	}
+	return "", false
+}
+
+// wikiActionRowY returns the screen Y of the given action-row kind, or ok=false when
+// that row is not currently shown. The action rows are fixed chrome that begins
+// right after the scrollable middle region (rows [summaryBodyTopRow, +viewH)), in
+// the order wikiActionRows reports.
+func (m model) wikiActionRowY(kind wikiActionKind) (int, bool) {
+	base := summaryBodyTopRow + m.wikiBodyViewH()
+	for i, k := range m.wikiActionRows() {
+		if k == kind {
+			return base + i, true
+		}
+	}
+	return 0, false
+}
+
+// wikiBackRow is the screen Y of the back-button row — the LAST action row.
 func (m model) wikiBackRow() int {
-	return summaryBodyTopRow + m.wikiBodyViewH()
+	y, _ := m.wikiActionRowY(wikiRowBack) // back pill is always present
+	return y
 }
 
 // wikiBackAtClick reports whether (x,y) hit the wiki "← Назад" pill, mirroring
@@ -27,6 +110,32 @@ func (m model) wikiBackAtClick(x, y int) bool {
 		return false
 	}
 	return pillIndexAt([]string{t(m.lang, kWikiBack)}, wikiBackStartCol, x) == 0
+}
+
+// wikiApplyAtClick reports whether (x,y) hit the "[Применить]" pill — present only
+// when wikiActionRows includes it (per-PROBE path, probe not applied + not informational).
+func (m model) wikiApplyAtClick(x, y int) bool {
+	if m.phase != phaseWiki {
+		return false
+	}
+	ry, ok := m.wikiActionRowY(wikiRowApplyButton)
+	if !ok || y != ry {
+		return false
+	}
+	return pillIndexAt([]string{t(m.lang, kWikiApplyButton)}, wikiBackStartCol, x) == 0
+}
+
+// wikiUpdateAtClick reports whether (x,y) hit the "[Обновить и перезагрузить]" pill —
+// present only when there are pending upgrades (m.dashFacts.PendingUpgrades > 0).
+func (m model) wikiUpdateAtClick(x, y int) bool {
+	if m.phase != phaseWiki {
+		return false
+	}
+	ry, ok := m.wikiActionRowY(wikiRowUpdateButton)
+	if !ok || y != ry {
+		return false
+	}
+	return pillIndexAt([]string{t(m.lang, kWikiUpdateButton)}, wikiBackStartCol, x) == 0
 }
 
 // tweakBucketIDs is the canonical Tweaks-bucket step ID set applied by the
@@ -94,10 +203,25 @@ func (m model) wikiView() string {
 	off := clampScroll(m.wikiScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
-	// Clickable "← Назад" pill pinned just above the hint line (its own fixed-chrome
-	// row, hit-tested by wikiBackAtClick). Styled like the dashboard action pills.
-	sb.WriteString(contentLine(b, pillOnStyle.Render(t(m.lang, kWikiBack)), innerW))
-	sb.WriteByte('\n')
+	// Fixed-chrome action rows pinned just above the hint line, in the exact order
+	// (and under the exact conditions) wikiActionRows reports — the SAME source the
+	// hit-tests use, so render and click geometry can never drift. The two action
+	// pills (apply/update) appear only on the per-PROBE path; the back pill always.
+	for _, kind := range m.wikiActionRows() {
+		var line string
+		switch kind {
+		case wikiRowUpdateWarn:
+			line = errStyle.Render(t(m.lang, kWikiUpdateWarn))
+		case wikiRowUpdateButton:
+			line = pillOnStyle.Render(t(m.lang, kWikiUpdateButton))
+		case wikiRowApplyButton:
+			line = pillOnStyle.Render(t(m.lang, kWikiApplyButton))
+		case wikiRowBack:
+			line = pillOnStyle.Render(t(m.lang, kWikiBack))
+		}
+		sb.WriteString(contentLine(b, line, innerW))
+		sb.WriteByte('\n')
+	}
 	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kWikiHint)), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
@@ -199,10 +323,13 @@ func (m model) stepStatusWord(stepID string) (string, bool) {
 	}
 }
 
-// wikiBodyViewH is bodyViewH minus one row, because the wiki screen carries an
-// extra fixed-chrome row (the clickable "← Назад" pill) above the hint. Used for
-// BOTH the wiki render and every wiki scroll clamp so geometry never drifts.
-func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+// wikiBodyViewH is bodyViewH minus the fixed-chrome action rows the wiki screen
+// carries above the hint: the always-present "← Назад" pill plus, on the per-PROBE
+// path, the optional update-warning / update-button / apply-button rows (see
+// wikiActionRows). Reserving EXACTLY len(wikiActionRows) rows keeps the footer
+// pinned and the action-row screen Ys correct. Used for BOTH the wiki render and
+// every wiki scroll clamp so geometry never drifts.
+func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-len(m.wikiActionRows()), 1) }
 
 // auditConnected reports whether we are post-connect: an audit has completed and
 // carried results. Gates the wiki live-status column (a step's status word is only

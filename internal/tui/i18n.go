@@ -154,6 +154,11 @@ const (
 	kWikiBack      // clickable back button: "← Назад" / "← Back"
 	kWikiProbeWhat // per-probe detail label: "ЧТО ПРОВЕРЯЕТ" / "WHAT THIS CHECKS"
 
+	// --- wiki PROBE-detail action buttons (only when m.wikiProbeID != "") --------
+	kWikiApplyButton  // clickable: apply THIS tweak's step ("Применить" / "Apply")
+	kWikiUpdateButton // clickable: full upgrade + reboot ("Обновить и перезагрузить" / "Update & reboot")
+	kWikiUpdateWarn   // warning line shown when dashFacts.PendingUpgrades > 0
+
 	// --- live tweak status words (shared by the wiki status line) --------
 	kStatusApplied     // "✓ применено" / "✓ applied"
 	kStatusCanApply    // "• можно" / "• available"
@@ -327,6 +332,10 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiBack:      "← Назад",
 		kWikiProbeWhat: "ЧТО ПРОВЕРЯЕТ",
 
+		kWikiApplyButton:  "Применить",
+		kWikiUpdateButton: "Обновить и перезагрузить",
+		kWikiUpdateWarn:   "Система не обновлена — рекомендуем обновить перед применением твиков",
+
 		kStatusApplied:     "✓ применено",
 		kStatusCanApply:    "• можно",
 		kStatusUnavailable: "⊘ недоступно",
@@ -483,6 +492,10 @@ var tr = map[Lang]map[stringKey]string{
 		kWikiNoDoc:     "no description for this step",
 		kWikiBack:      "← Back",
 		kWikiProbeWhat: "WHAT THIS CHECKS",
+
+		kWikiApplyButton:  "Apply",
+		kWikiUpdateButton: "Update & reboot",
+		kWikiUpdateWarn:   "System is not up to date — update before applying tweaks",
 
 		kStatusApplied:     "✓ applied",
 		kStatusCanApply:    "• available",
@@ -700,143 +713,143 @@ func localTweakName(lang Lang, id, fallback string) string {
 var probeDescs = map[Lang]map[string]string{
 	langRU: {
 		// --- A1 firewall ---
-		"a1.input_drop": "Проверяет, что базовая политика цепочки INPUT в iptables — DROP, то есть весь незаявленный входящий трафик отбрасывается по умолчанию.",
-		"a1.ssh_accept": "Проверяет, что в цепочке INPUT есть правило ACCEPT для порта SSH — иначе политика DROP отрезала бы вас от сервера.",
-		"a1.rules_v4":   "Проверяет наличие файла /etc/iptables/rules.v4 — сохранённых правил IPv4, которые iptables-persistent восстанавливает после перезагрузки.",
-		"a1.rules_v6":   "Проверяет наличие файла /etc/iptables/rules.v6 — сохранённых правил IPv6 (только если у сервера есть IPv6).",
-		"a1.persistent": "Проверяет, что установлен пакет iptables-persistent — без него правила файрвола не переживут перезагрузку.",
+		"a1.input_drop": "Проверяет базовую политику цепочки INPUT в iptables (строка -P INPUT). По умолчанию iptables принимает всё; политика DROP делает наоборот — отбрасывать весь входящий трафик, кроме явно разрешённого. Применение твика ставит -P INPUT DROP, превращая файрвол в модель «запрещено всё, что не разрешено».",
+		"a1.ssh_accept": "Проверяет, что в цепочке INPUT есть правило ACCEPT именно для вашего SSH-порта. При политике DROP без такого правила-исключения вы потеряли бы доступ к серверу сразу после включения файрвола. Применение твика добавляет ACCEPT на SSH-порт раньше, чем включается DROP, — это страховка от самоблокировки.",
+		"a1.rules_v4":   "Проверяет наличие файла /etc/iptables/rules.v4 — снимка действующих правил IPv4. Правила в памяти ядра живут только до перезагрузки; этот файл — то, что iptables-persistent восстанавливает при загрузке. Применение твика сохраняет текущий набор правил в rules.v4, чтобы файрвол поднимался автоматически после ребута.",
+		"a1.rules_v6":   "Проверяет наличие файла /etc/iptables/rules.v6 — сохранённого набора правил IPv6 (проверка появляется только если у сервера есть глобальный IPv6). Без него IPv6-стек остался бы без файрвола после перезагрузки. Применение твика сохраняет правила ip6tables, чтобы IPv6 защищался так же, как IPv4.",
+		"a1.persistent": "Проверяет через dpkg, что установлен пакет iptables-persistent. Именно его служба загружает rules.v4/rules.v6 на старте системы; без пакета сохранённые файлы правил никто не применит. Применение твика ставит пакет, замыкая цепочку «правила сохранены → правила восстановлены при загрузке».",
 
 		// --- A2 ssh ---
-		"a2.conf00":       "Проверяет наличие drop-in /etc/ssh/sshd_config.d/00-hardening.conf — первой части усиленной конфигурации sshd.",
-		"a2.conf99":       "Проверяет наличие drop-in /etc/ssh/sshd_config.d/99-hardening.conf — финальной части усиленной конфигурации sshd (перекрывает дефолты).",
-		"a2.allowgroups":  "Проверяет через sshd -T, что задан AllowGroups sshusers — вход по SSH разрешён только членам группы sshusers. Информационно: на безопасном пути может быть не задано.",
-		"a2.ecdsa_absent": "Проверяет, что host-key /etc/ssh/ssh_host_ecdsa_key удалён — оставляем только Ed25519, убирая слабый ECDSA-ключ сервера.",
-		"a2.ssh_active":   "Проверяет через systemctl is-active, что служба ssh (или sshd) запущена и работает.",
-		"a2.permitroot":   "Читает действующее значение PermitRootLogin из sshd -T. Информационно: в режиме soft ожидается prohibit-password, в strict — no.",
-		"a2.passauth":     "Читает действующее значение PasswordAuthentication из sshd -T. Информационно: в soft пароль остаётся (yes), в strict выключается (no).",
-		"a2.kex_mlkem":    "Проверяет через sshd -T, что в KexAlgorithms включён постквантовый обмен ключами mlkem768x25519-sha256 (только Ubuntu 26.04).",
+		"a2.conf00":       "Проверяет наличие drop-in /etc/ssh/sshd_config.d/00-hardening.conf — первого фрагмента усиленной конфигурации sshd. Префикс 00 гарантирует ранний порядок подключения. В нём задаются базовые параметры криптостойкости; применение твика создаёт этот файл, не трогая основной sshd_config.",
+		"a2.conf99":       "Проверяет наличие drop-in /etc/ssh/sshd_config.d/99-hardening.conf — финального фрагмента конфигурации sshd. Префикс 99 ставит его последним, чтобы он перекрывал дефолты дистрибутива и другие drop-in. Применение твика кладёт сюда итоговые жёсткие значения (алгоритмы, тайм-ауты, доступ).",
+		"a2.allowgroups":  "Проверяет через sshd -T действующее значение AllowGroups: вход по SSH разрешён только членам группы sshusers, все остальные отсекаются ещё до проверки пароля/ключа. Информационно: на безопасном пути образ не трогается, поэтому может быть не задано — это не ошибка. Значение становится sshusers только после жёсткой блокировки A2 (или strict-режима).",
+		"a2.ecdsa_absent": "Проверяет, что host-key /etc/ssh/ssh_host_ecdsa_key удалён с сервера. ECDSA-ключ хоста опирается на кривые NIST, к которым есть вопросы доверия; оставляя только Ed25519, мы сужаем поверхность и стандартизируем отпечаток сервера. Применение твика удаляет ECDSA-ключ и перезапускает sshd.",
+		"a2.ssh_active":   "Проверяет через systemctl is-active, что служба ssh (или sshd на некоторых сборках) запущена и работает. Это базовый контроль живости: если после изменения конфигурации демон не поднялся, доступ был бы потерян. Проба подтверждает, что sshd активен с применённой конфигурацией.",
+		"a2.permitroot":   "Читает действующее значение PermitRootLogin из sshd -T — разрешён ли прямой вход root по SSH. Информационно: в режиме soft ожидается prohibit-password (root только по ключу, не по паролю), в strict — no (root по SSH запрещён полностью). На безопасном пути образ не меняется, поэтому несовпадение не считается ошибкой.",
+		"a2.passauth":     "Читает действующее значение PasswordAuthentication из sshd -T — пускают ли на сервер по паролю. Информационно: в soft пароль остаётся включён (yes), чтобы не потерять доступ, в strict выключается (no) и остаётся только вход по ключу. На безопасном пути значение из образа не трогается.",
+		"a2.kex_mlkem":    "Проверяет через sshd -T, что в KexAlgorithms включён постквантовый обмен ключами mlkem768x25519-sha256 (проба есть только на Ubuntu 26.04). Гибридный обмен защищает сессию от будущей расшифровки квантовым компьютером по схеме «перехвати сейчас — расшифруй потом». Применение твика добавляет этот алгоритм первым в список KEX.",
 
 		// --- A2.5 cloud-init ---
-		"a25.disabled": "Проверяет наличие файла-флага /etc/cloud/cloud-init.disabled (или что cloud-init вовсе не установлен) — чтобы он не откатывал настройки при перезагрузке.",
+		"a25.disabled": "Проверяет наличие файла-флага /etc/cloud/cloud-init.disabled (либо что cloud-init вовсе не установлен). cloud-init при каждой загрузке может переписывать сеть, пользователей и SSH по шаблону провайдера, откатывая нашу настройку. Применение твика создаёт файл-флаг, нейтрализуя cloud-init, чтобы изменения переживали перезагрузку.",
 
 		// --- A3 fail2ban ---
-		"a3.installed":  "Проверяет через dpkg, что установлен пакет fail2ban — сам демон бана по неудачным входам.",
-		"a3.jail_local": "Проверяет наличие файла /etc/fail2ban/jail.local — локальной конфигурации джейлов (jail sshd, белый список IP).",
-		"a3.sshd_jail":  "Проверяет через fail2ban-client status sshd, что джейл sshd реально загружен и активен, а не просто прописан в конфиге.",
+		"a3.installed":  "Проверяет через dpkg, что установлен пакет fail2ban — демон, который читает журналы и банит IP после серии неудачных входов. Без него перебор пароля по SSH ничем не ограничен. Применение твика ставит пакет, давая основу для защиты от брутфорса.",
+		"a3.jail_local": "Проверяет наличие файла /etc/fail2ban/jail.local — локальной конфигурации, переопределяющей дефолтный jail.conf. Здесь включается джейл sshd, задаются порог и время бана, белый список доверенных IP. Применение твика кладёт jail.local с нашими параметрами, не трогая пакетный jail.conf.",
+		"a3.sshd_jail":  "Проверяет через fail2ban-client status sshd, что джейл sshd реально загружен в работающем демоне, а не просто описан в конфиге. Только активный джейл действительно отслеживает неудачные входы и выставляет баны. Проба подтверждает, что защита SSH от брутфорса включена и работает.",
 
 		// --- A4 network ---
-		"a4.net_tune":   "Проверяет наличие /etc/sysctl.d/99-net-tune.conf — sysctl-настроек буферов сокетов и сетевых очередей.",
-		"a4.bbr_conf":   "Проверяет наличие /etc/sysctl.d/99-bbr.conf — файла, включающего BBR и очередь fq при загрузке.",
-		"a4.bbr_module": "Проверяет через lsmod, что модуль ядра tcp_bbr загружен — без него алгоритм BBR недоступен.",
-		"a4.bbr_active": "Читает sysctl net.ipv4.tcp_congestion_control и проверяет, что действующий контроль перегрузки — bbr.",
-		"a4.qdisc":      "Читает sysctl net.core.default_qdisc и проверяет, что дисциплина очереди по умолчанию — fq (нужна для корректной работы BBR).",
-		"a4.io_sched":   "Проверяет наличие udev-правила /etc/udev/rules.d/60-io-scheduler.rules на дисках vd* (на других дисках проверка неприменима).",
+		"a4.net_tune":   "Проверяет наличие /etc/sysctl.d/99-net-tune.conf — sysctl-настроек сетевого стека: размеры буферов сокетов, длины очередей, параметры TCP. На дефолтных значениях быстрые каналы недоиспользуются. Применение твика кладёт этот файл, поднимая пропускную способность под VPS-нагрузку.",
+		"a4.bbr_conf":   "Проверяет наличие /etc/sysctl.d/99-bbr.conf — файла, который при загрузке задаёт алгоритм контроля перегрузки BBR и дисциплину очереди fq. Это декларативная часть включения BBR через sysctl. Применение твика создаёт файл, чтобы настройки переживали перезагрузку.",
+		"a4.bbr_module": "Проверяет через lsmod, что модуль ядра tcp_bbr загружен в данный момент. Без модуля в памяти ядро не сможет применить алгоритм BBR, даже если он прописан в sysctl. Применение твика загружает модуль и прописывает его автозагрузку.",
+		"a4.bbr_active": "Читает sysctl net.ipv4.tcp_congestion_control — реально действующий алгоритм контроля перегрузки. BBR заметно лучше старого cubic держит скорость на каналах с потерями и большой задержкой. Проба подтверждает, что эффективное значение — bbr, а не просто прописано в файле.",
+		"a4.qdisc":      "Читает sysctl net.core.default_qdisc — дисциплину очереди пакетов по умолчанию. Для корректной работы BBR нужна именно fq (fair queue), иначе выигрыш от алгоритма теряется. Проба подтверждает, что действующее значение — fq.",
+		"a4.io_sched":   "Проверяет наличие udev-правила /etc/udev/rules.d/60-io-scheduler.rules на виртуальных дисках vd* (на других типах дисков проверка неприменима и помечается «na»). Правило выставляет планировщик ввода-вывода, оптимальный для виртуального хранилища. Применение твика кладёт это правило udev.",
 
 		// --- A5 kernel ---
-		"a5.harden_conf":  "Проверяет наличие /etc/sysctl.d/99-zz-kernel-harden.conf — набора sysctl-параметров усиления ядра.",
-		"a5.core_pattern": "Читает sysctl kernel.core_pattern и проверяет, что дампы памяти перенаправлены в /bin/false, то есть отключены.",
-		"a5.rp_filter":    "Читает sysctl net.ipv4.conf.all.rp_filter и проверяет строгую (=1) обратную проверку маршрута против подмены адресов.",
-		"a5.kptr":         "Читает sysctl kernel.kptr_restrict и проверяет значение 2 — адреса ядра полностью скрыты, чтобы не подсказывать эксплойтам.",
-		"a5.thp":          "Читает /sys/kernel/mm/transparent_hugepage/enabled и проверяет режим [madvise] для прозрачных больших страниц.",
+		"a5.harden_conf":  "Проверяет наличие /etc/sysctl.d/99-zz-kernel-harden.conf — общего файла с набором sysctl-параметров усиления ядра. Префикс zz ставит его последним, чтобы перекрыть менее строгие значения. Применение твика кладёт файл; остальные пробы A5 проверяют отдельные ключи из этого набора.",
+		"a5.core_pattern": "Читает sysctl kernel.core_pattern — куда ядро пишет дамп памяти упавшего процесса. Дампы могут содержать пароли и ключи и раздувать диск, поэтому их перенаправляют в /bin/false, то есть отключают. Проба подтверждает, что core_pattern указывает на /bin/false.",
+		"a5.rp_filter":    "Читает sysctl net.ipv4.conf.all.rp_filter — режим обратной проверки маршрута. Строгий режим (=1) отбрасывает пакеты с подделанным адресом источника, который не вернулся бы тем же интерфейсом. Применение твика выставляет rp_filter=1 против спуфинга.",
+		"a5.kptr":         "Читает sysctl kernel.kptr_restrict — насколько скрыты адреса ядра в /proc и логах. Значение 2 прячет указатели ядра ото всех, включая root, чтобы не подсказывать эксплойтам раскладку памяти. Проба подтверждает kptr_restrict=2.",
+		"a5.thp":          "Читает /sys/kernel/mm/transparent_hugepage/enabled — режим прозрачных больших страниц. Режим [madvise] включает большие страницы только там, где приложение их явно запросило, избегая скачков задержки и лишнего расхода памяти от глобального always. Применение твика выставляет madvise.",
 
 		// --- A6 maintenance ---
-		"a6.journald":    "Проверяет наличие /etc/systemd/journald.conf.d/99-vps-cap.conf — лимита размера журнала systemd, чтобы логи не забили диск.",
-		"a6.needrestart": "Проверяет наличие /etc/needrestart/conf.d/50-autorestart.conf — настройки неинтерактивного перезапуска служб после обновлений.",
-		"a6.nofile":      "Проверяет наличие /etc/systemd/system.conf.d/limits.conf — поднятого лимита открытых файлов (NOFILE).",
-		"a6.ntp":         "Читает timedatectl и проверяет, что синхронизация времени по NTP включена (NTP=yes).",
+		"a6.journald":    "Проверяет наличие /etc/systemd/journald.conf.d/99-vps-cap.conf — drop-in с лимитом размера журнала systemd. Без ограничения журнал способен разрастись и забить диск под ноль. Применение твика задаёт потолок (SystemMaxUse), удерживая логи в безопасных рамках.",
+		"a6.needrestart": "Проверяет наличие /etc/needrestart/conf.d/50-autorestart.conf. needrestart после обновлений библиотек спрашивает, какие службы перезапустить; на сервере без оператора этот интерактивный запрос вешает автообновление. Применение твика переводит needrestart в неинтерактивный авто-режим.",
+		"a6.nofile":      "Проверяет наличие /etc/systemd/system.conf.d/limits.conf — drop-in с поднятым лимитом открытых файлов (NOFILE). Дефолтный лимит мал для нагруженных сетевых служб и приводит к ошибкам «too many open files». Применение твика поднимает потолок дескрипторов для служб systemd.",
+		"a6.ntp":         "Читает timedatectl и проверяет, что синхронизация времени по NTP включена (NTP=yes). Уход часов ломает TLS-сертификаты, логи и работу fail2ban. Применение твика включает systemd-timesyncd, удерживая системное время точным.",
 
 		// --- A6.5 DNS ---
-		"a65.dns_conf": "Проверяет наличие /etc/systemd/resolved.conf.d/99-morgward-dns.conf — drop-in с защищёнными резолверами для systemd-resolved.",
-		"a65.dot":      "Проверяет, что в том же drop-in задано DNSOverTLS=opportunistic — DNS-запросы шифруются по DNS-over-TLS, где это возможно.",
+		"a65.dns_conf": "Проверяет наличие /etc/systemd/resolved.conf.d/99-morgward-dns.conf — drop-in для systemd-resolved с заданными доверенными резолверами (проба активна, только если resolved работает). Это фиксирует, через какие DNS-серверы ходит система. Применение твика кладёт файл с нашими резолверами и базовыми настройками безопасности DNS.",
+		"a65.dot":      "Проверяет, что в том же drop-in задано DNSOverTLS=opportunistic. В этом режиме DNS-запросы шифруются по DNS-over-TLS там, где сервер это поддерживает, скрывая их от перехвата и подмены провайдером. Применение твика включает оппортунистический DoT (без жёсткого требования, чтобы не сломать резолвинг).",
 
 		// --- A6.7 memory ---
-		"a67.zram_conf":   "Проверяет наличие /etc/systemd/zram-generator.conf — конфигурации сжатого свопа в ОЗУ (ZRAM, zstd).",
-		"a67.zram_sysctl": "Проверяет наличие /etc/sysctl.d/99-zram.conf — sysctl-настройки swappiness под ZRAM.",
-		"a67.zram_active": "Проверяет через swapon, что zram-устройство реально подключено как своп, а не только описано в конфиге.",
-		"a67.earlyoom":    "Проверяет через systemctl is-active, что служба earlyoom работает — она мягко завершает процессы до жёсткой нехватки памяти.",
+		"a67.zram_conf":   "Проверяет наличие /etc/systemd/zram-generator.conf — конфигурации сжатого свопа в ОЗУ (ZRAM на алгоритме zstd). ZRAM создаёт быстрый своп прямо в памяти, отодвигая OOM без обращения к медленному диску. Применение твика кладёт конфиг, задавая размер zram-устройства.",
+		"a67.zram_sysctl": "Проверяет наличие /etc/sysctl.d/99-zram.conf — sysctl-настройки vm.swappiness, подстроенной под ZRAM. С быстрым свопом в памяти ядру выгодно охотнее вытеснять страницы, поэтому swappiness повышают. Применение твика кладёт этот sysctl-файл в пару к zram-generator.conf.",
+		"a67.zram_active": "Проверяет через swapon, что zram-устройство реально подключено как своп прямо сейчас, а не только описано в конфиге. Только активный своп даёт защиту от нехватки памяти. Проба подтверждает, что zram-своп смонтирован и используется ядром.",
+		"a67.earlyoom":    "Проверяет через systemctl is-active, что служба earlyoom запущена. earlyoom мягко завершает самый прожорливый процесс ДО того, как штатный OOM-killer ядра подвесит весь сервер при исчерпании памяти. Применение твика ставит и включает earlyoom как страховку от зависаний по памяти.",
 
 		// --- A9 unattended-upgrades ---
-		"a9.installed": "Проверяет через dpkg, что установлен пакет unattended-upgrades — механизм автоматической установки обновлений безопасности.",
-		"a9.auto":      "Проверяет наличие /etc/apt/apt.conf.d/20auto-upgrades — файла, включающего периодический запуск автообновлений.",
-		"a9.local":     "Проверяет наличие /etc/apt/apt.conf.d/52-unattended-upgrades-local — локальной настройки (без авто-перезагрузки, чистка ядер).",
+		"a9.installed": "Проверяет через dpkg, что установлен пакет unattended-upgrades — механизм автоматической установки обновлений безопасности без участия оператора. Без него критические патчи ставятся только вручную и часто запаздывают. Применение твика ставит пакет, давая основу для автообновлений.",
+		"a9.auto":      "Проверяет наличие /etc/apt/apt.conf.d/20auto-upgrades — файла, который включает периодические задания apt (обновление списков и накат обновлений). Без него установленный unattended-upgrades ничего не запускает. Применение твика создаёт файл, активируя расписание автообновлений.",
+		"a9.local":     "Проверяет наличие /etc/apt/apt.conf.d/52-unattended-upgrades-local — нашей локальной донастройки автообновлений. Здесь отключается авто-перезагрузка (чтобы сервер не ушёл в ребут внезапно) и включается чистка старых ядер. Применение твика кладёт этот файл поверх дефолтов пакета.",
 
 		// --- A10 detection ---
-		"a10.auditd":        "Проверяет через dpkg, что установлен пакет auditd — демон аудита изменений важных файлов.",
-		"a10.audit_rules":   "Проверяет наличие /etc/audit/rules.d/99-vps.rules — набора правил аудита для отслеживаемых файлов и событий.",
-		"a10.auditd_active": "Проверяет через systemctl is-active, что служба auditd запущена и собирает события.",
-		"a10.notify":        "Проверяет наличие скрипта /usr/local/sbin/ssh-login-notify.sh — он шлёт уведомление об успешном входе по SSH.",
-		"a10.pam":           "Проверяет, что в /etc/pam.d/sshd прописана строка вызова ssh-login-notify — без неё уведомления о входе не сработают.",
-		"a10.log_rule":      "Проверяет через iptables, что в цепочке INPUT есть LOG-правило (метка ipt-drop-in), журналирующее отброшенные входящие пакеты.",
+		"a10.auditd":        "Проверяет через dpkg, что установлен пакет auditd — демон аудита ядра Linux, фиксирующий доступ к важным файлам и системные события. Без него не остаётся следов для разбора инцидента. Применение твика ставит пакет, давая основу для журнала аудита.",
+		"a10.audit_rules":   "Проверяет наличие /etc/audit/rules.d/99-vps.rules — набора правил аудита: какие файлы и системные вызовы отслеживать (sudoers, ключи SSH, изменения учёток). Без правил auditd работает, но ничего не пишет. Применение твика кладёт наш набор правил наблюдения.",
+		"a10.auditd_active": "Проверяет через systemctl is-active, что служба auditd запущена и реально собирает события по загруженным правилам. Установленного, но остановленного демона недостаточно. Проба подтверждает, что аудит работает и журналирует.",
+		"a10.notify":        "Проверяет наличие скрипта /usr/local/sbin/ssh-login-notify.sh. Скрипт при успешном входе по SSH шлёт уведомление, чтобы чужой логин не остался незамеченным. Применение твика кладёт исполняемый скрипт в системный путь.",
+		"a10.pam":           "Проверяет, что в /etc/pam.d/sshd прописана строка вызова ssh-login-notify через pam_exec. Именно она запускает скрипт уведомления при каждой SSH-сессии; без этой строки скрипт лежит, но не срабатывает. Применение твика добавляет строку в PAM-стек sshd.",
+		"a10.log_rule":      "Проверяет через iptables, что в цепочке INPUT есть LOG-правило с меткой ipt-drop-in — оно журналирует пакеты, отброшенные политикой DROP. Это даёт видимость сканирований и попыток подключения к закрытым портам. Применение твика добавляет логирующее правило перед финальным DROP.",
 	},
 	langEN: {
 		// --- A1 firewall ---
-		"a1.input_drop": "Checks that the iptables INPUT chain's default policy is DROP, so all unsolicited inbound traffic is rejected by default.",
-		"a1.ssh_accept": "Checks the INPUT chain has an ACCEPT rule for the SSH port — without it the DROP policy would cut you off from the server.",
-		"a1.rules_v4":   "Checks for /etc/iptables/rules.v4 — the saved IPv4 ruleset that iptables-persistent restores after a reboot.",
-		"a1.rules_v6":   "Checks for /etc/iptables/rules.v6 — the saved IPv6 ruleset (only when the server has IPv6).",
-		"a1.persistent": "Checks that the iptables-persistent package is installed — without it firewall rules do not survive a reboot.",
+		"a1.input_drop": "Checks the iptables INPUT chain's default policy (the -P INPUT line). By default iptables accepts everything; a DROP policy flips that to reject all inbound traffic unless explicitly allowed. Applying the tweak sets -P INPUT DROP, turning the firewall into a default-deny posture.",
+		"a1.ssh_accept": "Checks the INPUT chain has an ACCEPT rule for your specific SSH port. Under a DROP policy, without this exception rule you would be locked out the instant the firewall comes up. Applying the tweak inserts the SSH ACCEPT before DROP takes effect — the lockout safeguard.",
+		"a1.rules_v4":   "Checks for /etc/iptables/rules.v4 — a snapshot of the live IPv4 ruleset. Rules in the kernel only last until reboot; this file is what iptables-persistent restores at boot. Applying the tweak saves the current ruleset to rules.v4 so the firewall comes back automatically after a reboot.",
+		"a1.rules_v6":   "Checks for /etc/iptables/rules.v6 — the saved IPv6 ruleset (this probe appears only when the server has a global IPv6). Without it the IPv6 stack would come up unprotected after a reboot. Applying the tweak persists the ip6tables rules so IPv6 is firewalled just like IPv4.",
+		"a1.persistent": "Checks via dpkg that the iptables-persistent package is installed. Its service is what loads rules.v4/rules.v6 at boot; without the package the saved rule files are never applied. Applying the tweak installs it, closing the loop from saved rules to rules restored at boot.",
 
 		// --- A2 ssh ---
-		"a2.conf00":       "Checks for the drop-in /etc/ssh/sshd_config.d/00-hardening.conf — the first part of the hardened sshd configuration.",
-		"a2.conf99":       "Checks for the drop-in /etc/ssh/sshd_config.d/99-hardening.conf — the final part of the hardened sshd config (overrides defaults).",
-		"a2.allowgroups":  "Checks via sshd -T that AllowGroups sshusers is set — SSH login is restricted to members of the sshusers group. Informational: may be unset on the safe path.",
-		"a2.ecdsa_absent": "Checks that the host key /etc/ssh/ssh_host_ecdsa_key is removed — keeping only Ed25519 and dropping the weaker ECDSA server key.",
-		"a2.ssh_active":   "Checks via systemctl is-active that the ssh (or sshd) service is up and running.",
-		"a2.permitroot":   "Reads the effective PermitRootLogin from sshd -T. Informational: soft mode expects prohibit-password, strict expects no.",
-		"a2.passauth":     "Reads the effective PasswordAuthentication from sshd -T. Informational: soft keeps it on (yes), strict turns it off (no).",
-		"a2.kex_mlkem":    "Checks via sshd -T that the post-quantum key exchange mlkem768x25519-sha256 is enabled in KexAlgorithms (Ubuntu 26.04 only).",
+		"a2.conf00":       "Checks for the drop-in /etc/ssh/sshd_config.d/00-hardening.conf — the first fragment of the hardened sshd config. The 00 prefix makes it load early. It carries the baseline crypto-strength settings; applying the tweak creates this file without touching the main sshd_config.",
+		"a2.conf99":       "Checks for the drop-in /etc/ssh/sshd_config.d/99-hardening.conf — the final sshd config fragment. The 99 prefix makes it load last so it overrides distro defaults and other drop-ins. Applying the tweak writes the decisive hardened values here (algorithms, timeouts, access).",
+		"a2.allowgroups":  "Checks the effective AllowGroups via sshd -T: SSH login is restricted to members of the sshusers group, rejecting everyone else before any password/key check. Informational: the safe path leaves the image untouched, so this may be unset — that is not a failure. It only becomes sshusers after the opt-in A2 lockdown (or strict mode).",
+		"a2.ecdsa_absent": "Checks that the host key /etc/ssh/ssh_host_ecdsa_key has been removed. The ECDSA host key relies on NIST curves of debated trust; keeping only Ed25519 shrinks the surface and standardizes the server fingerprint. Applying the tweak deletes the ECDSA key and restarts sshd.",
+		"a2.ssh_active":   "Checks via systemctl is-active that the ssh (or sshd on some builds) service is up and running. This is the basic liveness gate: if the daemon failed to come back after a config change, access would be lost. The probe confirms sshd is active with the applied config.",
+		"a2.permitroot":   "Reads the effective PermitRootLogin from sshd -T — whether direct root SSH login is allowed. Informational: soft mode expects prohibit-password (root by key only, never password), strict expects no (root SSH fully disabled). The safe path leaves the image value alone, so a mismatch is not a failure.",
+		"a2.passauth":     "Reads the effective PasswordAuthentication from sshd -T — whether the server accepts password logins. Informational: soft keeps it on (yes) so you don't lose access, strict turns it off (no) leaving key-only login. The safe path does not touch the image value.",
+		"a2.kex_mlkem":    "Checks via sshd -T that the post-quantum key exchange mlkem768x25519-sha256 is enabled in KexAlgorithms (this probe exists on Ubuntu 26.04 only). The hybrid exchange protects the session against future quantum decryption of a recorded handshake (\"harvest now, decrypt later\"). Applying the tweak puts this algorithm first in the KEX list.",
 
 		// --- A2.5 cloud-init ---
-		"a25.disabled": "Checks for the flag file /etc/cloud/cloud-init.disabled (or that cloud-init is not installed at all) so it can't revert your config on reboot.",
+		"a25.disabled": "Checks for the flag file /etc/cloud/cloud-init.disabled (or that cloud-init isn't installed at all). On every boot cloud-init can rewrite network, users and SSH from the provider template, reverting our hardening. Applying the tweak drops the flag file, neutralizing cloud-init so changes survive a reboot.",
 
 		// --- A3 fail2ban ---
-		"a3.installed":  "Checks via dpkg that the fail2ban package is installed — the daemon that bans IPs after failed logins.",
-		"a3.jail_local": "Checks for /etc/fail2ban/jail.local — the local jail configuration (sshd jail, IP whitelist).",
-		"a3.sshd_jail":  "Checks via fail2ban-client status sshd that the sshd jail is actually loaded and active, not just present in config.",
+		"a3.installed":  "Checks via dpkg that the fail2ban package is installed — the daemon that reads logs and bans IPs after a run of failed logins. Without it, SSH password guessing is unthrottled. Applying the tweak installs the package, providing the basis for brute-force protection.",
+		"a3.jail_local": "Checks for /etc/fail2ban/jail.local — the local config that overrides the default jail.conf. It enables the sshd jail, sets the ban threshold and duration, and the trusted-IP whitelist. Applying the tweak writes jail.local with our parameters, leaving the packaged jail.conf untouched.",
+		"a3.sshd_jail":  "Checks via fail2ban-client status sshd that the sshd jail is actually loaded in the running daemon, not merely written in config. Only an active jail truly watches failed logins and issues bans. The probe confirms SSH brute-force protection is live.",
 
 		// --- A4 network ---
-		"a4.net_tune":   "Checks for /etc/sysctl.d/99-net-tune.conf — the sysctl settings for socket buffers and network queues.",
-		"a4.bbr_conf":   "Checks for /etc/sysctl.d/99-bbr.conf — the file that enables BBR and the fq queue at boot.",
-		"a4.bbr_module": "Checks via lsmod that the tcp_bbr kernel module is loaded — without it the BBR algorithm is unavailable.",
-		"a4.bbr_active": "Reads sysctl net.ipv4.tcp_congestion_control and checks the active congestion control is bbr.",
-		"a4.qdisc":      "Reads sysctl net.core.default_qdisc and checks the default queueing discipline is fq (needed for BBR to work correctly).",
-		"a4.io_sched":   "Checks for the udev rule /etc/udev/rules.d/60-io-scheduler.rules on vd* disks (not applicable on other disk types).",
+		"a4.net_tune":   "Checks for /etc/sysctl.d/99-net-tune.conf — sysctl settings for the network stack: socket buffer sizes, queue lengths, TCP parameters. On defaults, fast links are under-utilized. Applying the tweak drops this file, raising throughput for VPS workloads.",
+		"a4.bbr_conf":   "Checks for /etc/sysctl.d/99-bbr.conf — the file that at boot sets the BBR congestion-control algorithm and the fq queueing discipline. This is the declarative half of enabling BBR via sysctl. Applying the tweak creates the file so the settings survive a reboot.",
+		"a4.bbr_module": "Checks via lsmod that the tcp_bbr kernel module is loaded right now. Without the module in the kernel, BBR can't be applied even if it's set in sysctl. Applying the tweak loads the module and sets it to autoload.",
+		"a4.bbr_active": "Reads sysctl net.ipv4.tcp_congestion_control — the actually-active congestion-control algorithm. BBR holds throughput far better than the old cubic on lossy, high-latency links. The probe confirms the effective value is bbr, not just present in a file.",
+		"a4.qdisc":      "Reads sysctl net.core.default_qdisc — the default packet queueing discipline. BBR needs fq (fair queue) to work correctly, otherwise its benefit is lost. The probe confirms the effective value is fq.",
+		"a4.io_sched":   "Checks for the udev rule /etc/udev/rules.d/60-io-scheduler.rules on virtual vd* disks (not applicable on other disk types, where it reports \"na\"). The rule sets the I/O scheduler best suited to virtualized storage. Applying the tweak installs this udev rule.",
 
 		// --- A5 kernel ---
-		"a5.harden_conf":  "Checks for /etc/sysctl.d/99-zz-kernel-harden.conf — the bundle of kernel-hardening sysctl parameters.",
-		"a5.core_pattern": "Reads sysctl kernel.core_pattern and checks core dumps are piped to /bin/false, i.e. disabled.",
-		"a5.rp_filter":    "Reads sysctl net.ipv4.conf.all.rp_filter and checks strict (=1) reverse-path filtering against address spoofing.",
-		"a5.kptr":         "Reads sysctl kernel.kptr_restrict and checks the value is 2 — kernel addresses are fully hidden so they can't aid exploits.",
-		"a5.thp":          "Reads /sys/kernel/mm/transparent_hugepage/enabled and checks the [madvise] mode for transparent huge pages.",
+		"a5.harden_conf":  "Checks for /etc/sysctl.d/99-zz-kernel-harden.conf — the umbrella file holding the kernel-hardening sysctl bundle. The zz prefix makes it load last to override looser values. Applying the tweak drops the file; the other A5 probes verify individual keys from this bundle.",
+		"a5.core_pattern": "Reads sysctl kernel.core_pattern — where the kernel writes a crashed process's memory dump. Dumps can contain passwords and keys and can bloat the disk, so they are piped to /bin/false, i.e. disabled. The probe confirms core_pattern points at /bin/false.",
+		"a5.rp_filter":    "Reads sysctl net.ipv4.conf.all.rp_filter — the reverse-path filtering mode. Strict (=1) drops packets with a spoofed source address that wouldn't return on the same interface. Applying the tweak sets rp_filter=1 against spoofing.",
+		"a5.kptr":         "Reads sysctl kernel.kptr_restrict — how far kernel addresses are hidden in /proc and logs. A value of 2 hides kernel pointers from everyone, including root, so they can't reveal the memory layout to exploits. The probe confirms kptr_restrict=2.",
+		"a5.thp":          "Reads /sys/kernel/mm/transparent_hugepage/enabled — the transparent huge pages mode. [madvise] enables huge pages only where an app explicitly asks, avoiding the latency spikes and wasted memory of the global always mode. Applying the tweak sets madvise.",
 
 		// --- A6 maintenance ---
-		"a6.journald":    "Checks for /etc/systemd/journald.conf.d/99-vps-cap.conf — the systemd journal size cap that keeps logs from filling the disk.",
-		"a6.needrestart": "Checks for /etc/needrestart/conf.d/50-autorestart.conf — the non-interactive service-restart setting used after updates.",
-		"a6.nofile":      "Checks for /etc/systemd/system.conf.d/limits.conf — the raised open-file limit (NOFILE).",
-		"a6.ntp":         "Reads timedatectl and checks that NTP time synchronization is enabled (NTP=yes).",
+		"a6.journald":    "Checks for /etc/systemd/journald.conf.d/99-vps-cap.conf — a drop-in capping the systemd journal size. Without a cap the journal can grow and fill the disk completely. Applying the tweak sets a ceiling (SystemMaxUse), keeping logs within safe bounds.",
+		"a6.needrestart": "Checks for /etc/needrestart/conf.d/50-autorestart.conf. After library updates needrestart asks which services to restart; on an unattended server that interactive prompt stalls auto-upgrades. Applying the tweak switches needrestart to non-interactive auto mode.",
+		"a6.nofile":      "Checks for /etc/systemd/system.conf.d/limits.conf — a drop-in raising the open-file limit (NOFILE). The default is too low for busy network services and causes \"too many open files\" errors. Applying the tweak raises the descriptor ceiling for systemd services.",
+		"a6.ntp":         "Reads timedatectl and checks NTP time synchronization is enabled (NTP=yes). Clock drift breaks TLS certificates, logs and fail2ban's correlation. Applying the tweak enables systemd-timesyncd to keep system time accurate.",
 
 		// --- A6.5 DNS ---
-		"a65.dns_conf": "Checks for /etc/systemd/resolved.conf.d/99-morgward-dns.conf — the systemd-resolved drop-in with hardened resolvers.",
-		"a65.dot":      "Checks the same drop-in sets DNSOverTLS=opportunistic — DNS queries are encrypted over DNS-over-TLS where possible.",
+		"a65.dns_conf": "Checks for /etc/systemd/resolved.conf.d/99-morgward-dns.conf — a systemd-resolved drop-in setting trusted resolvers (active only when resolved is running). It pins which DNS servers the system uses. Applying the tweak drops the file with our resolvers and baseline DNS-security settings.",
+		"a65.dot":      "Checks that the same drop-in sets DNSOverTLS=opportunistic. In this mode DNS queries are encrypted over DNS-over-TLS where the server supports it, hiding them from ISP interception and tampering. Applying the tweak enables opportunistic DoT (not strict, so resolution can't break).",
 
 		// --- A6.7 memory ---
-		"a67.zram_conf":   "Checks for /etc/systemd/zram-generator.conf — the configuration for compressed in-RAM swap (ZRAM, zstd).",
-		"a67.zram_sysctl": "Checks for /etc/sysctl.d/99-zram.conf — the swappiness sysctl tuned for ZRAM.",
-		"a67.zram_active": "Checks via swapon that a zram device is actually active as swap, not merely described in config.",
-		"a67.earlyoom":    "Checks via systemctl is-active that the earlyoom service is running — it gently kills processes before a hard out-of-memory.",
+		"a67.zram_conf":   "Checks for /etc/systemd/zram-generator.conf — the config for compressed in-RAM swap (ZRAM using zstd). ZRAM creates fast swap inside memory, pushing back OOM without touching the slow disk. Applying the tweak drops the config, sizing the zram device.",
+		"a67.zram_sysctl": "Checks for /etc/sysctl.d/99-zram.conf — a vm.swappiness sysctl tuned for ZRAM. With fast in-RAM swap the kernel can profitably evict pages more eagerly, so swappiness is raised. Applying the tweak drops this sysctl file alongside zram-generator.conf.",
+		"a67.zram_active": "Checks via swapon that a zram device is actually attached as swap right now, not merely described in config. Only active swap gives real out-of-memory protection. The probe confirms the zram swap is mounted and used by the kernel.",
+		"a67.earlyoom":    "Checks via systemctl is-active that the earlyoom service is running. earlyoom gently kills the most memory-hungry process BEFORE the kernel's own OOM killer hangs the whole server under memory pressure. Applying the tweak installs and enables earlyoom as a guard against memory hangs.",
 
 		// --- A9 unattended-upgrades ---
-		"a9.installed": "Checks via dpkg that the unattended-upgrades package is installed — the mechanism that auto-installs security updates.",
-		"a9.auto":      "Checks for /etc/apt/apt.conf.d/20auto-upgrades — the file that enables the periodic auto-upgrade jobs.",
-		"a9.local":     "Checks for /etc/apt/apt.conf.d/52-unattended-upgrades-local — the local tuning (no auto-reboot, kernel cleanup).",
+		"a9.installed": "Checks via dpkg that the unattended-upgrades package is installed — the mechanism that auto-installs security updates without operator involvement. Without it, critical patches are manual-only and often lag. Applying the tweak installs the package, the basis for automatic updates.",
+		"a9.auto":      "Checks for /etc/apt/apt.conf.d/20auto-upgrades — the file that enables apt's periodic jobs (list refresh and applying upgrades). Without it, an installed unattended-upgrades runs nothing. Applying the tweak creates the file, activating the auto-upgrade schedule.",
+		"a9.local":     "Checks for /etc/apt/apt.conf.d/52-unattended-upgrades-local — our local tuning of auto-upgrades. It disables auto-reboot (so the server never reboots unexpectedly) and enables old-kernel cleanup. Applying the tweak drops this file over the package defaults.",
 
 		// --- A10 detection ---
-		"a10.auditd":        "Checks via dpkg that the auditd package is installed — the daemon that audits changes to sensitive files.",
-		"a10.audit_rules":   "Checks for /etc/audit/rules.d/99-vps.rules — the audit ruleset for the watched files and events.",
-		"a10.auditd_active": "Checks via systemctl is-active that the auditd service is running and collecting events.",
-		"a10.notify":        "Checks for the script /usr/local/sbin/ssh-login-notify.sh — it sends a notification on a successful SSH login.",
-		"a10.pam":           "Checks that /etc/pam.d/sshd contains the ssh-login-notify line — without it login notifications never fire.",
-		"a10.log_rule":      "Checks via iptables that the INPUT chain has a LOG rule (ipt-drop-in tag) that logs dropped inbound packets.",
+		"a10.auditd":        "Checks via dpkg that the auditd package is installed — the Linux kernel audit daemon that records access to sensitive files and system events. Without it there is no trail to investigate an incident. Applying the tweak installs the package, the basis for the audit log.",
+		"a10.audit_rules":   "Checks for /etc/audit/rules.d/99-vps.rules — the audit ruleset defining which files and syscalls to watch (sudoers, SSH keys, account changes). Without rules, auditd runs but records nothing. Applying the tweak drops our watch ruleset.",
+		"a10.auditd_active": "Checks via systemctl is-active that the auditd service is running and actually collecting events against the loaded rules. An installed but stopped daemon isn't enough. The probe confirms auditing is live and logging.",
+		"a10.notify":        "Checks for the script /usr/local/sbin/ssh-login-notify.sh. On a successful SSH login the script sends a notification so an unexpected login doesn't go unnoticed. Applying the tweak installs the executable script in a system path.",
+		"a10.pam":           "Checks that /etc/pam.d/sshd contains the ssh-login-notify call via pam_exec. That line is what runs the notify script on each SSH session; without it the script sits unused. Applying the tweak adds the line to sshd's PAM stack.",
+		"a10.log_rule":      "Checks via iptables that the INPUT chain has a LOG rule tagged ipt-drop-in — it logs packets the DROP policy rejected. This gives visibility into port scans and attempts on closed ports. Applying the tweak adds the logging rule just before the final DROP.",
 	},
 }
 
