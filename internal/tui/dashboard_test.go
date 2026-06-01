@@ -143,7 +143,7 @@ func TestDashboardViewRenders(t *testing.T) {
 func TestDashboardButtonHitTest(t *testing.T) {
 	m := dashModel(100, 40)
 	innerW := innerWidth(m.boxWidth())
-	btnRow := summaryBodyTopRow + m.dashButtonsIndex(innerW)
+	btnRow := m.dashButtonsRowY(innerW) // FIXED screen Y, not via the scroll offset
 	ranges := pillRanges(m.dashButtonNames(), dashButtonStartCol)
 	want := []dashButton{dashBtnApply, dashBtnSecurity}
 	if len(ranges) != len(want) {
@@ -171,29 +171,29 @@ func TestDashAuditTwoColumnHitTest(t *testing.T) {
 	if got := m.dashAuditNumGridLines(innerW); got != 2 {
 		t.Fatalf("3 results / 2 cols → %d grid lines, want 2", got)
 	}
-	gridStart := m.dashGridStartIndex(innerW)
+	gridTop := m.dashScrollTopRow(innerW) // screen Y of the first scrollable grid row
 
 	const contentX0 = 2
 	leftX := contentX0 + 1                          // inside the left column's text
 	rightX := contentX0 + colWidth + dashColGap + 1 // inside the right column's text
 
 	// Grid line 0, left column → result[0] (A4-bbr).
-	r0, ok := m.dashAuditRowAtClick(leftX, summaryBodyTopRow+gridStart)
+	r0, ok := m.dashAuditRowAtClick(leftX, gridTop)
 	if !ok || r0.Probe.ID != "A4-bbr" {
 		t.Fatalf("line0 left click → %q,%v want A4-bbr,true", r0.Probe.ID, ok)
 	}
 	// Grid line 0, right column → result[1] (A6.7-zram).
-	r1, ok := m.dashAuditRowAtClick(rightX, summaryBodyTopRow+gridStart)
+	r1, ok := m.dashAuditRowAtClick(rightX, gridTop)
 	if !ok || r1.Probe.ID != "A6.7-zram" {
 		t.Fatalf("line0 right click → %q,%v want A6.7-zram,true", r1.Probe.ID, ok)
 	}
 	// Grid line 1, left column → result[2] (A6.7-eoom).
-	r2, ok := m.dashAuditRowAtClick(leftX, summaryBodyTopRow+gridStart+1)
+	r2, ok := m.dashAuditRowAtClick(leftX, gridTop+1)
 	if !ok || r2.Probe.ID != "A6.7-eoom" {
 		t.Fatalf("line1 left click → %q,%v want A6.7-eoom,true", r2.Probe.ID, ok)
 	}
 	// Grid line 1, right column has NO result (odd count) → miss.
-	if _, ok := m.dashAuditRowAtClick(rightX, summaryBodyTopRow+gridStart+1); ok {
+	if _, ok := m.dashAuditRowAtClick(rightX, gridTop+1); ok {
 		t.Fatalf("line1 right click should miss (no 4th result)")
 	}
 }
@@ -210,13 +210,13 @@ func TestDashAuditOneColumnFallback(t *testing.T) {
 	if got := m.dashAuditNumGridLines(innerW); got != 3 {
 		t.Fatalf("3 results / 1 col → %d grid lines, want 3", got)
 	}
-	gridStart := m.dashGridStartIndex(innerW)
+	gridTop := m.dashScrollTopRow(innerW)
 	const contentX0 = 2
-	r0, ok := m.dashAuditRowAtClick(contentX0+1, summaryBodyTopRow+gridStart)
+	r0, ok := m.dashAuditRowAtClick(contentX0+1, gridTop)
 	if !ok || r0.Probe.ID != "A4-bbr" {
 		t.Fatalf("1-col line0 click → %q,%v want A4-bbr,true", r0.Probe.ID, ok)
 	}
-	r2, ok := m.dashAuditRowAtClick(contentX0+1, summaryBodyTopRow+gridStart+2)
+	r2, ok := m.dashAuditRowAtClick(contentX0+1, gridTop+2)
 	if !ok || r2.Probe.ID != "A6.7-eoom" {
 		t.Fatalf("1-col line2 click → %q,%v want A6.7-eoom,true", r2.Probe.ID, ok)
 	}
@@ -231,7 +231,7 @@ func TestDashboardApplyShowsA8Confirm(t *testing.T) {
 	}
 	m := dashModel(100, 40)
 	innerW := innerWidth(m.boxWidth())
-	btnRow := summaryBodyTopRow + m.dashButtonsIndex(innerW)
+	btnRow := m.dashButtonsRowY(innerW) // FIXED screen Y
 	applyX := pillRanges(m.dashButtonNames(), dashButtonStartCol)[0][0] + 1
 
 	next, _ := m.dashboardClick(applyX, btnRow)
@@ -269,9 +269,8 @@ func TestDashboardApplyShowsA8Confirm(t *testing.T) {
 func TestDashboardAuditRowClickOpensWiki(t *testing.T) {
 	m := dashModel(100, 40)
 	innerW := innerWidth(m.boxWidth())
-	gridStart := m.dashGridStartIndex(innerW)
-	// Click the first grid row (the BBR result, Step "A4").
-	row := summaryBodyTopRow + gridStart
+	// Click the first grid row (the BBR result, Step "A4") in the scroll region.
+	row := m.dashScrollTopRow(innerW)
 	next, _ := m.dashboardClick(4, row)
 	mm := next.(model)
 	if mm.phase != phaseWiki {

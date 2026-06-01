@@ -197,7 +197,7 @@ func TestDashboardSecurityButtonOpensMenu(t *testing.T) {
 		{Probe: tweaks.Probe{ID: "a2.passauth", Step: "A2", Name: "Password auth"}, Applied: false},
 	}
 	innerW := innerWidth(m.boxWidth())
-	btnRow := summaryBodyTopRow + m.dashButtonsIndex(innerW)
+	btnRow := m.dashButtonsRowY(innerW) // FIXED screen Y
 	secX := pillRanges(m.dashButtonNames(), dashButtonStartCol)[1][0] + 1
 
 	next, _ := m.dashboardClick(secX, btnRow)

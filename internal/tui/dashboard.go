@@ -12,21 +12,31 @@ import (
 
 // --- Dashboard (phaseDashboard) -----------------------------------------------
 //
-// dashboardView renders the post-connect Dashboard: a framed server card
-// (OS/kernel/RAM/disk/ports/IPv6 from m.dashFacts + the live monitor sample), the
-// live tweak-audit status line + a ✓/• grid (from m.dashAuditResults), and two
-// action button pills. The monitor footer is pinned at the bottom. Chrome (titled
-// top, switcher, scroll region, hint, bottom border, monitor box) mirrors
-// summaryView/matrixView exactly so the footer never moves and the body scrolls.
+// dashboardView renders the post-connect Dashboard. The top is a FIXED chrome
+// prefix that never scrolls: a framed server card (OS/kernel/RAM/disk/IPv6 from
+// m.dashFacts + the live monitor sample), the two action button pills, and the
+// live tweak-audit status line. Below it the ONLY scrollable region is the ✓/•
+// audit grid (from m.dashAuditResults). The monitor footer is pinned at the
+// bottom. Chrome (titled top, switcher, hint, bottom border, monitor box) mirrors
+// summaryView/matrixView so the footer never moves.
 //
-// The clickable rows (audit grid rows → wiki detail, the three button pills) are
-// resolved against the SAME ordered body slice the renderer iterates
-// (dashBodyLines), so the hit-test geometry can never drift.
+// Layout (screen rows, top→bottom):
+//
+//	row 0                         : titled top border
+//	row 1                         : RU|EN switcher
+//	rows [2, 2+len(fixed))        : FIXED prefix — card, buttons row, status line
+//	rows [dashScrollTopRow, +viewH): SCROLL region — audit grid only
+//	hint / bottom border / monitor: pinned footer chrome
+//
+// The clickable buttons sit at a FIXED screen Y (dashButtonsRowY); the audit grid
+// rows are resolved against the scroll region (honoring the scroll offset). Both
+// hit-tests reuse the SAME builders the renderer iterates so geometry cannot drift.
 func (m model) dashboardView() string {
 	bw := m.boxWidth()
 	innerW := innerWidth(bw)
 	b := lipgloss.RoundedBorder()
 
+	fixed := m.dashFixedLines(innerW)
 	body := m.dashBodyLines(innerW)
 
 	var sb strings.Builder
@@ -35,7 +45,14 @@ func (m model) dashboardView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	viewH := m.bodyViewH()
+	// FIXED prefix — plain content rows, never scrolled.
+	for _, line := range fixed {
+		sb.WriteString(contentLine(b, line, innerW))
+		sb.WriteByte('\n')
+	}
+
+	// SCROLL region — only the audit grid, sized to fill the remaining middle.
+	viewH := m.dashScrollViewH(innerW)
 	off := clampScroll(m.dashScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
@@ -79,17 +96,22 @@ func (m model) dashButtonsLine() string {
 	return " " + strings.Join(pills, " ")
 }
 
-// dashBodyLines builds the ordered Dashboard body slice — the single source of
-// truth for BOTH dashboardView's render and the hit-tests (dashAuditRowAtClick /
-// dashButtonRowIndex). Order: server card (framed), blank, audit status line,
-// blank, audit grid lines (ceil(N/cols), see dashAuditGridLines), blank, buttons
-// line. Every width uses lipgloss.Width.
-func (m model) dashBodyLines(innerW int) []string {
-	var body []string
-	body = append(body, m.dashServerCard(innerW)...)
-	body = append(body, "")
+// dashFixedLines builds the FIXED (non-scrolling) Dashboard prefix — the single
+// source of truth for BOTH dashboardView's render and the fixed hit-tests
+// (dashButtonAtClick). Order: server card (framed, N lines), the buttons row, the
+// audit status line. The buttons row index within this slice is len(card); the
+// status line is len(card)+1. Every width uses lipgloss.Width.
+func (m model) dashFixedLines(innerW int) []string {
+	var fixed []string
+	fixed = append(fixed, m.dashServerCard(innerW)...)
+	fixed = append(fixed, m.dashButtonsLine())
+	fixed = append(fixed, m.dashStatusLine(innerW))
+	return fixed
+}
 
-	// Live audit status line: "Анализ твиков ⠹  применено N из M · можно применить K".
+// dashStatusLine is the live audit status row:
+// "Анализ твиков ⠹  применено N из M · можно применить K", truncated to innerW.
+func (m model) dashStatusLine(innerW int) string {
 	applied, total := m.dashAuditApplied, m.dashAuditTotal
 	canApply := max(total-applied, 0)
 	label := t(m.lang, kDashAuditLabel)
@@ -101,18 +123,24 @@ func (m model) dashBodyLines(innerW int) []string {
 		fmt.Sprintf(t(m.lang, kDashAuditStatus), applied, total),
 		fmt.Sprintf(t(m.lang, kDashCanApply), canApply),
 	)
-	body = append(body, truncDisplay(status, innerW))
-	body = append(body, "")
+	return truncDisplay(status, innerW)
+}
 
-	// Audit grid: a fluid 1- or 2-column grid of "  ✓/•  name" cells. The grid lines
-	// are the clickable tail used by dashAuditRowAtClick (each cell maps to its
-	// Probe.ID → wiki detail). dashAuditGridLines is the single source of truth for
-	// the column geometry so render and hit-test cannot drift.
-	body = append(body, m.dashAuditGridLines(innerW)...)
+// dashBodyLines builds the SCROLLABLE Dashboard body — ONLY the audit grid (a fluid
+// 1- or 2-column grid of "  ✓/•  name" cells). It is the single source of truth for
+// BOTH the render and the audit-row hit-test (dashAuditRowAtClick): grid line r maps
+// to results[cols*r .. cols*r+cols-1] → Probe.ID → wiki detail. dashAuditGridLines is
+// the single source of the column geometry so render and hit-test cannot drift.
+func (m model) dashBodyLines(innerW int) []string {
+	return m.dashAuditGridLines(innerW)
+}
 
-	body = append(body, "")
-	body = append(body, m.dashButtonsLine())
-	return body
+// dashScrollViewH is the height (rows) of the scrollable audit-grid region: the
+// summary/matrix middle height (bodyViewH) minus the fixed prefix (card + buttons +
+// status), floored at 1 so it never goes negative or overlaps the footer on a small
+// terminal.
+func (m model) dashScrollViewH(innerW int) int {
+	return max(m.bodyViewH()-len(m.dashFixedLines(innerW)), 1)
 }
 
 // dashColGap is the number of spaces between the two audit columns.
@@ -248,8 +276,8 @@ func (m model) dashServerCard(innerW int) []string {
 		return borderStyle.Render(bd.Left) + content + borderStyle.Render(bd.Right)
 	}
 
-	// One fact per card line so nothing is hidden on a narrow width. dashGridStartIndex
-	// uses len(card) dynamically, so a taller card stays hit-test-correct.
+	// One fact per card line so nothing is hidden on a narrow width. dashButtonsRowY /
+	// dashScrollTopRow use len(card) dynamically, so a taller card stays hit-test-correct.
 	lines := []string{top}
 	if len(parts) == 0 {
 		lines = append(lines, mid(labelStyle.Render("…")))
@@ -262,27 +290,29 @@ func (m model) dashServerCard(innerW int) []string {
 	return lines
 }
 
-// dashGridStartIndex is the body-slice index of the FIRST audit grid line. The body
-// prefix is: server card (N lines) + blank + status + blank, so the grid begins at
-// len(card)+3. dashButtonsIndex is the body index of the buttons row: grid start +
-// the number of audit grid lines actually emitted (ceil(N/cols)) + 1 (the blank
-// before the buttons line) — derived from the SAME column logic the renderer uses.
-func (m model) dashGridStartIndex(innerW int) int {
-	return len(m.dashServerCard(innerW)) + 3
+// dashButtonsRowY is the FIXED screen Y of the action-buttons row. The fixed prefix
+// begins at summaryBodyTopRow with the server card (N lines), then the buttons row,
+// so the buttons sit at summaryBodyTopRow + len(card). This Y does NOT move with the
+// scroll offset — the buttons are pinned chrome.
+func (m model) dashButtonsRowY(innerW int) int {
+	return summaryBodyTopRow + len(m.dashServerCard(innerW))
 }
 
-func (m model) dashButtonsIndex(innerW int) int {
-	return m.dashGridStartIndex(innerW) + m.dashAuditNumGridLines(innerW) + 1
+// dashScrollTopRow is the screen Y of the FIRST row of the scrollable audit-grid
+// region: it follows the entire fixed prefix (card + buttons + status).
+func (m model) dashScrollTopRow(innerW int) int {
+	return summaryBodyTopRow + len(m.dashFixedLines(innerW))
 }
 
-// dashRowYToBodyIdx maps a screen Y to a Dashboard body-slice index, honoring the
-// scroll offset, or returns ok=false when Y is in the chrome (switcher/hint/border/
-// monitor) rather than the scrollable body region.
+// dashRowYToBodyIdx maps a screen Y in the SCROLLABLE audit-grid region to a body
+// (grid) index, honoring the scroll offset, or ok=false when Y is in the fixed prefix
+// or footer chrome rather than the scroll region.
 func (m model) dashRowYToBodyIdx(y int) (int, bool) {
-	body := m.dashBodyLines(innerWidth(m.boxWidth()))
-	viewH := m.bodyViewH()
+	innerW := innerWidth(m.boxWidth())
+	body := m.dashBodyLines(innerW)
+	viewH := m.dashScrollViewH(innerW)
 	off := clampScroll(m.dashScroll, len(body), viewH)
-	rowInRegion := y - summaryBodyTopRow
+	rowInRegion := y - m.dashScrollTopRow(innerW)
 	if rowInRegion < 0 || rowInRegion >= viewH {
 		return 0, false
 	}
@@ -303,11 +333,10 @@ func (m model) dashAuditRowAtClick(x, y int) (tweaks.Result, bool) {
 		return tweaks.Result{}, false
 	}
 	innerW := innerWidth(m.boxWidth())
-	bodyIdx, ok := m.dashRowYToBodyIdx(y)
+	gridRow, ok := m.dashRowYToBodyIdx(y)
 	if !ok {
 		return tweaks.Result{}, false
 	}
-	gridRow := bodyIdx - m.dashGridStartIndex(innerW)
 	if gridRow < 0 || gridRow >= m.dashAuditNumGridLines(innerW) {
 		return tweaks.Result{}, false
 	}
@@ -364,8 +393,7 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 		return dashBtnNone
 	}
 	innerW := innerWidth(m.boxWidth())
-	bodyIdx, ok := m.dashRowYToBodyIdx(y)
-	if !ok || bodyIdx != m.dashButtonsIndex(innerW) {
+	if y != m.dashButtonsRowY(innerW) {
 		return dashBtnNone
 	}
 	switch pillIndexAt(m.dashButtonNames(), dashButtonStartCol, x) {

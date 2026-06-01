@@ -202,7 +202,7 @@ const (
 	kDashAuditLabel   // live audit line label: "Анализ твиков" / "Analyzing tweaks"
 	kDashAuditStatus  // "применено %d из %d" / "applied %d of %d"
 	kDashCanApply     // "можно применить %d" / "can apply %d"
-	kDashApplyButton  // "Применить твики" / "Apply tweaks"
+	kDashApplyButton  // "Применить все твики" / "Apply all tweaks"
 	kDashSecButton    // "Безопасность ▸" / "Security ▸"
 	kDashOS           // "ОС" / "OS"
 	kDashKernel       // "Ядро" / "Kernel"
@@ -363,7 +363,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDashAuditLabel:   "Анализ твиков",
 		kDashAuditStatus:  "применено %d из %d",
 		kDashCanApply:     "можно применить %d",
-		kDashApplyButton:  "Применить твики",
+		kDashApplyButton:  "Применить все твики",
 		kDashSecButton:    "Безопасность ▸",
 		kDashOS:           "ОС",
 		kDashKernel:       "Ядро",
@@ -520,7 +520,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDashAuditLabel:   "Analyzing tweaks",
 		kDashAuditStatus:  "applied %d of %d",
 		kDashCanApply:     "can apply %d",
-		kDashApplyButton:  "Apply tweaks",
+		kDashApplyButton:  "Apply all tweaks",
 		kDashSecButton:    "Security ▸",
 		kDashOS:           "OS",
 		kDashKernel:       "Kernel",

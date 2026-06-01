@@ -134,7 +134,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if down {
 				d = wheelStep
 			}
-			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			iw := innerWidth(m.boxWidth())
+			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
 		}
 		return m, nil
 
@@ -210,9 +211,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.goBack()
 			case "up", "k":
-				m.dashScroll = clampScroll(m.dashScroll-1, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				iw := innerWidth(m.boxWidth())
+				m.dashScroll = clampScroll(m.dashScroll-1, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
 			case "down", "j":
-				m.dashScroll = clampScroll(m.dashScroll+1, len(m.dashBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				iw := innerWidth(m.boxWidth())
+				m.dashScroll = clampScroll(m.dashScroll+1, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
 			}
 			return m, nil
 		case phaseSecurity:
