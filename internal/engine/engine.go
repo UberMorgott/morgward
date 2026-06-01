@@ -306,9 +306,13 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 	log.OK("OS=%s %s (%s), iface=%s, ipv4=%s, virt=%s, greenfield=%v",
 		facts.ID, facts.VersionID, facts.Codename, facts.EgressIface, facts.ServerIPv4, facts.Virt, facts.Greenfield)
 	// The inventory file is the only write detect performs; skip it in read-only
-	// (audit) mode so Audit truly mutates nothing on the box.
+	// (audit) mode so Audit truly mutates nothing on the box. Non-fatal, but surface
+	// a warning instead of failing silently (F19) so the operator isn't told the
+	// /root/vps-inventory.md record exists when the write actually failed.
 	if !readOnly {
-		cli.Sudo(writeInventory(facts.Inventory))
+		if r := cli.Sudo(writeInventory(facts.Inventory)); r.RC != 0 {
+			log.Warn("could not write /root/vps-inventory.md (rc=%d): %s", r.RC, firstStderrLine(r.Stderr))
+		}
 	}
 
 	if !facts.IsUbuntu {
