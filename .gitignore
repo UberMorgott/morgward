@@ -37,3 +37,7 @@ RUNBOOK.md
 .serena/
 .claude/
 _calib*/
+
+# Audit artifacts (machine-readable findings + meta-issues, not for public repo)
+audit-bugs.json
+audit-meta-issues.md
