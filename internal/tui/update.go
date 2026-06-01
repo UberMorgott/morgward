@@ -294,6 +294,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.finished {
 				return m.goBack()
 			}
+			// Run still in flight (dialing / auditing): esc or b aborts back to the
+			// form so a stuck or slow connection attempt is never a dead end. enter is
+			// a no-op here to avoid an accidental abort. The engine goroutine detaches
+			// and finishes on its own; goBack swaps in fresh channels and connMsg is
+			// phase-guarded so a late connect can't start a sampler on the form.
+			if msg.String() != "enter" {
+				return m.goBack()
+			}
 		case "up", "k":
 			m.vp.ScrollUp(1)
 		case "down", "j":
@@ -356,6 +364,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case connMsg:
+		// Ignore a late connect signal once the operator has left the run — e.g.
+		// pressed esc to abort a slow dial and is back on the landing form. Without
+		// this guard the abandoned engine goroutine's OnConnect would start a live
+		// sampler dialing in the background while sitting on the form.
+		if m.phase == phaseForm {
+			return m, nil
+		}
 		// Engine signaled key auth is active — start the live sampler.
 		m.statsCh = make(chan monitor.Sample, 4)
 		ctx, cancel := context.WithCancel(context.Background())

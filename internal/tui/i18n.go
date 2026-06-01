@@ -262,7 +262,7 @@ var tr = map[Lang]map[stringKey]string{
 		kBackToMain: " ↩  Назад в меню ",
 
 		kFormHint:       "tab/↑↓ переход · ←/→ переключить · enter: следующее поле, подключение (на «Подключиться») · l: язык · esc выход",
-		kRunHintRunning: "l: язык · ctrl+c выход",
+		kRunHintRunning: "esc назад · l: язык · ctrl+c выход",
 		kRunHintIdle:    "enter/esc назад · ↑/↓ прокрутка · l: язык · ctrl+c выход",
 
 		kStepN:     "Шаг",
@@ -429,7 +429,7 @@ var tr = map[Lang]map[stringKey]string{
 		kBackToMain: " ↩  Back to main ",
 
 		kFormHint:       "tab/↑↓ move · ←/→ toggle · enter: next field, connect (on Connect) · l: lang · esc quit",
-		kRunHintRunning: "l: lang · ctrl+c quit",
+		kRunHintRunning: "esc back · l: lang · ctrl+c quit",
 		kRunHintIdle:    "enter/esc back · ↑/↓ scroll · l: lang · ctrl+c quit",
 
 		kStepN:     "Step",
