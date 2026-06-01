@@ -176,6 +176,16 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 		ctx.Cli.Sudo(installAdminKey(admin, ctx.AuthLine))
 	}
 
+	// 0b. Precondition guard (F04): the lockdown writes `AllowGroups sshusers` +
+	// `PermitRootLogin no`. If the admin user was never created in sshusers (PRE
+	// skipped) or its authorized_keys is empty, the restart activates AllowGroups
+	// with no eligible member and there is no working key — a hard lockout that
+	// only the 300s ssh-revert timer would heal. Refuse up front instead of
+	// leaning on that net. Admin name is charset-validated in config.Validate.
+	if status, detail, err := assertAdminLoginable(ctx, admin); err != nil {
+		return status, detail, err
+	}
+
 	// 1. Write the DANGER drop-in: AllowGroups + PermitRootLogin no + key-only.
 	// Also neutralize cloud-init's password override so it can't re-enable
 	// PasswordAuthentication on the next boot.
@@ -278,6 +288,37 @@ func buildDangerWrite(ctx *Context) string {
 // danger99 is the access-lockdown drop-in content (no crypto — A2Safe owns that).
 func danger99() string {
 	return "PermitRootLogin no\nAllowGroups sshusers\n"
+}
+
+// assertAdminLoginable is the F04 precondition guard for the A2-danger lockdown.
+// It verifies, BEFORE the AllowGroups sshusers + PermitRootLogin no drop-in is
+// written, that the admin user (a) is a member of sshusers and (b) has a
+// non-empty authorized_keys. Either failing means PRE never ran for this box, so
+// the lockdown would cut every login path; we StatusFail with a "run PRE first"
+// message rather than relying on the ssh-revert timer. The admin name is already
+// charset-validated in config.Validate, so the unquoted interpolation is safe.
+func assertAdminLoginable(ctx *Context, admin string) (Status, string, error) {
+	groups := ctx.Cli.Sudo(fmt.Sprintf("id -nG %s 2>/dev/null", admin))
+	if groups.RC != 0 {
+		return StatusFail, fmt.Sprintf("admin user %q not found — run the PRE step first", admin),
+			fmt.Errorf("admin precondition: user missing")
+	}
+	inGroup := false
+	for _, g := range strings.Fields(groups.Out()) {
+		if g == "sshusers" {
+			inGroup = true
+			break
+		}
+	}
+	if !inGroup {
+		return StatusFail, fmt.Sprintf("admin user %q not in sshusers — run the PRE step first (AllowGroups would lock everyone out)", admin),
+			fmt.Errorf("admin precondition: not in sshusers")
+	}
+	if r := ctx.Cli.Sudo(fmt.Sprintf("test -s /home/%s/.ssh/authorized_keys", admin)); r.RC != 0 {
+		return StatusFail, fmt.Sprintf("admin %q has no authorized_keys — run the PRE step first (key-only login would fail)", admin),
+			fmt.Errorf("admin precondition: empty authorized_keys")
+	}
+	return StatusOK, "", nil
 }
 
 // syntaxGate runs `sshd -t`; on failure it removes the drop-ins this package
