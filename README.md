@@ -39,6 +39,10 @@ fresh Ubuntu **24.04 / 26.04** VPS over an embedded SSH client (no external `ssh
   per-step progress bar, host monitor footer, and the §V verification matrix.
 - **Bilingual UI (i18n)** — Russian (default) and English, switchable on the fly via
   the `RU | EN` switcher or the `l` / `Ctrl+L` hotkey.
+- **Verified self-update** — checks GitHub releases on launch (and via the TUI
+  *Обновить* action); a downloaded binary is applied only after its SHA-256 is
+  verified against the release's `checksums.txt`, and only when it is strictly
+  newer (no downgrade). Unverified or older assets are refused.
 
 ## Apply order (load-bearing, from the runbook)
 
@@ -139,6 +143,14 @@ GOOS=linux  GOARCH=arm64 go build -o dist/morgward-linux-arm64   ./cmd/morgward
 GOOS=darwin GOARCH=arm64 go build -o dist/morgward-darwin-arm64  ./cmd/morgward
 GOOS=windows GOARCH=amd64 go build -o dist/morgward-windows-amd64.exe ./cmd/morgward
 ```
+
+### Releases
+
+> ⚠️ Every release **must** publish a `checksums.txt` asset alongside the binaries
+> (goreleaser's `checksum` block emits this by default). Self-update verifies each
+> downloaded binary's SHA-256 against `checksums.txt` before applying it — a release
+> without that asset will fail the update with a validation error rather than apply
+> an unverified binary.
 
 ## Layout
 
