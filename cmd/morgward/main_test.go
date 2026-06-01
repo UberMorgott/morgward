@@ -3,7 +3,36 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	selfupdate "github.com/creativeprojects/go-selfupdate"
 )
+
+// TestNewUpdaterHasChecksumValidator confirms self-update is wired with a SHA-256
+// ChecksumValidator (F01): without it go-selfupdate would apply an unverified
+// binary. The validator field on Updater is unexported, so we assert the gate the
+// other way — building the same Config and checking the Validator is a
+// ChecksumValidator pointed at checksums.txt, the goreleaser-default asset name.
+func TestNewUpdaterHasChecksumValidator(t *testing.T) {
+	if checksumsFile != "checksums.txt" {
+		t.Fatalf("checksumsFile = %q, want goreleaser default checksums.txt", checksumsFile)
+	}
+
+	up, err := newUpdater()
+	if err != nil {
+		t.Fatalf("newUpdater() error: %v", err)
+	}
+	if up == nil {
+		t.Fatal("newUpdater() returned nil updater")
+	}
+
+	cv, ok := newUpdaterConfig().Validator.(*selfupdate.ChecksumValidator)
+	if !ok {
+		t.Fatalf("validator type = %T, want *selfupdate.ChecksumValidator", newUpdaterConfig().Validator)
+	}
+	if cv.UniqueFilename != checksumsFile {
+		t.Fatalf("validator UniqueFilename = %q, want %q", cv.UniqueFilename, checksumsFile)
+	}
+}
 
 // TestPartitionArgs proves flags work BEFORE or AFTER the step IDs, and that
 // value-taking flags correctly absorb their following token so it is not mistaken

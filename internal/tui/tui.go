@@ -325,7 +325,13 @@ func checkUpdateCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+		// ChecksumValidator gates DetectLatest on a SHA-256 checksums.txt asset, so
+		// the strip never advertises an update we couldn't verify and apply (F01).
+		// Mirrors cmd/morgward newUpdater(); a release lacking checksums.txt resolves
+		// to updErr rather than a phantom "update available".
+		updater, err := selfupdate.NewUpdater(selfupdate.Config{
+			Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
+		})
 		if err != nil {
 			return updateCheckMsg{err: err}
 		}

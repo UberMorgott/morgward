@@ -26,6 +26,31 @@ import (
 // updateRepo is the GitHub "owner/repo" slug self-update pulls releases from.
 const updateRepo = "UberMorgott/morgward"
 
+// checksumsFile is the per-release asset listing the SHA-256 of every release
+// binary (one "<hash>  <filename>" line each). Self-update refuses to apply any
+// asset whose hash is absent or mismatched, so releases MUST publish a
+// checksums.txt alongside the binaries (goreleaser's `checksum` block emits this
+// by default). Without it, go-selfupdate's DetectLatest fails closed with
+// ErrValidationAssetNotFound rather than downloading an unverified binary.
+const checksumsFile = "checksums.txt"
+
+// newUpdater builds a go-selfupdate Updater whose downloads are gated on a
+// SHA-256 ChecksumValidator. With a validator set, both DetectLatest and the
+// download path verify the asset against checksums.txt before it can replace the
+// running binary — closing the unverified-binary RCE (F01). Shared by the CLI
+// update path and the TUI launch-strip check so neither can skip verification.
+func newUpdater() (*selfupdate.Updater, error) {
+	return selfupdate.NewUpdater(newUpdaterConfig())
+}
+
+// newUpdaterConfig is the single source of the self-update config, split out so a
+// test can assert the checksum validator is wired (Updater hides the field).
+func newUpdaterConfig() selfupdate.Config {
+	return selfupdate.Config{
+		Validator: &selfupdate.ChecksumValidator{UniqueFilename: checksumsFile},
+	}
+}
+
 const usage = `morgward — portable executor for VPS-PREP-RUNBOOK
 
 Usage:
@@ -174,7 +199,7 @@ func performUpdate(targetVer string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+	updater, err := newUpdater()
 	if err != nil {
 		return fmt.Errorf("new updater: %w", err)
 	}
@@ -183,21 +208,35 @@ func performUpdate(targetVer string) error {
 	} else {
 		fmt.Printf("%s: обновление…\n", version.Name)
 	}
-	// UpdateSelf re-detects the latest release for this OS/arch, downloads it, and
-	// atomically replaces the running binary (returns the applied Release).
-	rel, err := updater.UpdateSelf(ctx, version.Version, selfupdate.ParseSlug(updateRepo))
-	if err != nil {
-		return fmt.Errorf("update self: %w", err)
-	}
-	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, rel.Version())
 
-	// Relaunch the freshly-updated binary in place (portable: spawn + inherit stdio,
-	// then exit with its code). os.Executable() resolves the path of THIS process,
-	// which now points at the replaced binary on disk.
+	// Detect first so we can vet the release BEFORE applying it. DetectLatest also
+	// resolves (and requires) the checksums.txt validation asset; a release without
+	// it fails closed here rather than downloading an unverified binary.
+	rel, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(updateRepo))
+	if err != nil {
+		return fmt.Errorf("detect latest: %w", err)
+	}
+	if !found || rel == nil {
+		return fmt.Errorf("no release asset found for this OS/arch")
+	}
+	// Anti-downgrade (F08): go-selfupdate's UpdateCommand only gates on version
+	// inequality, so it would happily apply an OLDER "latest". Refuse anything that
+	// is not strictly newer than the running build before touching the binary.
+	if !rel.GreaterThan(version.Version) {
+		return fmt.Errorf("latest release v%s is not newer than current v%s — refusing",
+			rel.Version(), version.Version)
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
 	}
+	// UpdateTo applies exactly the release we just vetted (verifying its checksum),
+	// avoiding a re-detect TOCTOU window between the version gate and the download.
+	if err := updater.UpdateTo(ctx, rel, exe); err != nil {
+		return fmt.Errorf("update self: %w", err)
+	}
+	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, rel.Version())
 	c := exec.Command(exe, os.Args[1:]...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
