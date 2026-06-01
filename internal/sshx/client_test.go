@@ -91,3 +91,39 @@ func TestTeeLinesNilEmit(t *testing.T) {
 		t.Errorf("capture = %q, want %q", capture.String(), "one\ntwo\n")
 	}
 }
+
+// TestTeeLinesSecretMarkerNeverEmitted proves F02: a SecretMarkerPrefix line is
+// captured into the buffer (so the engine can parse the value back out) but is
+// NEVER passed to emit, so the raw secret cannot reach the streamed sink → log
+// file / TUI scrollback. Ordinary lines around it still stream normally.
+func TestTeeLinesSecretMarkerNeverEmitted(t *testing.T) {
+	const secret = "Sup3rS3cretPW=="
+	input := "before\n" + SecretMarkerPrefix + secret + "\nafter\n"
+
+	var capture strings.Builder
+	var emitted []string
+	teeLines(strings.NewReader(input), &capture, func(line string) {
+		emitted = append(emitted, line)
+	})
+
+	// The secret value must never appear in anything the sink saw.
+	for _, l := range emitted {
+		if strings.Contains(l, secret) || strings.Contains(l, SecretMarkerPrefix) {
+			t.Fatalf("secret leaked to sink: emitted line %q", l)
+		}
+	}
+	// Non-secret lines still stream, in order.
+	wantEmit := []string{"before", "after"}
+	if len(emitted) != len(wantEmit) {
+		t.Fatalf("emitted = %q, want %q", emitted, wantEmit)
+	}
+	for i := range wantEmit {
+		if emitted[i] != wantEmit[i] {
+			t.Errorf("emitted[%d] = %q, want %q", i, emitted[i], wantEmit[i])
+		}
+	}
+	// But the marker line IS captured, so the value remains extractable downstream.
+	if !strings.Contains(capture.String(), SecretMarkerPrefix+secret) {
+		t.Fatalf("capture missing marker line; got %q", capture.String())
+	}
+}
