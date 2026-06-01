@@ -149,8 +149,13 @@ GOOS=windows GOARCH=amd64 go build -o dist/morgward-windows-amd64.exe ./cmd/morg
 > ⚠️ Every release **must** publish a `checksums.txt` asset alongside the binaries
 > (goreleaser's `checksum` block emits this by default). Self-update verifies each
 > downloaded binary's SHA-256 against `checksums.txt` before applying it — a release
-> without that asset will fail the update with a validation error rather than apply
-> an unverified binary.
+> without that asset fails the update with a validation error (fail-closed) rather
+> than applying an unverified binary.
+>
+> No `.goreleaser` config ships in the repo yet, so this asset is **not produced
+> automatically**. Until a release pipeline emits `checksums.txt`, self-update will
+> refuse every release. Add the release config (or attach `checksums.txt` manually)
+> before cutting a release that operators are expected to update to.
 
 ## Layout
 
