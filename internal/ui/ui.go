@@ -152,16 +152,18 @@ func isBenignNoise(line string) bool {
 // swallowed. This is the sink the client's OnOutput is wired to in the engine.
 func (l *Logger) Stream(stream, line string) {
 	if l.color {
-		mark := cGray + "  │ " + cReset
-		// Real stderr is alarming red; known-benign OS noise (e.g. the Ubuntu
-		// 26.04 rust-coreutils LD_PRELOAD chatter) stays dim so it does not read
-		// as a wall of failures — still emitted, only its color is muted.
+		// Dim the whole server-output line (real stderr that is not benign OS noise
+		// is alarming red) so it reads as remote chatter, distinct from the decorated
+		// STEP/OK/FAIL lines. No "│" gutter glyph: inside the TUI box the ANSI colour
+		// is stripped, leaving only a bare bar that tears on every wrapped line — a
+		// plain two-space indent cannot misalign.
+		color := cGray
 		if stream == "err" && !isBenignNoise(line) {
-			mark = cRed + "  │ " + cReset
+			color = cRed
 		}
-		l.emit(fmt.Sprintf("%s%s\n", mark, line))
+		l.emit(fmt.Sprintf("%s  %s%s\n", color, line, cReset))
 	} else {
-		l.emit(fmt.Sprintf("  | %s\n", line))
+		l.emit(fmt.Sprintf("  %s\n", line))
 	}
 	l.raw(fmt.Sprintf("  | %s\n", line))
 }

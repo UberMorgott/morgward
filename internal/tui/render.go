@@ -72,8 +72,9 @@ func stripControlAndANSI(s string) string {
 // wrapped soft-wraps the accumulated (already-sanitized) log text to the viewport
 // width so long lines (e.g. SSH error messages or server output) hard-wrap inside
 // the box instead of overflowing. The wrap width equals innerW (vp.Width()), and
-// the per-line "  │ " prefix added upstream is part of the wrapped text, so every
-// wrapped segment — first or continuation — is ≤ innerW and never crosses the border.
+// the per-line "  " indent added upstream (ui.Logger.Stream) is part of the wrapped
+// text, so every wrapped segment — first or continuation — is ≤ innerW and never
+// crosses the border.
 func (m model) wrapped() string {
 	w := m.vp.Width()
 	if w < 1 {
