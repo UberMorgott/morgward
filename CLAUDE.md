@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `morgward` — a portable single-binary Go executor for the **VPS-PREP-RUNBOOK**
 (spec: https://github.com/UberMorgott/vps-prep-runbook, file `VPS-PREP-RUNBOOK.md`).
-It connects to a fresh Ubuntu 24.04/26.04 VPS over an **embedded** SSH client
-(`golang.org/x/crypto/ssh` — no external `ssh`/`sshpass`/Docker/web UI) and applies
-the runbook's hardening + tuning sequence.
+It connects to an Ubuntu 24.04/26.04 VPS (fresh OR already running services) over an
+**embedded** SSH client (`golang.org/x/crypto/ssh` — no external `ssh`/`sshpass`/
+Docker/web UI) and applies the runbook's hardening + tuning sequence, coexisting with
+detected services on a brownfield box (see Brownfield coexistence below).
 
 The spec is cached locally as `RUNBOOK.md` (gitignored, ~98 KB). Read it before
 changing any step's behavior — step files are direct translations of runbook blocks
@@ -44,6 +45,39 @@ half (dial → key bootstrap → detect → gates → `steps.Context`); steps li
 path → check the other.
 
 ## Critical gotchas
+
+- **Brownfield coexistence — steps adapt, don't refuse.** On a non-fresh box
+  (`!ctx.Facts.Greenfield`, run gated behind `--assume-yes`) the high-risk steps
+  PRESERVE running services instead of applying universal defaults blind. Driven by
+  `detect.Facts` (no new flag). Don't regress these: **A1** opens every detected
+  `ListenPortsTCP`/`ListenPortsUDP` and **leaves the FORWARD policy/chains UNTOUCHED**
+  on a brownfield box (docker re-asserts `-P FORWARD DROP` + its rules on boot; forcing
+  ACCEPT would be overridden or loosen a router's isolation) — never flush existing
+  chains/nat (docker DOCKER/DOCKER-USER + nat must survive). `Facts.Forwarding`
+  (= `IPForward||DockerSeen||WireguardSeen||NatRules`) drives **A5** only: emit
+  `rp_filter=2` (loose) when forwarding (strict `1` severs asymmetric WG/OpenVPN
+  routes). **A6.7** keeps pre-existing disk swap (gate the `swapoff`/fstab-comment
+  block behind `Greenfield` only); **A2** adds non-root `Facts.SSHKeyUsers` to
+  `sshusers` (grant-only `usermod -aG`, `|| true`, root excluded) before `AllowGroups
+  sshusers` so it can't lock out existing key users. verify/tweaks accept rp_filter=2
+  when `Forwarding` and never assert a FORWARD policy on brownfield. Greenfield path
+  stays byte-identical. Full map: `docs/BROWNFIELD.md`.
+
+- **Brownfield round 2 — firewall-manager-aware + role-agnostic.** A1 branches on
+  `Facts.FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`) so it NEVER
+  imposes a conflicting second firewall layer: **`ufw`** active → `ufw allow` SSH +
+  every detected port (allow-only — never `deny`/`enable`/`disable`/default-policy
+  change); **`firewalld`/`nftables`** → DEFER, change nothing, return **`StatusSkip`**
+  (NOT an error — a full `run` continues; firewall is the operator's under their
+  manager); **`iptables`/`none`** → the proven round-1 `coexistRuleset` (INPUT DROP +
+  detected ports, FORWARD untouched). Keep classification CONSERVATIVE — if unsure
+  whether a box is native-nftables, fall through to `iptables` (a false "nftables" would
+  wrongly make us defer on a docker box). Detection stays **role-agnostic**: NO service
+  whitelist — observe & preserve every listening port by NUMBER (works for k8s, NAS,
+  routers, game servers, anything). `Facts.ListenServices` (`[]ListenService{Proto,Port,
+  Process}`) is surfacing only (inventory port→process table); the ruleset still keys off
+  `ListenPortsTCP/UDP`. iptables coexist opens ports LISTENING at apply time only — later
+  ephemeral ports (k8s NodePort, torrents) need a re-run of `step A1` or an explicit rule.
 
 - **§A1 stdin caveat — NEVER use heredocs in remote scripts.** The script itself is
   piped to `bash` over stdin, so a heredoc would contend for that stdin. Deliver all

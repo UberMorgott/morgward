@@ -6,7 +6,7 @@ const (
 	// Name is the program's display name.
 	Name = "Morgward"
 	// Version is the Morgward release version (semver).
-	Version = "0.1.0"
+	Version = "0.2.0"
 	// Tagline is a short description shown next to the name.
 	Tagline = "VPS guardian"
 )

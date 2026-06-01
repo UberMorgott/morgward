@@ -123,3 +123,43 @@ func TestA2SSHUnchanged(t *testing.T) {
 		t.Errorf("legacy build99(true) must emit PermitRootLogin no:\n%s", strict)
 	}
 }
+
+// TestPreserveKeyUsers asserts the coexistence helper emits a usermod -aG
+// sshusers for each existing key user EXCEPT root, shell-quotes the name, and is
+// best-effort (|| true). Root and empty entries are skipped.
+func TestPreserveKeyUsers(t *testing.T) {
+	script, added := preserveKeyUsers([]string{"root", "deploy", "", "alice"})
+
+	wantAdded := []string{"deploy", "alice"}
+	if len(added) != len(wantAdded) {
+		t.Fatalf("added = %v, want %v", added, wantAdded)
+	}
+	for i, u := range wantAdded {
+		if added[i] != u {
+			t.Errorf("added[%d] = %q, want %q", i, added[i], u)
+		}
+	}
+	for _, want := range []string{
+		"usermod -aG sshusers 'deploy' 2>/dev/null || true",
+		"usermod -aG sshusers 'alice' 2>/dev/null || true",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script missing %q\n---\n%s", want, script)
+		}
+	}
+	// root must NEVER be granted via this path (it has its own policy).
+	if strings.Contains(script, "sshusers 'root'") {
+		t.Errorf("root must not be added to sshusers:\n%s", script)
+	}
+}
+
+// TestPreserveKeyUsersEmpty asserts no work / no script when there are no
+// non-root key users (the greenfield / nothing-to-do case).
+func TestPreserveKeyUsersEmpty(t *testing.T) {
+	if script, added := preserveKeyUsers([]string{"root"}); script != "" || added != nil {
+		t.Errorf("expected empty result for root-only input, got script=%q added=%v", script, added)
+	}
+	if script, added := preserveKeyUsers(nil); script != "" || added != nil {
+		t.Errorf("expected empty result for nil input, got script=%q added=%v", script, added)
+	}
+}

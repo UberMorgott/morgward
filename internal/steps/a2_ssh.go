@@ -40,6 +40,16 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 
 	conf99 := build99(ctx, strict)
 
+	// 0. Brownfield coexistence: add existing key users to sshusers BEFORE the
+	// AllowGroups sshusers drop-in takes effect, so we never lock out a user that
+	// already has a working key. Additive only (never lockout-capable).
+	if !ctx.Facts.Greenfield {
+		if script, added := preserveKeyUsers(ctx.Facts.SSHKeyUsers); len(added) > 0 {
+			ctx.Cli.Sudo(script)
+			ctx.Log.Detail("added existing key users to sshusers: %v", added)
+		}
+	}
+
 	// 1. Write drop-ins. mkdir the cloud-init dir FIRST so any putFile targeting it
 	// (and its chmod) succeeds even on a box without cloud-init pre-provisioned.
 	// Strict-only: drop the cloud-init ssh_pwauth:false override + neutralize the
@@ -186,6 +196,16 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 		return status, detail, err
 	}
 
+	// 0c. Brownfield coexistence: add existing key users to sshusers BEFORE the
+	// AllowGroups sshusers drop-in is written, so the lockdown does not lock out a
+	// user that already has a working key. Additive only (never lockout-capable).
+	if !ctx.Facts.Greenfield {
+		if script, added := preserveKeyUsers(ctx.Facts.SSHKeyUsers); len(added) > 0 {
+			ctx.Cli.Sudo(script)
+			ctx.Log.Detail("added existing key users to sshusers: %v", added)
+		}
+	}
+
 	// 1. Write the DANGER drop-in: AllowGroups + PermitRootLogin no + key-only.
 	// Also neutralize cloud-init's password override so it can't re-enable
 	// PasswordAuthentication on the next boot.
@@ -267,6 +287,32 @@ fi
 // so a stand-alone A2-safe/A2-danger run still has a working key.
 func installAdminKey(admin, line string) string {
 	return putAuthorizedKey(admin, line)
+}
+
+// preserveKeyUsers adds every existing key user (except root) to the sshusers
+// group so the AllowGroups sshusers lockdown does not lock out users that already
+// have a working key. Purely additive (only GRANTS access — never lockout-capable)
+// and best-effort (`|| true`). Returns the script and the list of users added
+// (for logging). Users come from detect (charset-validated /home/* basenames),
+// and each is shell-quoted defensively. Returns ("", nil) when there is nothing
+// to do, so the caller can skip the round-trip.
+func preserveKeyUsers(users []string) (string, []string) {
+	var b strings.Builder
+	var added []string
+	for _, u := range users {
+		if u == "" || u == "root" {
+			continue
+		}
+		fmt.Fprintf(&b, "usermod -aG sshusers %s 2>/dev/null || true\n", shellQuote(u))
+		added = append(added, u)
+	}
+	return b.String(), added
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quote, so an
+// arbitrary username can be interpolated into a shell command safely.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // buildSafeWrite is the pure SAFE drop-in writer: crypto-only 99-hardening.conf,

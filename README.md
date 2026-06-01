@@ -1,16 +1,17 @@
 # morgward
 
 Portable single-binary executor for the
-[VPS-PREP-RUNBOOK](https://github.com/UberMorgott/vps-prep-runbook). Connects to a
-fresh Ubuntu **24.04 / 26.04** VPS over an embedded SSH client (no external `ssh`,
-`sshpass`, Docker, or web UI) and applies the full hardening + tuning sequence.
+[VPS-PREP-RUNBOOK](https://github.com/UberMorgott/vps-prep-runbook). Connects to an
+Ubuntu **24.04 / 26.04** VPS — fresh or already running services — over an embedded
+SSH client (no external `ssh`, `sshpass`, Docker, or web UI) and applies the full
+hardening + tuning sequence.
 
-> ⚠️ **For FRESH VPS only.** This release targets a clean, newly-provisioned
-> Ubuntu 24.04 / 26.04 box. Run it on a brand-new server before you install
-> anything else. On a box that already has services, users, or hardening in
-> place a full `run` will refuse (brownfield / already-hardened gates) — support
-> for already-provisioned boxes is **not done yet** and is planned for a later
-> release.
+> **Fresh or brownfield.** On a clean box it applies the universal baseline. On a
+> box that already runs services (docker, WireGuard/OpenVPN, nginx, custom
+> listeners) a full `run` refuses by default (brownfield / already-hardened gates);
+> re-run with `--assume-yes` to apply in **coexistence mode** — detected service
+> ports, forwarding/routing, and disk swap are preserved while the box is hardened.
+> See [`docs/BROWNFIELD.md`](docs/BROWNFIELD.md).
 
 ## Features
 

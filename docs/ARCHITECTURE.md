@@ -13,11 +13,16 @@ SSHes into a host over an **embedded** `golang.org/x/crypto/ssh` client (no exte
 sequence, then verifies it (§V matrix). One entrypoint serves both a **CLI** and a
 **Bubble Tea v2 TUI**.
 
-**Fresh-VPS-only caveat:** it targets a *freshly reset* Ubuntu 24.04/26.04 box. It
-detects greenfield vs brownfield and **refuses a blind full `run`** on a non-empty or
-already-hardened box unless `--assume-yes`. Read-only commands (`detect`/`verify`/
-`step`/`audit`) pass through. State is **in-memory per run** — no cross-invocation skip
-(the on-box configs are the durable checkpoints).
+**Brownfield coexistence (not fresh-only):** it targets Ubuntu 24.04/26.04, fresh OR
+already running services. It detects greenfield vs brownfield and **refuses a blind full
+`run`** on a non-empty or already-hardened box unless `--assume-yes` — but once consent
+is given the steps apply in a **service-preserving** way (A1 keeps detected service ports
+and leaves the FORWARD policy untouched; A5 uses `rp_filter=2` when routing; A6.7 keeps
+disk swap; A2 adds existing key users to `sshusers`). Coexistence is automatic, driven by
+`detect.Facts` — no new flag. See [`BROWNFIELD.md`](BROWNFIELD.md) for the full
+detection set + per-step decision table. Read-only commands (`detect`/`verify`/`step`/
+`audit`) pass through. State is **in-memory per run** — no cross-invocation skip (the
+on-box configs are the durable checkpoints).
 
 ## 2. Execution flow
 
@@ -101,7 +106,7 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 | config | [`internal/config/`](../internal/config/) | resolved run config + validation | `Config`, `Validate`, `Mode` (`ModeSoft`/`ModeStrict`), `adminUserRe` (`^[a-z_][a-z0-9_-]{0,31}$`), `Err*` sentinels |
 | sshx | [`internal/sshx/`](../internal/sshx/) | embedded SSH client (one-shot executor, base64 delivery), keygen | `Dial`, `DialWithRetry`, `Client.Run`/`Sudo`/`SwitchUser`/`UseKey`/`BootID`/`WaitForReboot`/`SetOutputSink`, `GenerateKeyPair`, `LoadKeyFile`, `SecretMarkerPrefix`, `ErrNoMutualAuth` |
 | steps | [`internal/steps/`](../internal/steps/) | one Step per runbook block; stateless | `Step`, `Context`, `Status`, `BenchResult`, `putFile`/`appendLineIfMissing`/`freshLogin`, `A1Firewall` … `A10Detection` |
-| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`) |
+| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`), `portFromLocal` |
 | verify | [`internal/verify/`](../internal/verify/) | §V verification matrix (effective behavior, not config text) | `Run`, `Result`, `Status` (`StatusPass`/`Warn`/`Fail`/`Skip`/`StatusUnknown`) |
 | tweaks | [`internal/tweaks/`](../internal/tweaks/) | per-tweak audit registry (one privileged round-trip); view-only | `Run`, `Probe`, `Result` |
 | monitor | [`internal/monitor/`](../internal/monitor/) | live CPU/RAM/DISK over its **OWN** SSH session; reconnects | `ConnInfo`, `Sample`, sampler loop |
@@ -118,22 +123,25 @@ defined by `orderedSteps()` in [`engine.go`](../internal/engine/engine.go) and i
 **load-bearing** — selective `step <IDs>` runs still follow it. "Lockout-capable" =
 `Run` can return a non-nil error that **aborts the whole run**.
 
-| ID | File | What it does | Lockout-capable |
-|----|------|-------------|:---:|
-| PRE | [`precond.go`](../internal/steps/precond.go) | §1 preconditions: apt index, admin user, key, sshusers group | yes |
-| A1 | [`a1_firewall.go`](../internal/steps/a1_firewall.go) | Firewall + fail-safe (iptables-nft, v4+v6) | yes |
-| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes |
-| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, AllowGroups, crypto) — **legacy full-run** | yes |
-| A2.5 | [`a25_cloudinit.go`](../internal/steps/a25_cloudinit.go) | Cloud-init neutralization | no |
-| A3 | [`a3_fail2ban.go`](../internal/steps/a3_fail2ban.go) | fail2ban (systemd backend, admin whitelist) | no |
-| A4 | [`a4_network.go`](../internal/steps/a4_network.go) | Network tuning (BBR, buffers, I/O sched) + benchmark | no |
-| A5 | [`a5_kernel.go`](../internal/steps/a5_kernel.go) | Kernel hardening (sysctl, THP=madvise, core_pattern) | no |
-| A6 | [`a6_maint.go`](../internal/steps/a6_maint.go) | Maintenance (journald, needrestart, NOFILE, ntp) | no |
-| A6.5 | [`a65_dns.go`](../internal/steps/a65_dns.go) | DNS hardening (calibrated upstream + DoT/DNSSEC) | no |
-| A6.7 | [`a67_mem.go`](../internal/steps/a67_mem.go) | Memory mgmt (ZRAM zstd + earlyoom) | no |
-| A7 | [`a7_cleanup.go`](../internal/steps/a7_cleanup.go) | Cleanup (purge bloatware, apt-mark guard) | no |
-| A9 | [`a9_unattended.go`](../internal/steps/a9_unattended.go) | Unattended security updates | no |
-| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, drop-log, OS hardening) | no |
+"Brownfield" notes describe the coexistence path (`!Facts.Greenfield`); blank = same in
+both modes. Full table in [`BROWNFIELD.md`](BROWNFIELD.md#3-per-step-decision-table--greenfield-vs-brownfield).
+
+| ID | File | What it does | Lockout-capable | Brownfield (coexistence) |
+|----|------|-------------|:---:|--------------------------|
+| PRE | [`precond.go`](../internal/steps/precond.go) | §1 preconditions: apt index, admin user, key, sshusers group | yes | — |
+| A1 | [`a1_firewall.go`](../internal/steps/a1_firewall.go) | Firewall + fail-safe (iptables-nft, v4+v6) | yes | branches on `FirewallMgr`: `ufw`→`ufw allow` SSH+detected ports (allow-only); `firewalld`/`nftables`→defer, `StatusSkip` (untouched); `iptables`/`none`→coexist INPUT DROP, opens detected `ListenPortsTCP/UDP`, **FORWARD untouched**, chains/nat never flushed. [BROWNFIELD §7](BROWNFIELD.md#7-firewall-managers) |
+| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | — |
+| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, AllowGroups, crypto) — **legacy full-run** | yes | adds non-root `SSHKeyUsers` to `sshusers` before AllowGroups (grant-only) |
+| A2.5 | [`a25_cloudinit.go`](../internal/steps/a25_cloudinit.go) | Cloud-init neutralization | no | — |
+| A3 | [`a3_fail2ban.go`](../internal/steps/a3_fail2ban.go) | fail2ban (systemd backend, admin whitelist) | no | — |
+| A4 | [`a4_network.go`](../internal/steps/a4_network.go) | Network tuning (BBR, buffers, I/O sched) + benchmark | no | — |
+| A5 | [`a5_kernel.go`](../internal/steps/a5_kernel.go) | Kernel hardening (sysctl, THP=madvise, core_pattern) | no | `rp_filter=2` (loose) when `Forwarding` instead of 1 |
+| A6 | [`a6_maint.go`](../internal/steps/a6_maint.go) | Maintenance (journald, needrestart, NOFILE, ntp) | no | — |
+| A6.5 | [`a65_dns.go`](../internal/steps/a65_dns.go) | DNS hardening (calibrated upstream + DoT/DNSSEC) | no | skips if `systemd-resolved` inactive (custom resolver kept) |
+| A6.7 | [`a67_mem.go`](../internal/steps/a67_mem.go) | Memory mgmt (ZRAM zstd + earlyoom) | no | keeps pre-existing disk swap (no `swapoff`); zram still prio 100 |
+| A7 | [`a7_cleanup.go`](../internal/steps/a7_cleanup.go) | Cleanup (purge bloatware, apt-mark guard) | no | IRREVERSIBLE purge runs the same — exclude on a customized box |
+| A9 | [`a9_unattended.go`](../internal/steps/a9_unattended.go) | Unattended security updates | no | — |
+| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, drop-log, OS hardening) | no | — |
 
 **A2 split** (not in `orderedSteps`, resolvable via `step`/TUI security menu, in
 [`a2_ssh.go`](../internal/steps/a2_ssh.go)): `A2-safe` (`A2Safe`) = crypto only, image-default

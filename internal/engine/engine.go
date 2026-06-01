@@ -344,16 +344,16 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 	} else if !facts.Greenfield {
 		// 4b. Brownfield gate (skipped for read-only commands).
 		log.Banner("BROWNFIELD DETECTED")
-		log.Warn("box is not empty: forwarding=%v docker=%v listeners=%d", facts.IPForward, facts.DockerSeen, len(facts.Listeners))
+		log.Warn("box is not empty: forwarding=%v docker=%v listeners=%d firewall=%s", facts.IPForward, facts.DockerSeen, len(facts.Listeners), facts.FirewallMgr)
 		for _, l := range facts.Listeners {
 			log.Detail("listener: %s", l)
 		}
 		if !allowBrownfield && !cfg.Assume {
-			log.Info("re-run with --assume-yes to proceed with the universal baseline anyway (NOT recommended without adaptation)")
-			return nil, cleanup, fmt.Errorf("brownfield box: refusing to run universal Phase A blind (see §0.5)")
+			log.Info("re-run with --assume-yes to apply in COEXISTENCE mode (detected service ports/forwarding/swap are preserved); see /root/vps-inventory.md")
+			return nil, cleanup, fmt.Errorf("brownfield box: refusing to run Phase A without confirmation (re-run with --assume-yes for coexistence mode)")
 		}
 		if !allowBrownfield {
-			log.Warn("--assume-yes set: proceeding on a brownfield box at operator's risk")
+			log.Warn("--assume-yes set: proceeding in coexistence mode (existing services preserved) — see /root/vps-inventory.md")
 		}
 	}
 

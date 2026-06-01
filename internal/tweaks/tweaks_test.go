@@ -122,6 +122,29 @@ func TestA10StrictExtrasRemoved(t *testing.T) {
 	}
 }
 
+// TestRpFilterCoexist asserts the rp_filter probe accepts the value A5 actually
+// applies: strict (=1) when not forwarding, loose (=2) when forwarding/routing is
+// active — so a correctly-coexisting box does not report a false failure.
+func TestRpFilterCoexist(t *testing.T) {
+	cfg := &config.Config{Mode: config.ModeSoft, Port: 22}
+
+	noFwd := ids(Registry(&detect.Facts{Is2404: true, Forwarding: false}, cfg))["a5.rp_filter"]
+	if !noFwd.Want("1") {
+		t.Error("non-forwarding box: rp_filter probe should accept 1")
+	}
+	if noFwd.Want("2") {
+		t.Error("non-forwarding box: rp_filter probe should reject 2")
+	}
+
+	fwd := ids(Registry(&detect.Facts{Is2404: true, Forwarding: true}, cfg))["a5.rp_filter"]
+	if !fwd.Want("2") {
+		t.Error("forwarding box: rp_filter probe should accept 2 (loose)")
+	}
+	if fwd.Want("1") {
+		t.Error("forwarding box: rp_filter probe should reject 1")
+	}
+}
+
 // TestNonInformationalProbesStayHard sanity-checks ordinary probes are NOT
 // flagged informational (only the access-policy ones are relaxed).
 func TestNonInformationalProbesStayHard(t *testing.T) {

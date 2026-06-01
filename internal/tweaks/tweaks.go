@@ -54,6 +54,17 @@ func has(sub string) func(string) bool {
 	return func(o string) bool { return strings.Contains(o, sub) }
 }
 
+// rpFilterWant returns the rp_filter verdict matching what A5 actually applies:
+// strict (=1) on a non-forwarding box, loose (=2) when forwarding/routing is
+// active (A5 sets loose there so asymmetric VPN/router paths survive). A
+// coexisting box thus reads "applied", not a false failure.
+func rpFilterWant(facts *detect.Facts) func(string) bool {
+	if facts.Forwarding {
+		return eq("2")
+	}
+	return eq("1")
+}
+
 // fileExists is the shell snippet for "is this path present".
 func fileExists(path string) string {
 	return fmt.Sprintf("test -e %s && echo 1 || echo 0", path)
@@ -161,7 +172,7 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 		Probe{ID: "a5.core_pattern", Step: "A5", Name: "core_pattern disabled",
 			Cmd: "sysctl -n kernel.core_pattern 2>/dev/null", Want: has("/bin/false")},
 		Probe{ID: "a5.rp_filter", Step: "A5", Name: "rp_filter strict",
-			Cmd: "sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null", Want: eq("1")},
+			Cmd: "sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null", Want: rpFilterWant(facts)},
 		Probe{ID: "a5.kptr", Step: "A5", Name: "kptr_restrict",
 			Cmd: "sysctl -n kernel.kptr_restrict 2>/dev/null", Want: eq("2")},
 		Probe{ID: "a5.thp", Step: "A5", Name: "THP madvise",

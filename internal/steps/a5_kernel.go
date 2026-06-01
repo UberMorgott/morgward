@@ -1,14 +1,26 @@
 package steps
 
+import "fmt"
+
 // A5Kernel implements §A5: kernel/sysctl hardening, THP=madvise, core_pattern
-// lockdown. rp_filter=1 is lockout-capable, so a live rpf-revert timer is armed
+// lockdown. rp_filter is lockout-capable, so a live rpf-revert timer is armed
 // and a fresh session is verified before the timer is disarmed.
 type A5Kernel struct{}
 
 func (A5Kernel) ID() string    { return "A5" }
 func (A5Kernel) Title() string { return "Kernel hardening (sysctl, THP=madvise, core_pattern)" }
 
-const kernelHardenConf = `kernel.kptr_restrict = 2
+// kernelHardenConf renders 99-zz-kernel-harden.conf. rp_filter is the only
+// routing-sensitive knob: strict reverse-path (=1) drops asymmetric-routed return
+// packets and breaks WireGuard/OpenVPN peers and multi-egress routers, so a
+// brownfield/forwarding box gets LOOSE mode (=2) instead. Everything else is
+// router-safe and identical on both paths. routing=false ⇒ greenfield strict (=1).
+func kernelHardenConf(routing bool) string {
+	rpf := 1
+	if routing {
+		rpf = 2
+	}
+	return fmt.Sprintf(`kernel.kptr_restrict = 2
 kernel.dmesg_restrict = 1
 kernel.yama.ptrace_scope = 1
 kernel.randomize_va_space = 2
@@ -29,18 +41,22 @@ net.ipv6.conf.all.accept_redirects = 0
 net.ipv6.conf.default.accept_redirects = 0
 net.ipv6.conf.all.accept_source_route = 0
 net.ipv6.conf.default.accept_source_route = 0
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.rp_filter = %[1]d
+net.ipv4.conf.default.rp_filter = %[1]d
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.default.log_martians = 1
 kernel.sysrq = 0
 kernel.core_pattern = |/bin/false
-`
+`, rpf)
+}
 
 func (a A5Kernel) Run(ctx *Context) (Status, string, error) {
-	// Write the sysctl file (zz prefix sorts after distro defaults).
-	if r := ctx.Cli.Sudo(putFile("/etc/sysctl.d/99-zz-kernel-harden.conf", kernelHardenConf, "0644")); r.RC != 0 {
+	// Write the sysctl file (zz prefix sorts after distro defaults). rp_filter is
+	// loose (=2) when forwarding/routing is active so asymmetric VPN/router return
+	// paths survive; greenfield keeps strict (=1).
+	conf := kernelHardenConf(ctx.Facts.Forwarding)
+	if r := ctx.Cli.Sudo(putFile("/etc/sysctl.d/99-zz-kernel-harden.conf", conf, "0644")); r.RC != 0 {
 		return StatusFail, "writing kernel sysctl failed: " + firstLine(r.Stderr), nil
 	}
 
