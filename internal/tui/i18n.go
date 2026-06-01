@@ -144,14 +144,15 @@ const (
 	kWikiHint    // esc — назад · ↑↓ — прокрутка · l — язык
 
 	// --- wiki page (phaseWiki) -------------------------------------------
-	kWikiWhat   // ЧТО ДЕЛАЕТ
-	kWikiWhy    // ЗАЧЕМ
-	kWikiRisk   // БЕЗ ЭТОГО
-	kWikiOnBox  // ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ
-	kWikiRevert // КАК ОТКАТИТЬ
-	kWikiStatus // "Статус:" label prefixed to the post-connect status word
-	kWikiNoDoc  // "нет описания" / "no description"
-	kWikiBack   // clickable back button: "← Назад" / "← Back"
+	kWikiWhat      // ЧТО ДЕЛАЕТ
+	kWikiWhy       // ЗАЧЕМ
+	kWikiRisk      // БЕЗ ЭТОГО
+	kWikiOnBox     // ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ
+	kWikiRevert    // КАК ОТКАТИТЬ
+	kWikiStatus    // "Статус:" label prefixed to the post-connect status word
+	kWikiNoDoc     // "нет описания" / "no description"
+	kWikiBack      // clickable back button: "← Назад" / "← Back"
+	kWikiProbeWhat // per-probe detail label: "ЧТО ПРОВЕРЯЕТ" / "WHAT THIS CHECKS"
 
 	// --- live tweak status words (shared by the wiki status line) --------
 	kStatusApplied     // "✓ применено" / "✓ applied"
@@ -316,14 +317,15 @@ var tr = map[Lang]map[stringKey]string{
 		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
 		kWikiHint:    "esc — назад · ↑↓ — прокрутка · l — язык",
 
-		kWikiWhat:   "ЧТО ДЕЛАЕТ",
-		kWikiWhy:    "ЗАЧЕМ",
-		kWikiRisk:   "БЕЗ ЭТОГО",
-		kWikiOnBox:  "ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ",
-		kWikiRevert: "КАК ОТКАТИТЬ",
-		kWikiStatus: "Статус:",
-		kWikiNoDoc:  "нет описания для этого шага",
-		kWikiBack:   "← Назад",
+		kWikiWhat:      "ЧТО ДЕЛАЕТ",
+		kWikiWhy:       "ЗАЧЕМ",
+		kWikiRisk:      "БЕЗ ЭТОГО",
+		kWikiOnBox:     "ЧТО МЕНЯЕТСЯ НА СЕРВЕРЕ",
+		kWikiRevert:    "КАК ОТКАТИТЬ",
+		kWikiStatus:    "Статус:",
+		kWikiNoDoc:     "нет описания для этого шага",
+		kWikiBack:      "← Назад",
+		kWikiProbeWhat: "ЧТО ПРОВЕРЯЕТ",
 
 		kStatusApplied:     "✓ применено",
 		kStatusCanApply:    "• можно",
@@ -472,14 +474,15 @@ var tr = map[Lang]map[stringKey]string{
 		kSummaryHint: "enter/esc — menu · click a fix for details · ↑↓ — scroll · l — lang",
 		kWikiHint:    "esc — back · ↑↓ — scroll · l — lang",
 
-		kWikiWhat:   "WHAT IT DOES",
-		kWikiWhy:    "WHY",
-		kWikiRisk:   "WITHOUT IT",
-		kWikiOnBox:  "WHAT CHANGES ON THE SERVER",
-		kWikiRevert: "HOW TO REVERT",
-		kWikiStatus: "Status:",
-		kWikiNoDoc:  "no description for this step",
-		kWikiBack:   "← Back",
+		kWikiWhat:      "WHAT IT DOES",
+		kWikiWhy:       "WHY",
+		kWikiRisk:      "WITHOUT IT",
+		kWikiOnBox:     "WHAT CHANGES ON THE SERVER",
+		kWikiRevert:    "HOW TO REVERT",
+		kWikiStatus:    "Status:",
+		kWikiNoDoc:     "no description for this step",
+		kWikiBack:      "← Back",
+		kWikiProbeWhat: "WHAT THIS CHECKS",
 
 		kStatusApplied:     "✓ applied",
 		kStatusCanApply:    "• available",
@@ -685,4 +688,169 @@ func localTweakName(lang Lang, id, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// probeDescs holds a short, per-PROBE description keyed by tweaks.Probe.ID, in
+// both languages. Unlike the step-level wiki.Doc (shared by every probe of a
+// step), each entry names the concrete artifact THIS probe verifies — a file,
+// sysctl key, systemd service, dpkg package or iptables rule — so the wiki/detail
+// screen explains the individual check, not the whole step. Every probe ID that
+// tweaks.Registry can emit (including the version/IPv6-gated a1.rules_v6 and
+// a2.kex_mlkem) must have an entry in BOTH languages — see TestEveryProbeHasDesc.
+var probeDescs = map[Lang]map[string]string{
+	langRU: {
+		// --- A1 firewall ---
+		"a1.input_drop": "Проверяет, что базовая политика цепочки INPUT в iptables — DROP, то есть весь незаявленный входящий трафик отбрасывается по умолчанию.",
+		"a1.ssh_accept": "Проверяет, что в цепочке INPUT есть правило ACCEPT для порта SSH — иначе политика DROP отрезала бы вас от сервера.",
+		"a1.rules_v4":   "Проверяет наличие файла /etc/iptables/rules.v4 — сохранённых правил IPv4, которые iptables-persistent восстанавливает после перезагрузки.",
+		"a1.rules_v6":   "Проверяет наличие файла /etc/iptables/rules.v6 — сохранённых правил IPv6 (только если у сервера есть IPv6).",
+		"a1.persistent": "Проверяет, что установлен пакет iptables-persistent — без него правила файрвола не переживут перезагрузку.",
+
+		// --- A2 ssh ---
+		"a2.conf00":       "Проверяет наличие drop-in /etc/ssh/sshd_config.d/00-hardening.conf — первой части усиленной конфигурации sshd.",
+		"a2.conf99":       "Проверяет наличие drop-in /etc/ssh/sshd_config.d/99-hardening.conf — финальной части усиленной конфигурации sshd (перекрывает дефолты).",
+		"a2.allowgroups":  "Проверяет через sshd -T, что задан AllowGroups sshusers — вход по SSH разрешён только членам группы sshusers. Информационно: на безопасном пути может быть не задано.",
+		"a2.ecdsa_absent": "Проверяет, что host-key /etc/ssh/ssh_host_ecdsa_key удалён — оставляем только Ed25519, убирая слабый ECDSA-ключ сервера.",
+		"a2.ssh_active":   "Проверяет через systemctl is-active, что служба ssh (или sshd) запущена и работает.",
+		"a2.permitroot":   "Читает действующее значение PermitRootLogin из sshd -T. Информационно: в режиме soft ожидается prohibit-password, в strict — no.",
+		"a2.passauth":     "Читает действующее значение PasswordAuthentication из sshd -T. Информационно: в soft пароль остаётся (yes), в strict выключается (no).",
+		"a2.kex_mlkem":    "Проверяет через sshd -T, что в KexAlgorithms включён постквантовый обмен ключами mlkem768x25519-sha256 (только Ubuntu 26.04).",
+
+		// --- A2.5 cloud-init ---
+		"a25.disabled": "Проверяет наличие файла-флага /etc/cloud/cloud-init.disabled (или что cloud-init вовсе не установлен) — чтобы он не откатывал настройки при перезагрузке.",
+
+		// --- A3 fail2ban ---
+		"a3.installed":  "Проверяет через dpkg, что установлен пакет fail2ban — сам демон бана по неудачным входам.",
+		"a3.jail_local": "Проверяет наличие файла /etc/fail2ban/jail.local — локальной конфигурации джейлов (jail sshd, белый список IP).",
+		"a3.sshd_jail":  "Проверяет через fail2ban-client status sshd, что джейл sshd реально загружен и активен, а не просто прописан в конфиге.",
+
+		// --- A4 network ---
+		"a4.net_tune":   "Проверяет наличие /etc/sysctl.d/99-net-tune.conf — sysctl-настроек буферов сокетов и сетевых очередей.",
+		"a4.bbr_conf":   "Проверяет наличие /etc/sysctl.d/99-bbr.conf — файла, включающего BBR и очередь fq при загрузке.",
+		"a4.bbr_module": "Проверяет через lsmod, что модуль ядра tcp_bbr загружен — без него алгоритм BBR недоступен.",
+		"a4.bbr_active": "Читает sysctl net.ipv4.tcp_congestion_control и проверяет, что действующий контроль перегрузки — bbr.",
+		"a4.qdisc":      "Читает sysctl net.core.default_qdisc и проверяет, что дисциплина очереди по умолчанию — fq (нужна для корректной работы BBR).",
+		"a4.io_sched":   "Проверяет наличие udev-правила /etc/udev/rules.d/60-io-scheduler.rules на дисках vd* (на других дисках проверка неприменима).",
+
+		// --- A5 kernel ---
+		"a5.harden_conf":  "Проверяет наличие /etc/sysctl.d/99-zz-kernel-harden.conf — набора sysctl-параметров усиления ядра.",
+		"a5.core_pattern": "Читает sysctl kernel.core_pattern и проверяет, что дампы памяти перенаправлены в /bin/false, то есть отключены.",
+		"a5.rp_filter":    "Читает sysctl net.ipv4.conf.all.rp_filter и проверяет строгую (=1) обратную проверку маршрута против подмены адресов.",
+		"a5.kptr":         "Читает sysctl kernel.kptr_restrict и проверяет значение 2 — адреса ядра полностью скрыты, чтобы не подсказывать эксплойтам.",
+		"a5.thp":          "Читает /sys/kernel/mm/transparent_hugepage/enabled и проверяет режим [madvise] для прозрачных больших страниц.",
+
+		// --- A6 maintenance ---
+		"a6.journald":    "Проверяет наличие /etc/systemd/journald.conf.d/99-vps-cap.conf — лимита размера журнала systemd, чтобы логи не забили диск.",
+		"a6.needrestart": "Проверяет наличие /etc/needrestart/conf.d/50-autorestart.conf — настройки неинтерактивного перезапуска служб после обновлений.",
+		"a6.nofile":      "Проверяет наличие /etc/systemd/system.conf.d/limits.conf — поднятого лимита открытых файлов (NOFILE).",
+		"a6.ntp":         "Читает timedatectl и проверяет, что синхронизация времени по NTP включена (NTP=yes).",
+
+		// --- A6.5 DNS ---
+		"a65.dns_conf": "Проверяет наличие /etc/systemd/resolved.conf.d/99-morgward-dns.conf — drop-in с защищёнными резолверами для systemd-resolved.",
+		"a65.dot":      "Проверяет, что в том же drop-in задано DNSOverTLS=opportunistic — DNS-запросы шифруются по DNS-over-TLS, где это возможно.",
+
+		// --- A6.7 memory ---
+		"a67.zram_conf":   "Проверяет наличие /etc/systemd/zram-generator.conf — конфигурации сжатого свопа в ОЗУ (ZRAM, zstd).",
+		"a67.zram_sysctl": "Проверяет наличие /etc/sysctl.d/99-zram.conf — sysctl-настройки swappiness под ZRAM.",
+		"a67.zram_active": "Проверяет через swapon, что zram-устройство реально подключено как своп, а не только описано в конфиге.",
+		"a67.earlyoom":    "Проверяет через systemctl is-active, что служба earlyoom работает — она мягко завершает процессы до жёсткой нехватки памяти.",
+
+		// --- A9 unattended-upgrades ---
+		"a9.installed": "Проверяет через dpkg, что установлен пакет unattended-upgrades — механизм автоматической установки обновлений безопасности.",
+		"a9.auto":      "Проверяет наличие /etc/apt/apt.conf.d/20auto-upgrades — файла, включающего периодический запуск автообновлений.",
+		"a9.local":     "Проверяет наличие /etc/apt/apt.conf.d/52-unattended-upgrades-local — локальной настройки (без авто-перезагрузки, чистка ядер).",
+
+		// --- A10 detection ---
+		"a10.auditd":        "Проверяет через dpkg, что установлен пакет auditd — демон аудита изменений важных файлов.",
+		"a10.audit_rules":   "Проверяет наличие /etc/audit/rules.d/99-vps.rules — набора правил аудита для отслеживаемых файлов и событий.",
+		"a10.auditd_active": "Проверяет через systemctl is-active, что служба auditd запущена и собирает события.",
+		"a10.notify":        "Проверяет наличие скрипта /usr/local/sbin/ssh-login-notify.sh — он шлёт уведомление об успешном входе по SSH.",
+		"a10.pam":           "Проверяет, что в /etc/pam.d/sshd прописана строка вызова ssh-login-notify — без неё уведомления о входе не сработают.",
+		"a10.log_rule":      "Проверяет через iptables, что в цепочке INPUT есть LOG-правило (метка ipt-drop-in), журналирующее отброшенные входящие пакеты.",
+	},
+	langEN: {
+		// --- A1 firewall ---
+		"a1.input_drop": "Checks that the iptables INPUT chain's default policy is DROP, so all unsolicited inbound traffic is rejected by default.",
+		"a1.ssh_accept": "Checks the INPUT chain has an ACCEPT rule for the SSH port — without it the DROP policy would cut you off from the server.",
+		"a1.rules_v4":   "Checks for /etc/iptables/rules.v4 — the saved IPv4 ruleset that iptables-persistent restores after a reboot.",
+		"a1.rules_v6":   "Checks for /etc/iptables/rules.v6 — the saved IPv6 ruleset (only when the server has IPv6).",
+		"a1.persistent": "Checks that the iptables-persistent package is installed — without it firewall rules do not survive a reboot.",
+
+		// --- A2 ssh ---
+		"a2.conf00":       "Checks for the drop-in /etc/ssh/sshd_config.d/00-hardening.conf — the first part of the hardened sshd configuration.",
+		"a2.conf99":       "Checks for the drop-in /etc/ssh/sshd_config.d/99-hardening.conf — the final part of the hardened sshd config (overrides defaults).",
+		"a2.allowgroups":  "Checks via sshd -T that AllowGroups sshusers is set — SSH login is restricted to members of the sshusers group. Informational: may be unset on the safe path.",
+		"a2.ecdsa_absent": "Checks that the host key /etc/ssh/ssh_host_ecdsa_key is removed — keeping only Ed25519 and dropping the weaker ECDSA server key.",
+		"a2.ssh_active":   "Checks via systemctl is-active that the ssh (or sshd) service is up and running.",
+		"a2.permitroot":   "Reads the effective PermitRootLogin from sshd -T. Informational: soft mode expects prohibit-password, strict expects no.",
+		"a2.passauth":     "Reads the effective PasswordAuthentication from sshd -T. Informational: soft keeps it on (yes), strict turns it off (no).",
+		"a2.kex_mlkem":    "Checks via sshd -T that the post-quantum key exchange mlkem768x25519-sha256 is enabled in KexAlgorithms (Ubuntu 26.04 only).",
+
+		// --- A2.5 cloud-init ---
+		"a25.disabled": "Checks for the flag file /etc/cloud/cloud-init.disabled (or that cloud-init is not installed at all) so it can't revert your config on reboot.",
+
+		// --- A3 fail2ban ---
+		"a3.installed":  "Checks via dpkg that the fail2ban package is installed — the daemon that bans IPs after failed logins.",
+		"a3.jail_local": "Checks for /etc/fail2ban/jail.local — the local jail configuration (sshd jail, IP whitelist).",
+		"a3.sshd_jail":  "Checks via fail2ban-client status sshd that the sshd jail is actually loaded and active, not just present in config.",
+
+		// --- A4 network ---
+		"a4.net_tune":   "Checks for /etc/sysctl.d/99-net-tune.conf — the sysctl settings for socket buffers and network queues.",
+		"a4.bbr_conf":   "Checks for /etc/sysctl.d/99-bbr.conf — the file that enables BBR and the fq queue at boot.",
+		"a4.bbr_module": "Checks via lsmod that the tcp_bbr kernel module is loaded — without it the BBR algorithm is unavailable.",
+		"a4.bbr_active": "Reads sysctl net.ipv4.tcp_congestion_control and checks the active congestion control is bbr.",
+		"a4.qdisc":      "Reads sysctl net.core.default_qdisc and checks the default queueing discipline is fq (needed for BBR to work correctly).",
+		"a4.io_sched":   "Checks for the udev rule /etc/udev/rules.d/60-io-scheduler.rules on vd* disks (not applicable on other disk types).",
+
+		// --- A5 kernel ---
+		"a5.harden_conf":  "Checks for /etc/sysctl.d/99-zz-kernel-harden.conf — the bundle of kernel-hardening sysctl parameters.",
+		"a5.core_pattern": "Reads sysctl kernel.core_pattern and checks core dumps are piped to /bin/false, i.e. disabled.",
+		"a5.rp_filter":    "Reads sysctl net.ipv4.conf.all.rp_filter and checks strict (=1) reverse-path filtering against address spoofing.",
+		"a5.kptr":         "Reads sysctl kernel.kptr_restrict and checks the value is 2 — kernel addresses are fully hidden so they can't aid exploits.",
+		"a5.thp":          "Reads /sys/kernel/mm/transparent_hugepage/enabled and checks the [madvise] mode for transparent huge pages.",
+
+		// --- A6 maintenance ---
+		"a6.journald":    "Checks for /etc/systemd/journald.conf.d/99-vps-cap.conf — the systemd journal size cap that keeps logs from filling the disk.",
+		"a6.needrestart": "Checks for /etc/needrestart/conf.d/50-autorestart.conf — the non-interactive service-restart setting used after updates.",
+		"a6.nofile":      "Checks for /etc/systemd/system.conf.d/limits.conf — the raised open-file limit (NOFILE).",
+		"a6.ntp":         "Reads timedatectl and checks that NTP time synchronization is enabled (NTP=yes).",
+
+		// --- A6.5 DNS ---
+		"a65.dns_conf": "Checks for /etc/systemd/resolved.conf.d/99-morgward-dns.conf — the systemd-resolved drop-in with hardened resolvers.",
+		"a65.dot":      "Checks the same drop-in sets DNSOverTLS=opportunistic — DNS queries are encrypted over DNS-over-TLS where possible.",
+
+		// --- A6.7 memory ---
+		"a67.zram_conf":   "Checks for /etc/systemd/zram-generator.conf — the configuration for compressed in-RAM swap (ZRAM, zstd).",
+		"a67.zram_sysctl": "Checks for /etc/sysctl.d/99-zram.conf — the swappiness sysctl tuned for ZRAM.",
+		"a67.zram_active": "Checks via swapon that a zram device is actually active as swap, not merely described in config.",
+		"a67.earlyoom":    "Checks via systemctl is-active that the earlyoom service is running — it gently kills processes before a hard out-of-memory.",
+
+		// --- A9 unattended-upgrades ---
+		"a9.installed": "Checks via dpkg that the unattended-upgrades package is installed — the mechanism that auto-installs security updates.",
+		"a9.auto":      "Checks for /etc/apt/apt.conf.d/20auto-upgrades — the file that enables the periodic auto-upgrade jobs.",
+		"a9.local":     "Checks for /etc/apt/apt.conf.d/52-unattended-upgrades-local — the local tuning (no auto-reboot, kernel cleanup).",
+
+		// --- A10 detection ---
+		"a10.auditd":        "Checks via dpkg that the auditd package is installed — the daemon that audits changes to sensitive files.",
+		"a10.audit_rules":   "Checks for /etc/audit/rules.d/99-vps.rules — the audit ruleset for the watched files and events.",
+		"a10.auditd_active": "Checks via systemctl is-active that the auditd service is running and collecting events.",
+		"a10.notify":        "Checks for the script /usr/local/sbin/ssh-login-notify.sh — it sends a notification on a successful SSH login.",
+		"a10.pam":           "Checks that /etc/pam.d/sshd contains the ssh-login-notify line — without it login notifications never fire.",
+		"a10.log_rule":      "Checks via iptables that the INPUT chain has a LOG rule (ipt-drop-in tag) that logs dropped inbound packets.",
+	},
+}
+
+// probeDesc returns the localized per-probe description for a probe ID and ok=true
+// when present, falling back to English then to ok=false when missing. Used by
+// wikiBodyLines to render the per-PROBE detail instead of the step-level wiki.Doc.
+func probeDesc(lang Lang, id string) (string, bool) {
+	if m, ok := probeDescs[lang]; ok {
+		if s, ok := m[id]; ok && s != "" {
+			return s, true
+		}
+	}
+	if s, ok := probeDescs[langEN][id]; ok && s != "" {
+		return s, true
+	}
+	return "", false
 }

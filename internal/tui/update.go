@@ -62,7 +62,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A click on a fix row opens its wiki description.
 			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
 				m.wikiStep = id
-				m.wikiTweak = "" // summary path: real step id, plain step header
+				m.wikiTweak = ""   // summary path: real step id, plain step header
+				m.wikiProbeID = "" // summary path: step-level doc, no per-probe text
 				m.wikiReturn = phaseSummary
 				m.wikiScroll = 0 // fresh page starts at the top
 				m.phase = phaseWiki
@@ -540,6 +541,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.vp.SetContent("")
 	m.sumScroll = 0
 	m.wikiScroll = 0
+	m.wikiProbeID = ""
 	m.matScroll = 0
 	m.titleK = titleIdle
 	// Reset Dashboard audit state so a fresh connect re-audits cleanly.

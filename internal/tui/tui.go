@@ -167,6 +167,12 @@ type model struct {
 	wikiStep   string
 	wikiTweak  string
 	wikiReturn phase
+	// wikiProbeID, when non-empty (Dashboard audit-row path), is the clicked
+	// probe's tweaks.Probe.ID. It selects the per-PROBE description in
+	// wikiBodyLines (so the 3 A3 probes show distinct text) instead of the
+	// step-level wiki.Doc. Empty on the summary path => step-level doc. Plain
+	// string, value-copyable.
+	wikiProbeID string
 
 	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
 	// memory; never logged), the copy-to-clipboard status, where esc returns to,

@@ -110,6 +110,26 @@ func (m model) wikiView() string {
 // labeled, word-wrapped blocks. Falls back to the localized no-description line when
 // the step has no wiki entry.
 func (m model) wikiBodyLines(innerW int) []string {
+	// Per-PROBE path (Dashboard audit-row click): when a probe ID is set and it has
+	// its own description, render that distinct text instead of the shared step doc,
+	// so e.g. the three A3 probes no longer all show the identical "fail2ban" doc.
+	if m.wikiProbeID != "" {
+		if desc, ok := probeDesc(m.lang, m.wikiProbeID); ok {
+			body := []string{
+				sumHeadStyle.Render(m.wikiTweak), // "[id] name" header
+				"",
+				monLabelStyle.Render(t(m.lang, kWikiProbeWhat)),
+			}
+			body = append(body, wrap(desc, innerW)...)
+			// Same live status line the step doc appends.
+			if word, ok := m.stepStatusWord(m.wikiStep); ok {
+				body = append(body, "")
+				body = append(body, monLabelStyle.Render(t(m.lang, kWikiStatus))+" "+word)
+			}
+			return body
+		}
+	}
+
 	doc, ok := wiki.Doc(wiki.Lang(int(m.lang)), m.wikiStep)
 	// Header: when opened from a tweak (Dashboard) show that specific tweak's
 	// "[id] name"; otherwise (summary path) show the step "[ID] Title".

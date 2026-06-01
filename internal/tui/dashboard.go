@@ -411,6 +411,7 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 	if r, ok := m.dashAuditRowAtClick(x, y); ok {
 		m.wikiStep = r.Probe.Step
 		m.wikiTweak = tweakWikiHeader(m.lang, r.Probe)
+		m.wikiProbeID = r.Probe.ID // per-probe description path
 		m.wikiReturn = phaseDashboard
 		m.wikiScroll = 0
 		m.phase = phaseWiki
