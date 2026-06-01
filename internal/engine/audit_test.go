@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"testing"
 
 	"github.com/UberMorgott/morgward/internal/config"
@@ -24,6 +25,6 @@ func TestSummaryCarriesFacts(t *testing.T) {
 // site below stops compiling.
 func TestAuditReadOnlyContract(t *testing.T) {
 	// The function value must be assignable; this fails to compile if Audit's
-	// signature drifts from (cfg, *ui.Logger, Hooks) error.
-	var _ func(*config.Config, *ui.Logger, Hooks) error = Audit
+	// signature drifts from (ctx, cfg, *ui.Logger, Hooks) error.
+	var _ func(context.Context, *config.Config, *ui.Logger, Hooks) error = Audit
 }

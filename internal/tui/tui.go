@@ -137,6 +137,14 @@ type model struct {
 	content string // accumulated log text (NOT strings.Builder — model is copied by value)
 	w, h    int
 
+	// engineCancel cancels the in-flight engine run's context so it halts at the
+	// next step boundary (F03); abort is closed by goBack to unblock any hook send
+	// (Sink/OnProgress) parked on a full channel, so the detached engine goroutine
+	// always reaches its deferred cli.Close() instead of leaking (F11). Both are
+	// reference/func types → value-copy safe across the per-Update model copy.
+	engineCancel context.CancelFunc
+	abort        chan struct{}
+
 	// live monitor: own sshx connection sampled on the bubbletea loop.
 	sample     monitor.Sample
 	haveSample bool

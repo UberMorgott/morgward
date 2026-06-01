@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -58,9 +59,9 @@ func IsRevertable(stepID string) bool {
 //
 // Non-revertable ids are skipped (logged) and counted as SKIP. Unknown ids are
 // rejected up front (same contract as RunSteps) so a typo never silently no-ops.
-func RunRevert(cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
+func RunRevert(ctx context.Context, cfg *config.Config, log *ui.Logger, ids []string, h Hooks) error {
 	start := time.Now()
-	s, cleanup, err := prepare(cfg, log, true, false, h)
+	s, cleanup, err := prepare(ctx, cfg, log, true, false, h)
 	defer cleanup()
 	if err != nil {
 		return err

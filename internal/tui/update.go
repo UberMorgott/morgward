@@ -590,6 +590,18 @@ func (m model) formConnectable() bool {
 // new run can be started (e.g. to fix credentials after a failed connection).
 func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.stopSampler()
+	// Halt any in-flight engine run: cancel its context so it stops at the next step
+	// boundary (F03), and close abort so a hook send parked on a now-stale full
+	// channel unblocks and the engine goroutine reaches its deferred cleanup (F11).
+	// Done before swapping in fresh channels so the OLD run's closure sees the close.
+	if m.engineCancel != nil {
+		m.engineCancel()
+		m.engineCancel = nil
+	}
+	if m.abort != nil {
+		close(m.abort)
+		m.abort = nil
+	}
 	m.phase = phaseForm
 	m.finished = false
 	m.finalErr = nil
@@ -742,19 +754,44 @@ func (m model) start() (tea.Model, tea.Cmd) {
 	// Engine runs in a goroutine; log lines stream into m.logs, finish into m.done.
 	// Hook callbacks run on the engine goroutine, so they must NOT touch the model —
 	// each only hands its value to the bubbletea loop via a buffered channel.
+	//
+	// runCtx is cancelled by goBack so the engine stops at the next step boundary
+	// (F03). abort is closed by goBack too; the hook sends select on it so a send
+	// parked on a full channel (after goBack swapped in fresh ones) unblocks and the
+	// engine goroutine reaches its deferred cli.Close() instead of leaking (F11).
+	// Capture logs/connCh/progCh/done/abort as LOCALS: goBack reassigns the model's
+	// fields, but this closure must keep talking to the channels this run owns.
 	ids := m.cmds
+	runCtx, cancel := context.WithCancel(context.Background())
+	m.engineCancel = cancel
+	m.abort = make(chan struct{})
+	abort := m.abort
+	logs, connCh, progCh, done := m.logs, m.connCh, m.progCh, m.done
 	go func() {
-		err := engine.Execute(cfg, cmd, ids, engine.Hooks{
-			Sink: func(line string) { m.logs <- line },
+		err := engine.Execute(runCtx, cfg, cmd, ids, engine.Hooks{
+			Sink: func(line string) {
+				select {
+				case logs <- line:
+				case <-abort:
+				}
+			},
 			OnConnect: func(info monitor.ConnInfo) {
 				select {
-				case m.connCh <- info:
+				case connCh <- info:
 				default: // buffered size 1; OnConnect fires once, so this won't block
 				}
 			},
-			OnProgress: func(p engine.Progress) { m.progCh <- p },
+			OnProgress: func(p engine.Progress) {
+				select {
+				case progCh <- p:
+				case <-abort:
+				}
+			},
 		})
-		m.done <- err
+		select {
+		case done <- err:
+		case <-abort:
+		}
 	}()
 	m.titleK = titleWarding
 	return m, tea.Batch(

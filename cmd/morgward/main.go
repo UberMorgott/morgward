@@ -184,7 +184,7 @@ func main() {
 	// CLI prints the ephemeral key to stdout (the TUI has its own key screen and
 	// leaves OnKey nil). OnKey fires only on the password path; detect/verify do
 	// not generate a key, so it simply won't fire there.
-	if err := engine.Execute(cfg, cmd, stepIDs, engine.Hooks{OnKey: printKeyBlock}); err != nil {
+	if err := engine.Execute(context.Background(), cfg, cmd, stepIDs, engine.Hooks{OnKey: printKeyBlock}); err != nil {
 		fmt.Fprintln(os.Stderr, "\nfailed:", err)
 		os.Exit(1)
 	}

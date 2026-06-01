@@ -4,6 +4,7 @@
 package steps
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 
@@ -49,6 +50,13 @@ type BenchResult struct {
 // Context carries everything a step needs. The SSH client is shared and may be
 // reconnected (A8 reboot) or have its identity switched (A2 strict handoff).
 type Context struct {
+	// Ctx carries run-scoped cancellation. The engine checks it only BETWEEN steps
+	// (never mid-step), so a step's own lockout-capable sequence — SSH lockdown,
+	// firewall, sysctl — always runs to completion once started; cancellation halts
+	// the run at the next safe step boundary, not in the middle of a drop-in. Steps
+	// that perform long polled waits MAY honor it at their own safe points, but most
+	// must NOT. Never nil at runtime (prepare sets it; defaults to context.Background).
+	Ctx      context.Context
 	Cli      *sshx.Client
 	Log      *ui.Logger
 	Cfg      *config.Config
