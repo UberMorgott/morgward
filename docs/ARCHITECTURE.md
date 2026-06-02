@@ -130,8 +130,8 @@ both modes. Full table in [`BROWNFIELD.md`](BROWNFIELD.md#3-per-step-decision-ta
 |----|------|-------------|:---:|--------------------------|
 | PRE | [`precond.go`](../internal/steps/precond.go) | §1 preconditions: apt index, admin user, key, sshusers group | yes | — |
 | A1 | [`a1_firewall.go`](../internal/steps/a1_firewall.go) | Firewall + fail-safe (iptables-nft, v4+v6) | yes | branches on `FirewallMgr`: `ufw`→`ufw allow` SSH+detected ports (allow-only); `firewalld`/`nftables`→defer, `StatusSkip` (untouched); `iptables`/`none`→coexist INPUT DROP, opens detected `ListenPortsTCP/UDP`, **FORWARD untouched**, chains/nat never flushed. [BROWNFIELD §7](BROWNFIELD.md#7-firewall-managers) |
-| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | — |
-| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, AllowGroups, crypto) — **legacy full-run** | yes | adds non-root `SSHKeyUsers` to `sshusers` before AllowGroups (grant-only) |
+| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | snapshots running docker containers + active-not-enabled systemd units before reboot, `docker start`/`systemctl start`s the ones that didn't auto-return after (never `compose up`) |
+| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, crypto; `AllowGroups`+root-lock **strict-only**) — **legacy full-run** | yes | soft preserves image-default access (no lockout); strict adds non-root `SSHKeyUsers` to `sshusers` before AllowGroups (grant-only) |
 | A2.5 | [`a25_cloudinit.go`](../internal/steps/a25_cloudinit.go) | Cloud-init neutralization | no | — |
 | A3 | [`a3_fail2ban.go`](../internal/steps/a3_fail2ban.go) | fail2ban (systemd backend, admin whitelist) | no | — |
 | A4 | [`a4_network.go`](../internal/steps/a4_network.go) | Network tuning (BBR, buffers, I/O sched) + benchmark | no | — |

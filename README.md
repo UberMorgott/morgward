@@ -125,10 +125,14 @@ to the CLI — it is **never written to disk**. Save it yourself, then pass it v
 | `--log-file` | — | write a full run log to this file (default: no file written) |
 | `--assume-yes` | `false` | proceed on a brownfield box (NOT recommended) |
 
-**soft vs strict:** `soft` keeps `PermitRootLogin prohibit-password` and an admin
-console password (recoverable if the SSH key is lost). `strict` sets
-`PermitRootLogin no`, locks the root password, and adds the §A12 OS-hardening
-(module blacklist, `/dev/shm` mount options). SSH is key-only in both modes.
+**soft vs strict:** `soft` (default) applies SSH **crypto** hardening only and
+preserves the box's existing access policy — it does not restrict logins
+(`AllowGroups`), does not change `PermitRootLogin`, and keeps password
+authentication on, so whatever root/password login you had still works. `strict`
+applies the access lockdown (`AllowGroups sshusers`, `PermitRootLogin no`, locks the
+root password — SSH becomes key-only) and adds the §A12 OS-hardening (module
+blacklist, `/dev/shm` mount options). The lockdown is also available on demand via
+the `A2-danger` step / TUI security menu without switching to strict.
 
 ## Build
 

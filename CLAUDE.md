@@ -101,9 +101,28 @@ path → check the other.
 - **`sshx.Client` is not concurrency-safe.** `monitor` dials its **own** SSH session
   for metrics rather than sharing the engine's client.
 
-- **Modes:** `soft` (default) keeps a console-password fallback (`PermitRootLogin
-  prohibit-password`, root not locked); `strict` locks root password, sets
-  `PermitRootLogin no`, adds §A12 OS-hardening. SSH is key-only in both.
+- **Modes — soft never locks access (A2 fix).** `soft` (default) applies SSH
+  **crypto** hardening only and PRESERVES the image-default access policy: it does
+  NOT write `AllowGroups sshusers`, does NOT override `PermitRootLogin`, keeps
+  `PasswordAuthentication yes`, and never locks root. Whatever root/password login
+  the box already had survives a soft `run`. The access lockdown
+  (`AllowGroups sshusers` + `PermitRootLogin no` + `passwd -l root`) is **strict-only**
+  (and the opt-in `A2-danger` step / TUI security menu). Driven by `build99(strict)`:
+  the `PermitRootLogin no\nAllowGroups sshusers` block is emitted ONLY when `strict`.
+  Don't regress: soft `run` must leave a brownfield operator able to log in exactly
+  as before. (`preserveKeyUsers`→sshusers is therefore gated on `strict` too — soft
+  has no AllowGroups to satisfy.) `strict` additionally adds §A12 OS-hardening.
+
+- **A8 restores running services it reboots (brownfield).** A8's reboot bounces a
+  brownfield box; services without auto-start (docker `restart: no`, systemd units
+  active-but-not-enabled) would stay down. Gated on `!Greenfield`, A8 snapshots the
+  running set (docker `ps -q` if `DockerSeen` + active non-enabled `.service` units)
+  **before** the reboot and after reconnect `docker start` / `systemctl start`s the
+  ones that didn't return. Uses **`docker start`** (same container, no recreate) —
+  NEVER `docker compose up` (recreate surfaces latent operator-config bugs, e.g. a
+  `postgres:18` PGDATA-layout guard). Restore failure is surfaced, NEVER `StatusFail`
+  (a down operator service must not abort the run or trip ssh-revert). Greenfield path
+  is byte-identical.
 
 - **Secrets:** read from env `VPS_PASSWORD` / `VPS_HOST` when flags omitted; password
   is cleared after key auth works and never written to the log file.

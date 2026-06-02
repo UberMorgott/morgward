@@ -19,13 +19,16 @@ import (
 type A2SSH struct{}
 
 func (A2SSH) ID() string    { return "A2" }
-func (A2SSH) Title() string { return "SSH crypto hardening (drop-ins, AllowGroups, crypto)" }
+func (A2SSH) Title() string {
+	return "SSH crypto hardening (drop-ins, crypto; AllowGroups+root-lock in strict)"
+}
 
 // conf00 builds 00-hardening.conf. In strict mode SSH is key-only
 // (PasswordAuthentication no); in soft mode password login STAYS ENABLED — the
 // explicit `yes` here OVERRIDES the image's cloud-init 50-cloud-init.conf, which
-// ships PasswordAuthentication no. (PermitRootLogin is set separately in build99:
-// prohibit-password in soft, so root remains key-only either way.)
+// ships PasswordAuthentication no. Soft preserves the image-default access policy
+// (no AllowGroups, no PermitRootLogin override — see build99); only strict applies
+// the access lockdown.
 func conf00(strict bool) string {
 	pwAuth := "yes"
 	if strict {
@@ -42,8 +45,10 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 
 	// 0. Brownfield coexistence: add existing key users to sshusers BEFORE the
 	// AllowGroups sshusers drop-in takes effect, so we never lock out a user that
-	// already has a working key. Additive only (never lockout-capable).
-	if !ctx.Facts.Greenfield {
+	// already has a working key. Additive only (never lockout-capable). Only needed
+	// in strict mode, which is the only mode that writes AllowGroups sshusers; soft
+	// leaves access image-default, so adding group members there is pointless.
+	if strict && !ctx.Facts.Greenfield {
 		if script, added := preserveKeyUsers(ctx.Facts.SSHKeyUsers); len(added) > 0 {
 			ctx.Cli.Sudo(script)
 			ctx.Log.Detail("added existing key users to sshusers: %v", added)
@@ -403,22 +408,21 @@ func effectivePolicy(ctx *Context) string {
 
 // build99 assembles 99-hardening.conf with version-conditional tokens.
 //
-// LEGACY (A2SSH): ALWAYS emits AllowGroups sshusers and a PermitRootLogin line
-// (no in strict, prohibit-password otherwise). The split steps use safe99 /
-// danger99 instead so the default path leaves access policy untouched.
+// LEGACY (A2SSH): in SOFT mode it emits crypto + session knobs ONLY, leaving the
+// image-default access policy intact (NO AllowGroups, NO PermitRootLogin override)
+// — so the default `run` can never lock the operator out. STRICT mode additionally
+// emits the access lockdown (PermitRootLogin no + AllowGroups sshusers). The split
+// steps use safe99 / danger99 to carve the same boundary.
 func build99(ctx *Context, strict bool) string {
 	var b strings.Builder
-	rootPolicy := "prohibit-password"
-	if strict {
-		rootPolicy = "no"
-	}
-	fmt.Fprintf(&b, "PermitRootLogin %s\n", rootPolicy)
 	b.WriteString(`MaxAuthTries 3
 LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
-AllowGroups sshusers
 `)
+	if strict {
+		b.WriteString("PermitRootLogin no\nAllowGroups sshusers\n")
+	}
 	b.WriteString(cryptoBlock(ctx))
 	return b.String()
 }

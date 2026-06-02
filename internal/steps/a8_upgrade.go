@@ -76,6 +76,30 @@ exit $__rc`)
 	if pre == "" {
 		return StatusFail, "could not read boot_id before reboot", fmt.Errorf("boot_id unreadable")
 	}
+
+	// BROWNFIELD service snapshot — capture what is RUNNING-but-not-auto-started
+	// right before the reboot, so we can restore anything our own reboot took down.
+	// Greenfield stays byte-identical: nothing below runs. Both probes are
+	// best-effort — a parse/probe miss logs a Detail and leaves the slice empty;
+	// they NEVER fail A8 or block the reboot.
+	var snapContainers, snapUnits []string
+	if !ctx.Facts.Greenfield {
+		if ctx.Facts.DockerSeen {
+			ps := ctx.Cli.Sudo(dockerSnapshotScript())
+			if ps.OK() {
+				snapContainers = fields(ps.Stdout)
+			} else {
+				ctx.Log.Detail("docker snapshot skipped: %s", firstLine(ps.Stderr))
+			}
+		}
+		u := ctx.Cli.Sudo(systemdSnapshotScript())
+		if u.OK() {
+			snapUnits = fields(u.Stdout)
+		} else {
+			ctx.Log.Detail("systemd snapshot skipped: %s", firstLine(u.Stderr))
+		}
+	}
+
 	ctx.Log.Detail("rebooting (pre boot_id %s)…", short(pre))
 	// `reboot` drops the connection; ignore the resulting transport error.
 	ctx.Cli.Sudo("(sleep 1; systemctl reboot) >/dev/null 2>&1 &")
@@ -95,8 +119,111 @@ exit $__rc`)
 	if fwOK != "ok" {
 		return StatusFail, "firewall not loaded after reboot (boot default-ACCEPT?)", fmt.Errorf("post-reboot firewall missing")
 	}
-	return StatusOK, fmt.Sprintf("rebooted (new boot_id %s, system %s), firewall reloaded UPGRADED_COUNT=%s",
-		short(newID), health, upCount), nil
+
+	// BROWNFIELD service restore — bring back exactly the containers/units our
+	// reboot bounced (running-but-not-auto-started). We `docker start` the SAME
+	// container (never `docker compose`/recreate) and `systemctl start` the unit.
+	// A service that fails to come back is surfaced (WARN-style Detail) but NEVER
+	// turns A8 into StatusFail: a down operator service must not abort the run or
+	// trip ssh-revert. Greenfield path skips this entirely (detail stays unchanged).
+	tail := ""
+	if !ctx.Facts.Greenfield && (len(snapContainers) > 0 || len(snapUnits) > 0) {
+		restored, failed := a.restoreServices(ctx, snapContainers, snapUnits)
+		tail = fmt.Sprintf("; restored %d svc/ctr, %d failed", restored, len(failed))
+	}
+
+	return StatusOK, fmt.Sprintf("rebooted (new boot_id %s, system %s), firewall reloaded UPGRADED_COUNT=%s%s",
+		short(newID), health, upCount, tail), nil
+}
+
+// restoreServices restarts the snapshot containers/units that did not come back
+// on their own after the reboot, and reports how many were restored vs. failed.
+// Best-effort throughout; the caller never escalates a failure to StatusFail.
+func (A8Upgrade) restoreServices(ctx *Context, containers, units []string) (restored int, failed []string) {
+	// Docker: collect snapshot ids that are not running now, start them in one
+	// call, then re-inspect to see which actually came up.
+	var down []string
+	for _, id := range containers {
+		if ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s 2>/dev/null", shellQuote(id))).Out() != "true" {
+			down = append(down, id)
+		}
+	}
+	if len(down) > 0 {
+		ctx.Cli.Sudo(dockerStartScript(down))
+		for _, id := range down {
+			if ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s 2>/dev/null", shellQuote(id))).Out() == "true" {
+				restored++
+				continue
+			}
+			name := ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.Name}}' %s 2>/dev/null", shellQuote(id))).Out()
+			failed = append(failed, "container "+strings.TrimPrefix(name, "/"))
+		}
+	}
+
+	// systemd: start each snapshot unit that is no longer active, then re-check.
+	for _, unit := range units {
+		if ctx.Cli.Sudo(fmt.Sprintf("systemctl is-active %s 2>/dev/null", shellQuote(unit))).Out() == "active" {
+			continue
+		}
+		ctx.Cli.Sudo(fmt.Sprintf("systemctl start %s 2>/dev/null || true", shellQuote(unit)))
+		if ctx.Cli.Sudo(fmt.Sprintf("systemctl is-active %s 2>/dev/null", shellQuote(unit))).Out() == "active" {
+			restored++
+		} else {
+			failed = append(failed, "unit "+unit)
+		}
+	}
+
+	if restored > 0 {
+		ctx.Log.Detail("post-reboot: restored %d bounced service(s)/container(s)", restored)
+	}
+	if len(failed) > 0 {
+		ctx.Log.Detail("WARN post-reboot: did NOT restart: %s", strings.Join(failed, ", "))
+	}
+	return restored, failed
+}
+
+// dockerSnapshotScript lists the IDs of currently-running containers (full,
+// non-truncated). Output is parsed with fields() into a []string.
+func dockerSnapshotScript() string {
+	return "docker ps -q --no-trunc 2>/dev/null || true"
+}
+
+// systemdSnapshotScript lists system .service units that are RUNNING but NOT
+// enabled (no auto-start) — exactly the units a reboot would silently drop.
+// Heredoc-free (the script is piped to bash over stdin; §A1 stdin caveat): the
+// per-unit is-enabled filter keeps only units whose state is neither "enabled"
+// nor "enabled-runtime". Emits kept unit names one per line.
+func systemdSnapshotScript() string {
+	return `for u in $(systemctl list-units --type=service --state=running --no-legend --plain --no-pager 2>/dev/null | awk '{print $1}'); do
+  st=$(systemctl is-enabled "$u" 2>/dev/null)
+  if [ "$st" != "enabled" ] && [ "$st" != "enabled-runtime" ]; then
+    printf '%s\n' "$u"
+  fi
+done`
+}
+
+// dockerStartScript starts the given container ids in a single `docker start`
+// (the SAME containers — never `docker compose`/recreate). Empty input yields
+// a no-op so the caller need not special-case it.
+func dockerStartScript(ids []string) string {
+	if len(ids) == 0 {
+		return "true"
+	}
+	quoted := make([]string, len(ids))
+	for i, id := range ids {
+		quoted[i] = shellQuote(id)
+	}
+	return "docker start " + strings.Join(quoted, " ") + " >/dev/null 2>&1 || true"
+}
+
+// fields splits whitespace/newline-separated command output into a slice with
+// empties dropped (strings.Fields semantics, named for call-site clarity).
+func fields(s string) []string {
+	f := strings.Fields(s)
+	if len(f) == 0 {
+		return nil
+	}
+	return f
 }
 
 func short(s string) string {
