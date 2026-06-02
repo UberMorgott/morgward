@@ -78,24 +78,16 @@ func equals(want string) func(string) bool {
 }
 
 // Run executes the matrix and prints an aligned result table (one row per check).
-func Run(c *sshx.Client, log *ui.Logger, port int, mode string) Result {
-	rootCheck := "permitrootlogin no"
-	if mode == "soft" {
-		rootCheck = "prohibit-password"
-	}
-	// Root-login / PasswordAuthentication policy is INFORMATIONAL on the default
-	// (safe) path, not a lockout assert. The default TUI path (A2-safe) hardens SSH
-	// crypto only and leaves the image's access policy untouched — root login stays
-	// at the image default (prohibit-password) and PasswordAuthentication is left to
-	// the image, so neither is something we force. Only the opt-in lockdown
-	// (A2-danger) sets PermitRootLogin no + PasswordAuthentication no; the CLI strict
-	// mode still does too. We therefore report the observed policy (PASS when it
-	// matches the mode-expected value, WARN otherwise) but never abort the run on it —
-	// a softer policy than expected is a deliberate default, not a lockout.
-	//
-	// PasswordAuthentication is only enforced (key-only) by strict / A2-danger; the
-	// safe path leaves the image default untouched, so there is intentionally no
-	// PasswordAuthentication assert here.
+func Run(c *sshx.Client, log *ui.Logger, port int) Result {
+	// Root-login policy is INFORMATIONAL, not a lockout assert. The default path
+	// (A2 / A2-safe) hardens SSH crypto only and leaves the image's access policy
+	// untouched — root login stays at the image default (prohibit-password) and
+	// PasswordAuthentication is left to the image, so neither is something we force.
+	// Only the opt-in lockdown (A2-danger) sets PermitRootLogin no +
+	// PasswordAuthentication no. We therefore report the observed policy (PASS when
+	// it matches the image default, WARN otherwise) but never abort the run on it —
+	// a tighter or looser policy is not a lockout.
+	rootCheck := "prohibit-password"
 	checks := []Check{
 		{Name: "SSH syntax", Cmd: "sshd -t && echo ok", Want: equals("ok"), Lockout: true},
 		{Name: "SSH effective policy", Cmd: "sshd -T | grep -i permitrootlogin", Want: contains(rootCheck), Lockout: false},
@@ -116,13 +108,13 @@ func Run(c *sshx.Client, log *ui.Logger, port int, mode string) Result {
 			Cmd:     "if command -v auditctl >/dev/null 2>&1; then auditctl -l 2>/dev/null | grep -q sshd_config && echo ok; else echo __noauditd__; fi",
 			Want:    equals("ok"),
 			Lockout: false,
-			// The auditd package is installed by strict (§A12); §A10 then loads the
-			// sshd_config watch rule. After a full run on a strict box this passes;
-			// where auditd is absent (e.g. a soft box that skipped §A12) the auditctl
-			// binary is missing, so report the row as a skip-with-reason, not a warning.
+			// §A10 installs auditd and loads the sshd_config watch rule, so after a
+			// full run this passes. Where auditd is absent (e.g. §A10 was skipped or
+			// never ran) the auditctl binary is missing, so report the row as a
+			// skip-with-reason, not a warning.
 			NA: func(out string) (string, bool) {
 				if strings.TrimSpace(out) == "__noauditd__" {
-					return "auditd not installed (skipped §A12 hardening)", true
+					return "auditd not installed", true
 				}
 				return "", false
 			},

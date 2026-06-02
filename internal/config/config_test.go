@@ -12,7 +12,6 @@ func baseValid() *Config {
 		Host:      "1.2.3.4",
 		User:      "root",
 		Password:  "pw",
-		Mode:      ModeSoft,
 		AdminUser: "vpsadmin",
 	}
 }

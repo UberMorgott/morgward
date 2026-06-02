@@ -3,35 +3,33 @@ package steps
 import (
 	"fmt"
 	"strings"
-
-	"github.com/UberMorgott/morgward/internal/config"
 )
 
 // A2SSH implements §A2: SSH crypto hardening via drop-ins, version-conditional
 // KexAlgorithms / PerSourcePenalties, minimal host-key handling, ssh-revert
-// fail-safe, second-session key-only verify, and the strict-mode root lock +
-// executor handoff to the admin user.
+// fail-safe, second-session key-only verify, and the executor handoff to the
+// admin user.
 //
-// LEGACY full-run step (kept for CLI `run --mode` back-compat). The TUI no longer
-// uses it; instead it runs A2Safe (crypto only, image-default access) and,
-// opt-in, A2Danger (the lockdown). Do NOT change A2SSH behavior — the split
-// steps below carry the new default-no-lockout behavior.
+// CRYPTO-ONLY full-run step: it applies the cipher/KEX/MAC/host-key/forwarding
+// hardening and KEEPS the image-default access policy (no AllowGroups, no
+// PermitRootLogin override, password login left enabled) — so the default `run`
+// can NEVER lock the operator out. The opt-in access lockdown lives in A2Danger
+// (the TUI security menu); A2Safe is its crypto-only twin for the split path.
 type A2SSH struct{}
 
 func (A2SSH) ID() string    { return "A2" }
 func (A2SSH) Title() string {
-	return "SSH crypto hardening (drop-ins, crypto; AllowGroups+root-lock in strict)"
+	return "SSH crypto hardening (drop-ins, crypto; access policy unchanged)"
 }
 
-// conf00 builds 00-hardening.conf. In strict mode SSH is key-only
-// (PasswordAuthentication no); in soft mode password login STAYS ENABLED — the
+// conf00 builds 00-hardening.conf. When key-only (strict lockdown) SSH is
+// PasswordAuthentication no; otherwise password login STAYS ENABLED — the
 // explicit `yes` here OVERRIDES the image's cloud-init 50-cloud-init.conf, which
-// ships PasswordAuthentication no. Soft preserves the image-default access policy
-// (no AllowGroups, no PermitRootLogin override — see build99); only strict applies
-// the access lockdown.
-func conf00(strict bool) string {
+// ships PasswordAuthentication no. A2SSH passes false (image-default access
+// preserved); buildDangerWrite passes true (the opt-in lockdown).
+func conf00(keyOnly bool) string {
 	pwAuth := "yes"
-	if strict {
+	if keyOnly {
 		pwAuth = "no"
 	}
 	return fmt.Sprintf("PasswordAuthentication %s\nKbdInteractiveAuthentication %s\n", pwAuth, pwAuth)
@@ -39,36 +37,18 @@ func conf00(strict bool) string {
 
 func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 	admin := ctx.Cfg.AdminUser
-	strict := ctx.Cfg.Mode == config.ModeStrict
 
-	conf99 := build99(ctx, strict)
-
-	// 0. Brownfield coexistence: add existing key users to sshusers BEFORE the
-	// AllowGroups sshusers drop-in takes effect, so we never lock out a user that
-	// already has a working key. Additive only (never lockout-capable). Only needed
-	// in strict mode, which is the only mode that writes AllowGroups sshusers; soft
-	// leaves access image-default, so adding group members there is pointless.
-	if strict && !ctx.Facts.Greenfield {
-		if script, added := preserveKeyUsers(ctx.Facts.SSHKeyUsers); len(added) > 0 {
-			ctx.Cli.Sudo(script)
-			ctx.Log.Detail("added existing key users to sshusers: %v", added)
-		}
-	}
+	conf99 := build99(ctx)
 
 	// 1. Write drop-ins. mkdir the cloud-init dir FIRST so any putFile targeting it
 	// (and its chmod) succeeds even on a box without cloud-init pre-provisioned.
-	// Strict-only: drop the cloud-init ssh_pwauth:false override + neutralize the
-	// stock 50-cloud-init PasswordAuthentication. Soft leaves cloud-init alone so
-	// password login remains available.
+	// Crypto-only: password login stays enabled (conf00(false) emits
+	// PasswordAuthentication yes and cloudInitPwAuthOn re-enables the stock
+	// 50-cloud-init override) so the default run can never lock the operator out.
 	write := "mkdir -p /etc/cloud/cloud.cfg.d\n" +
-		putFile("/etc/ssh/sshd_config.d/00-hardening.conf", conf00(strict), "0644") +
-		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", conf99, "0644")
-	if strict {
-		write += putFile("/etc/cloud/cloud.cfg.d/99-disable-passwords.cfg", "ssh_pwauth: false\n", "0644") +
-			cloudInitPwAuthOff()
-	} else {
-		write += cloudInitPwAuthOn()
-	}
+		putFile("/etc/ssh/sshd_config.d/00-hardening.conf", conf00(false), "0644") +
+		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", conf99, "0644") +
+		cloudInitPwAuthOn()
 	if r := ctx.Cli.Sudo(write); r.RC != 0 {
 		return StatusFail, "writing sshd drop-ins failed: " + firstLine(r.Stderr), fmt.Errorf("sshd config write failed")
 	}
@@ -96,13 +76,9 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 	// Verify succeeded — disarm ssh-revert.
 	disarmSSHRevert(ctx)
 
-	// 6. Strict: lock root password ONLY after admin login proven.
-	if strict {
-		ctx.Cli.Sudo("passwd -l root")
-	}
-
-	// 7. Executor handoff: switch the controller to admin + key + sudo. In strict
-	// mode root SSH is now closed; in soft mode this just normalizes the path.
+	// 6. Executor handoff: switch the controller to admin + key + sudo. Access
+	// policy is unchanged (root SSH stays at the image default), so this just
+	// normalizes the executor path.
 	if ctx.Cli.User == "root" {
 		if err := ctx.Cli.SwitchUser(admin); err != nil {
 			return StatusFail, "executor handoff to admin failed: " + err.Error(), fmt.Errorf("handoff failed")
@@ -406,23 +382,18 @@ func effectivePolicy(ctx *Context) string {
 	return ctx.Cli.Sudo(`sshd -T 2>/dev/null | grep -Ei 'permitrootlogin|passwordauthentication' | tr '\n' ' '`).Out()
 }
 
-// build99 assembles 99-hardening.conf with version-conditional tokens.
+// build99 assembles 99-hardening.conf with version-conditional tokens for A2SSH.
 //
-// LEGACY (A2SSH): in SOFT mode it emits crypto + session knobs ONLY, leaving the
-// image-default access policy intact (NO AllowGroups, NO PermitRootLogin override)
-// — so the default `run` can never lock the operator out. STRICT mode additionally
-// emits the access lockdown (PermitRootLogin no + AllowGroups sshusers). The split
-// steps use safe99 / danger99 to carve the same boundary.
-func build99(ctx *Context, strict bool) string {
+// It emits crypto + session knobs ONLY, leaving the image-default access policy
+// intact (NO AllowGroups, NO PermitRootLogin override) — so the default `run` can
+// never lock the operator out. The opt-in lockdown lives in A2Danger (danger99).
+func build99(ctx *Context) string {
 	var b strings.Builder
 	b.WriteString(`MaxAuthTries 3
 LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
 `)
-	if strict {
-		b.WriteString("PermitRootLogin no\nAllowGroups sshusers\n")
-	}
 	b.WriteString(cryptoBlock(ctx))
 	return b.String()
 }

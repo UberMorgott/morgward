@@ -1,6 +1,6 @@
 // Package tweaks audits morgward's own per-tweak changes. It builds a probe
-// registry filtered to the box (mode + Ubuntu version), runs every probe in a
-// single privileged round-trip, and scores each via its Want predicate. It is
+// registry filtered to the box (Ubuntu version), runs every probe in a single
+// privileged round-trip, and scores each via its Want predicate. It is
 // honest about scope: it audits the tweaks morgward applies, not arbitrary
 // system state. View-only — no rollback.
 package tweaks
@@ -80,10 +80,9 @@ func pkgInstalled(pkg string) string {
 	return fmt.Sprintf("dpkg-query -W -f='${Status}' %s 2>/dev/null | grep -q 'install ok installed' && echo 1 || echo 0", pkg)
 }
 
-// Registry returns the probes that apply to this box, filtered by mode and
-// Ubuntu version so a tweak that never applies here is never shown as missing.
+// Registry returns the probes that apply to this box, filtered by Ubuntu version
+// so a tweak that never applies here is never shown as missing.
 func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
-	strict := cfg.Mode == config.ModeStrict
 	port := cfg.Port
 	if port == 0 {
 		port = 22
@@ -113,23 +112,17 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: "systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null", Want: has("active")},
 	}
 
-	// PermitRootLogin + PasswordAuthentication are mode-dependent AND informational:
-	// the default (safe) path leaves the image access policy untouched, so an unset
-	// state is expected — only the opt-in A2-danger lockdown (or CLI strict) sets
-	// PermitRootLogin no / PasswordAuthentication no. The Want predicate still
-	// reflects the mode-expected value (so a locked-down box reads as "applied"),
-	// but Informational tells renderers not to flag a non-match as a failure.
-	rootWant := "prohibit-password"
-	passWant := "yes"
-	if strict {
-		rootWant = "no"
-		passWant = "no"
-	}
+	// PermitRootLogin + PasswordAuthentication are informational: the default path
+	// leaves the image access policy untouched, so an unset state is expected — only
+	// the opt-in A2-danger lockdown sets PermitRootLogin no / PasswordAuthentication
+	// no. The Want predicate reflects the image-default value (so an unchanged box
+	// reads as "applied"), but Informational tells renderers not to flag a non-match
+	// as a failure.
 	ps = append(ps,
 		Probe{ID: "a2.permitroot", Step: "A2", Name: "PermitRootLogin",
-			Cmd: "sshd -T 2>/dev/null | awk '/^permitrootlogin/{print $2}'", Want: eq(rootWant), Informational: true},
+			Cmd: "sshd -T 2>/dev/null | awk '/^permitrootlogin/{print $2}'", Want: eq("prohibit-password"), Informational: true},
 		Probe{ID: "a2.passauth", Step: "A2", Name: "PasswordAuthentication",
-			Cmd: "sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}'", Want: eq(passWant), Informational: true},
+			Cmd: "sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}'", Want: eq("yes"), Informational: true},
 	)
 
 	if facts.Is2604 {

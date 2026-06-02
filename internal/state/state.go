@@ -8,7 +8,6 @@ package state
 type Checkpoint struct {
 	Host       string            `json:"host"`
 	AdminUser  string            `json:"admin_user"`
-	Mode       string            `json:"mode"`
 	KeyPath    string            `json:"key_path"`
 	Completed  map[string]string `json:"completed"` // stepID -> status (OK/SKIP)
 	BootID     string            `json:"boot_id"`

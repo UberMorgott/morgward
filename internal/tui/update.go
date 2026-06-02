@@ -715,13 +715,12 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		User:      strings.TrimSpace(m.inputs[fUser].Value()),
 		Password:  m.inputs[fPass].Value(),
 		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
-		Mode:      m.mode,
 		AdminUser: defaultAdminUser,
 		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
 		Lang:      m.langCode(), // engine-streamed messages follow the active UI language
 	}
 	if err := cfg.Validate(); err != nil {
-		m.errMsg = m.localizeValidateErr(err, cfg)
+		m.errMsg = m.localizeValidateErr(err)
 		return m, nil
 	}
 	if !validHost(cfg.Host) {
@@ -746,12 +745,12 @@ func (m model) start() (tea.Model, tea.Cmd) {
 	}
 	m.phase = phaseRun
 	m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
-	// A full `run` changes SSH auth policy — show the operator a mode-aware notice up
-	// front (strict: password login OFF, key-only; soft: password stays ON + key added)
-	// (and again in the finished tail) how to log in afterward. detect/verify don't
-	// change auth, so the warning would be misleading there.
+	// A full `run` hardens SSH crypto but leaves access policy at the image default —
+	// show the operator an info notice up front (password login STAYS ON + a key is
+	// also generated) and again in the finished tail. detect/verify don't run the
+	// step, so the notice would be misleading there.
 	if m.command == "run" {
-		m.content = m.pwOffWarning() + "\n\n"
+		m.content = t(m.lang, kPwOnInfo) + "\n\n"
 		m.vp.SetContent(m.wrapped())
 	}
 	// Start the live elapsed timer + spinner heartbeat for the run.
@@ -811,7 +810,7 @@ func (m model) start() (tea.Model, tea.Cmd) {
 // localizeValidateErr maps config.Validate()'s sentinel errors to a localized
 // message for the form's error line, so a RU session never sees raw English. An
 // unmapped error falls back to the generic localized "config error: <text>".
-func (m model) localizeValidateErr(err error, cfg *config.Config) string {
+func (m model) localizeValidateErr(err error) string {
 	switch {
 	case errors.Is(err, config.ErrHostRequired):
 		return t(m.lang, kErrHostRequired)
@@ -819,8 +818,6 @@ func (m model) localizeValidateErr(err error, cfg *config.Config) string {
 		return t(m.lang, kErrUserRequired)
 	case errors.Is(err, config.ErrAuthRequired):
 		return t(m.lang, kErrAuthRequired)
-	case errors.Is(err, config.ErrBadMode):
-		return fmt.Sprintf(t(m.lang, kErrBadMode), cfg.Mode)
 	default:
 		return fmt.Sprintf(t(m.lang, kErrValidationFail), err.Error())
 	}

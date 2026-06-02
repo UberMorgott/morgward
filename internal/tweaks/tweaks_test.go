@@ -30,42 +30,33 @@ func ids(ps []Probe) map[string]Probe {
 	return m
 }
 
-func TestRegistryModeFiltering(t *testing.T) {
+func TestRegistryAccessProbes(t *testing.T) {
 	facts := &detect.Facts{Is2604: false, Is2404: true, HasIPv6: false}
 
-	soft := ids(Registry(facts, &config.Config{Mode: config.ModeSoft}))
-	strict := ids(Registry(facts, &config.Config{Mode: config.ModeStrict}))
+	ps := ids(Registry(facts, &config.Config{}))
 
-	// Locked decision: the strict-only A10 extras are dropped entirely — absent in
-	// BOTH modes now.
+	// The dropped (formerly strict-only) A10 extras must be absent.
 	for _, id := range []string{"a10.blacklist", "a10.devshm"} {
-		if _, ok := soft[id]; ok {
-			t.Errorf("soft registry must not contain dropped probe %s", id)
-		}
-		if _, ok := strict[id]; ok {
-			t.Errorf("strict registry must not contain dropped probe %s", id)
+		if _, ok := ps[id]; ok {
+			t.Errorf("registry must not contain dropped probe %s", id)
 		}
 	}
 
-	// password-auth probe present in both, but its Want differs by mode.
-	sp, ok := soft["a2.passauth"]
+	// The access-policy probes reflect the image default and are Informational.
+	pa, ok := ps["a2.passauth"]
 	if !ok {
-		t.Fatal("soft must contain a2.passauth")
+		t.Fatal("registry must contain a2.passauth")
 	}
-	stp := strict["a2.passauth"]
-	if !sp.Want("yes") {
-		t.Error("soft a2.passauth should accept yes")
+	if !pa.Want("yes") {
+		t.Error("a2.passauth should accept the image default (yes)")
 	}
-	if stp.Want("yes") {
-		t.Error("strict a2.passauth should reject yes")
-	}
-	if !stp.Want("no") {
-		t.Error("strict a2.passauth should accept no")
+	if !pa.Informational {
+		t.Error("a2.passauth must be Informational")
 	}
 }
 
 func TestRegistryVersionFiltering(t *testing.T) {
-	cfg := &config.Config{Mode: config.ModeSoft}
+	cfg := &config.Config{}
 
 	noble := ids(Registry(&detect.Facts{Is2404: true}, cfg))
 	resolute := ids(Registry(&detect.Facts{Is2604: true}, cfg))
@@ -79,7 +70,7 @@ func TestRegistryVersionFiltering(t *testing.T) {
 }
 
 func TestRegistryIPv6Filtering(t *testing.T) {
-	cfg := &config.Config{Mode: config.ModeSoft}
+	cfg := &config.Config{}
 	no6 := ids(Registry(&detect.Facts{Is2404: true, HasIPv6: false}, cfg))
 	if _, ok := no6["a1.rules_v6"]; ok {
 		t.Error("registry must omit a1.rules_v6 when HasIPv6 is false")
@@ -95,7 +86,7 @@ func TestRegistryIPv6Filtering(t *testing.T) {
 // so the audit does NOT render them as "не применён"/red until A2-danger.
 func TestA2SafeProbesInformational(t *testing.T) {
 	facts := &detect.Facts{Is2404: true}
-	ps := ids(Registry(facts, &config.Config{Mode: config.ModeSoft, Port: 22}))
+	ps := ids(Registry(facts, &config.Config{Port: 22}))
 	for _, id := range []string{"a2.allowgroups", "a2.permitroot", "a2.passauth"} {
 		p, ok := ps[id]
 		if !ok {
@@ -108,16 +99,14 @@ func TestA2SafeProbesInformational(t *testing.T) {
 	}
 }
 
-// TestA10StrictExtrasRemoved guards the locked decision: the strict-only A10
-// extras (module blacklist, /dev/shm) are dropped entirely, in BOTH modes.
-func TestA10StrictExtrasRemoved(t *testing.T) {
+// TestA10ExtrasRemoved guards the locked decision: the former strict-only A10
+// extras (module blacklist, /dev/shm) are dropped entirely.
+func TestA10ExtrasRemoved(t *testing.T) {
 	facts := &detect.Facts{Is2404: true}
-	for _, mode := range []config.Mode{config.ModeSoft, config.ModeStrict} {
-		ps := ids(Registry(facts, &config.Config{Mode: mode, Port: 22}))
-		for _, id := range []string{"a10.blacklist", "a10.devshm"} {
-			if _, ok := ps[id]; ok {
-				t.Errorf("mode=%s: strict-only probe %q must be removed", mode, id)
-			}
+	ps := ids(Registry(facts, &config.Config{Port: 22}))
+	for _, id := range []string{"a10.blacklist", "a10.devshm"} {
+		if _, ok := ps[id]; ok {
+			t.Errorf("dropped probe %q must be removed", id)
 		}
 	}
 }
@@ -126,7 +115,7 @@ func TestA10StrictExtrasRemoved(t *testing.T) {
 // applies: strict (=1) when not forwarding, loose (=2) when forwarding/routing is
 // active — so a correctly-coexisting box does not report a false failure.
 func TestRpFilterCoexist(t *testing.T) {
-	cfg := &config.Config{Mode: config.ModeSoft, Port: 22}
+	cfg := &config.Config{Port: 22}
 
 	noFwd := ids(Registry(&detect.Facts{Is2404: true, Forwarding: false}, cfg))["a5.rp_filter"]
 	if !noFwd.Want("1") {
@@ -149,7 +138,7 @@ func TestRpFilterCoexist(t *testing.T) {
 // flagged informational (only the access-policy ones are relaxed).
 func TestNonInformationalProbesStayHard(t *testing.T) {
 	facts := &detect.Facts{Is2404: true}
-	ps := ids(Registry(facts, &config.Config{Mode: config.ModeSoft, Port: 22}))
+	ps := ids(Registry(facts, &config.Config{Port: 22}))
 	if p, ok := ps["a1.input_drop"]; !ok || p.Informational {
 		t.Error("a1.input_drop must exist and not be informational")
 	}

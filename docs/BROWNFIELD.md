@@ -174,7 +174,7 @@ morgward detect --host 147.45.79.231 --user root --password XXX
 #   → writes /root/vps-inventory.md (listeners, docker, wg, nat, forwarding, ports kept)
 
 # 2. Apply in coexistence mode (full run on the brownfield box):
-morgward run --host 147.45.79.231 --user root --password XXX --mode soft --assume-yes
+morgward run --host 147.45.79.231 --user root --password XXX --assume-yes
 #   → BROWNFIELD DETECTED banner, then steps apply service-preserving (ports kept,
 #     FORWARD policy left untouched, disk swap kept, existing key users added to sshusers)
 ```
@@ -192,8 +192,9 @@ Gate behavior ([`../internal/engine/engine.go`](../internal/engine/engine.go) `p
 - An **already-hardened** box (≥2 hardening markers) hits the separate **ALREADY
   HARDENED** gate first; use `verify`/`step`, or `--assume-yes` to force a full re-run.
 
-`--mode soft` (default) keeps a console-password fallback; `--mode strict` adds the
-root-lock + §A12 OS hardening. Coexistence is orthogonal to mode.
+A `run` is crypto-only and keeps a console-password fallback; it never locks you
+out. The opt-in access lockdown (key-only, root blocked) lives in the `A2-danger`
+step / TUI security menu. Coexistence is orthogonal to that.
 
 ## 5. Residual manual notes
 
@@ -228,7 +229,7 @@ After a coexistence run, confirm services survived:
 
 ```sh
 morgward verify --host 147.45.79.231 --user vpsadmin --key ./id_ed25519_...
-#   (after A2, reconnect as the admin user — root SSH may be closed in strict)
+#   (after A2 the executor switches to the admin user; root SSH is closed only by the opt-in A2-danger lockdown)
 ```
 
 On the box: detected listeners still bound (`ss -tulpnH`), docker/wg traffic still

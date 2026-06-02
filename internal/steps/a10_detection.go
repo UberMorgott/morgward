@@ -1,10 +1,7 @@
 package steps
 
-import "github.com/UberMorgott/morgward/internal/config"
-
 // A10Detection implements §A10 (auditd forensic trail + successful-login PAM
-// notify), §A11.1 (inbound-drop logging), and the strict-only §A12.1 module
-// blacklist + §A12.2 /dev/shm mount hardening.
+// notify) and §A11.1 (inbound-drop logging).
 type A10Detection struct{}
 
 func (A10Detection) ID() string    { return "A10" }
@@ -33,16 +30,6 @@ fi
 exit 0
 `
 
-const moduleBlacklist = `install dccp /bin/true
-install sctp /bin/true
-install rds /bin/true
-install tipc /bin/true
-install cramfs /bin/true
-install freevxfs /bin/true
-install jffs2 /bin/true
-install usb-storage /bin/true
-`
-
 func (a A10Detection) Run(ctx *Context) (Status, string, error) {
 	port := ctx.Cfg.Port
 
@@ -62,14 +49,6 @@ mkdir -p /etc/audit/rules.d
 ip6tables -C INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt6-drop-in: " --log-level 4 2>/dev/null || ip6tables -A INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt6-drop-in: " --log-level 4
 `
 
-	// A12 (strict only): module blacklist + /dev/shm hardening.
-	if ctx.Cfg.Mode == config.ModeStrict {
-		script += putFile("/etc/modprobe.d/99-vps-blacklist.conf", moduleBlacklist, "0644")
-		script += `grep -q '/dev/shm' /etc/fstab || echo 'tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0' >> /etc/fstab
-mount -o remount /dev/shm 2>/dev/null || true
-`
-	}
-
 	// Re-save firewall (A11.1 changed the ruleset) and re-open SSH port marker.
 	_ = port
 	script += "netfilter-persistent save >/dev/null 2>&1\n"
@@ -79,12 +58,8 @@ mount -o remount /dev/shm 2>/dev/null || true
 	}
 
 	auditOK := ctx.Cli.Sudo("auditctl -l 2>/dev/null | grep -q sshd_config && echo ok").Out()
-	extra := ""
-	if ctx.Cfg.Mode == config.ModeStrict {
-		extra = ", module blacklist + /dev/shm hardened"
-	}
 	if auditOK != "ok" {
 		ctx.Log.Warn("auditd rules not confirmed loaded")
 	}
-	return StatusOK, "auditd + login-notify + inbound-drop logging active" + extra, nil
+	return StatusOK, "auditd + login-notify + inbound-drop logging active", nil
 }

@@ -115,7 +115,7 @@ func TestRevertA67SwapScopedToMarker(t *testing.T) {
 }
 
 // TestRevertA2Faithful guards F07: the A2 revert must fully undo the
-// A2Danger/strict apply — remove the cloud-init 99-disable-passwords.cfg, restore
+// A2Danger lockdown apply — remove the cloud-init 99-disable-passwords.cfg, restore
 // 50-cloud-init.conf PasswordAuthentication, and unlock root — not just drop the
 // sshd drop-ins. Each is access-OPENING so the OpensAccess invariant still holds.
 func TestRevertA2Faithful(t *testing.T) {

@@ -20,7 +20,7 @@ binary and point it at a server.
 3. **Or run from the CLI** in one line:
 
    ```sh
-   morgward --host 1.2.3.4 --user root --password 'XXX' --mode soft
+   morgward --host 1.2.3.4 --user root --password 'XXX'
    ```
 
 On the password path morgward generates a fresh ed25519 SSH key, pushes it to the
@@ -36,7 +36,7 @@ morgward applies the runbook's full Phase A hardening + tuning sequence, then ru
 §1 preconditions → A1 firewall → A8 full-upgrade + reboot → A2 SSH crypto →
 A2.5 cloud-init → A3 fail2ban → A4 network (BBR + benchmark) → A5 kernel →
 A6 maintenance → A6.5 DNS → A6.7 ZRAM/earlyoom → A7 cleanup → A9 unattended →
-A10 detection (+ A12 OS-hardening in strict) → §V verification matrix
+A10 detection → §V verification matrix
 ```
 
 Highlights:
@@ -119,23 +119,20 @@ generated during a `run` is held in memory and shown once — save it, then pass
 | `--user` | `root` | bootstrap SSH user |
 | `--password` | — | bootstrap password (prompted if omitted and no `--key`; also read from `VPS_PASSWORD`) |
 | `--key` | — | existing private key path (skips key generation) |
-| `--mode` | `soft` | `soft` = SSH crypto only, preserves access; `strict` = access lockdown + OS hardening |
 | `--admin-user` | `vpsadmin` | non-root sudo user to create/verify |
 | `--log-file` | — | write a full run log to this file (default: no file written) |
 | `--assume-yes` | `false` | proceed on a brownfield box (runs in coexistence mode) |
 
-### Modes (soft vs strict)
+### Hardening is crypto-only by default
 
-- **`soft` (default)** applies SSH **crypto** hardening only and **preserves the
-  box's existing access policy**: it does not write `AllowGroups`, does not change
-  `PermitRootLogin`, and keeps password authentication on. A soft run **cannot lock
-  you out** — whatever root/password login you had still works afterward.
-- **`strict`** adds the access lockdown — `AllowGroups sshusers`, `PermitRootLogin
-  no`, and locks the root password (SSH becomes **key-only**) — plus the §A12
-  OS-hardening (kernel-module blacklist, `/dev/shm` mount options).
+A `run` applies SSH **crypto** hardening only and **preserves the box's existing
+access policy**: it does not write `AllowGroups`, does not change `PermitRootLogin`,
+and keeps password authentication on. The default run **cannot lock you out** —
+whatever root/password login you had still works afterward.
 
-The lockdown is also available on demand via the `A2-danger` step / TUI security
-menu, without switching the whole run to strict.
+The access lockdown — `AllowGroups sshusers`, `PermitRootLogin no`, and locking the
+root password (SSH becomes **key-only**) — is **opt-in** via the `A2-danger` step /
+TUI security menu.
 
 ### Self-update
 
@@ -148,8 +145,8 @@ build.
 
 ## Safety notes
 
-- A **soft** run cannot lock you out (see Modes). A **strict** run, or the
-  `A2-danger` step, makes SSH key-only — keep the generated key safe.
+- A default run cannot lock you out (crypto-only, access policy preserved). The
+  opt-in `A2-danger` step makes SSH key-only — keep the generated key safe.
 - On a **brownfield** box, a full `run` is gated behind `--assume-yes` and then runs
   in coexistence mode (see [Fresh vs brownfield](#fresh-vs-brownfield)) rather than
   imposing blind defaults.

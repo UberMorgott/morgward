@@ -545,10 +545,10 @@ func (m model) formRows() []formRow {
 	rows = append(rows, formRow{kind: frDisclosure, text: indent + disStyle.Render(disLabel)})
 
 	rows = append(rows, formRow{kind: frBlank})
-	// The soft/strict Mode selector and the run/detect/verify action selector are
-	// intentionally NOT shown on the landing form: m.mode stays config.ModeSoft and
-	// m.command stays "run" (engine tokens are unaffected). Access lockdown moves to
-	// the Security menu in a later phase.
+	// The run/detect/verify action selector is intentionally NOT shown on the landing
+	// form: m.command stays "run" (engine token unaffected). The default run is
+	// crypto-only and never locks anyone out; the opt-in access lockdown lives in the
+	// Security menu.
 	// Save-log-to-file toggle: a session preference. Writes the full run log to
 	// cfg.LogFile when on, off by default. Canonical tokens on/off; localized
 	// yes/no pill names.

@@ -7,7 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/tweaks"
 )
@@ -267,14 +266,11 @@ func TestSecurityStateNeutralPlaceholder(t *testing.T) {
 	}
 }
 
-// TestFormHasNoModeToggle is the P4 form guard: the soft/strict mode selector must
-// not render on the landing form, while m.mode stays the safe default so the engine
-// can still read it. Asserts against literal mode labels (the i18n keys were removed).
+// TestFormHasNoModeToggle is the form guard: the (removed) soft/strict mode
+// selector must not render on the landing form. Asserts against literal mode
+// labels (modes and their i18n keys were removed entirely).
 func TestFormHasNoModeToggle(t *testing.T) {
 	m := formModel(80, 24)
-	if m.mode != config.ModeSoft {
-		t.Fatalf("m.mode=%q want default config.ModeSoft", m.mode)
-	}
 	for _, adv := range []bool{false, true} {
 		m.advancedOpen = adv
 		out := m.formView()

@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/atotto/clipboard"
 )
 
@@ -33,15 +32,10 @@ func (m model) keyConnLine() string {
 // rendered (the OpenSSH PEM is multi-line, ~400 chars); long lines are clipped to
 // innerW so they never cross the border.
 func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
-	// Mode-aware warning: strict is KEY-ONLY (root password locked), so losing the
-	// key loses access — render it loud (errStyle). Soft KEEPS password login, so
-	// the key is an optional convenience — render it non-alarming (labelStyle) and
-	// it never implies the operator is locked out.
-	if m.mode == config.ModeStrict {
-		lines = append(lines, wrap(errStyle.Render(t(m.lang, kKeyWarnStrict)), innerW)...)
-	} else {
-		lines = append(lines, wrap(labelStyle.Render(t(m.lang, kKeyWarnSoft)), innerW)...)
-	}
+	// The default run KEEPS password login, so the key is an optional convenience —
+	// render it non-alarming (labelStyle); it never implies the operator is locked
+	// out. The opt-in lockdown (A2-danger) is a separate flow.
+	lines = append(lines, wrap(labelStyle.Render(t(m.lang, kKeyWarnSoft)), innerW)...)
 	lines = append(lines, "")
 	for ln := range strings.SplitSeq(strings.TrimRight(m.keyPEM, "\n"), "\n") {
 		lines = append(lines, truncDisplay(ln, innerW))

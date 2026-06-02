@@ -62,15 +62,8 @@ const (
 	kDoneWord  // "done" in the summary line
 	kVerifyTag // "verify" in the summary line
 
-	// loud "SSH password auth will be OFF" warning, shown pre-run (first log lines)
-	// and post-run (finished tail) in STRICT mode. The key lives only in memory and
-	// is shown on the key screen — these strings reference no on-disk path.
-	kPwOffWarn  // strict header: "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН."
-	kPwOffLogin // strict body:   "пароль root отключён — подключайся сгенерированным ключом ..."
-
-	// soft-mode info: password login STAYS ON; a key is also generated so either
-	// works.
-	kPwOnInfo // soft body: "вход по SSH: пароль ИЛИ сгенерированный ключ ..."
+	// info: password login STAYS ON; a key is also generated so either works.
+	kPwOnInfo // body: "вход по SSH: пароль ИЛИ сгенерированный ключ ..."
 
 	// finished tail (rendered below the viewport from m.lang each frame)
 	kFinishedOK
@@ -98,7 +91,6 @@ const (
 	kErrHostRequired   // config.ErrHostRequired
 	kErrUserRequired   // config.ErrUserRequired
 	kErrAuthRequired   // config.ErrAuthRequired
-	kErrBadMode        // config.ErrBadMode (carries a %q for the bad value)
 	kErrValidationFail // generic fallback for an unmapped Validate() error
 
 	// window-title chrome (terminal title bar), rebuilt per-frame from m.lang.
@@ -170,8 +162,7 @@ const (
 	// The generated private key lives ONLY in memory; this screen is the one
 	// place it is shown so the operator can copy it before it is lost.
 	kKeyTitle      // box title: "SSH key access"
-	kKeyWarnSoft   // soft mode: password login is KEPT — the key is an optional extra
-	kKeyWarnStrict // strict mode: root password locked, key-only — copy it now or lose access
+	kKeyWarnSoft   // password login is KEPT — the key is an optional extra
 	kKeyConnHint   // label before the ssh command (the command is built in code)
 	kKeyCopyBtn    // clickable button label: "Copy key"
 	kKeyCopied     // status after a successful clipboard copy: "✓ copied"
@@ -264,9 +255,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDoneWord:  "готово",
 		kVerifyTag: "проверка",
 
-		kPwOffWarn:  "⚠ ВНИМАНИЕ: вход по паролю по SSH будет ОТКЛЮЧЁН (ключ обязателен).",
-		kPwOffLogin: "пароль root отключён — подключайся сгенерированным ключом (скопируй его на экране ключа)",
-		kPwOnInfo:   "вход по SSH: пароль ИЛИ сгенерированный ключ (скопируй его на экране ключа)",
+		kPwOnInfo: "вход по SSH: пароль ИЛИ сгенерированный ключ (скопируй его на экране ключа)",
 
 		kFinishedOK:  "запуск завершён",
 		kFinishedErr: "завершено с ошибкой: ",
@@ -285,7 +274,6 @@ var tr = map[Lang]map[stringKey]string{
 		kErrHostRequired:   "укажите хост",
 		kErrUserRequired:   "укажите пользователя",
 		kErrAuthRequired:   "требуется пароль или ключ",
-		kErrBadMode:        "режим должен быть soft или strict, получено %q",
 		kErrValidationFail: "ошибка конфигурации: %s",
 
 		kTitleHardened: "защищён",
@@ -344,10 +332,9 @@ var tr = map[Lang]map[stringKey]string{
 		kStatusCanApply:    "• можно",
 		kStatusUnavailable: "⊘ недоступно",
 
-		kKeyTitle:      "Доступ по SSH-ключу",
-		kKeyWarnSoft:   "Режим новичка: вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
-		kKeyWarnStrict: "Режим профессионала: пароль root заблокирован, вход на сервер ТОЛЬКО по этому ключу. Скопируй его сейчас — иначе потеряешь доступ к серверу.",
-		kKeyConnHint:   "Подключение:",
+		kKeyTitle:    "Доступ по SSH-ключу",
+		kKeyWarnSoft: "Вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
+		kKeyConnHint: "Подключение:",
 		kKeyCopyBtn:    "Скопировать ключ",
 		kKeyCopied:     "✓ скопировано",
 		kKeyCopyFail:   "не удалось скопировать — выдели вручную",
@@ -427,9 +414,7 @@ var tr = map[Lang]map[stringKey]string{
 		kDoneWord:  "done",
 		kVerifyTag: "verify",
 
-		kPwOffWarn:  "⚠ WARNING: SSH password login will be DISABLED (key required).",
-		kPwOffLogin: "root password disabled — connect with the generated key (copy it on the key screen)",
-		kPwOnInfo:   "SSH login: password OR the generated key (copy it on the key screen)",
+		kPwOnInfo: "SSH login: password OR the generated key (copy it on the key screen)",
 
 		kFinishedOK:  "run finished",
 		kFinishedErr: "finished with error: ",
@@ -448,7 +433,6 @@ var tr = map[Lang]map[stringKey]string{
 		kErrHostRequired:   "host is required",
 		kErrUserRequired:   "user is required",
 		kErrAuthRequired:   "either password or key is required",
-		kErrBadMode:        "mode must be soft or strict, got %q",
 		kErrValidationFail: "config error: %s",
 
 		kTitleHardened: "hardened",
@@ -507,10 +491,9 @@ var tr = map[Lang]map[stringKey]string{
 		kStatusCanApply:    "• available",
 		kStatusUnavailable: "⊘ unavailable",
 
-		kKeyTitle:      "SSH key access",
-		kKeyWarnSoft:   "Novice mode: password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
-		kKeyWarnStrict: "Professional mode: the root password is locked — server access is KEY-ONLY. Copy this key now, or you will lose access to the server.",
-		kKeyConnHint:   "Connect:",
+		kKeyTitle:    "SSH key access",
+		kKeyWarnSoft: "Password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
+		kKeyConnHint: "Connect:",
 		kKeyCopyBtn:    "Copy key",
 		kKeyCopied:     "✓ copied",
 		kKeyCopyFail:   "copy failed — select manually",
@@ -692,8 +675,6 @@ var tweakNames = map[Lang]map[string]string{
 		"a10.notify":        "ssh-login-notify",
 		"a10.pam":           "pam.d/sshd уведомление",
 		"a10.log_rule":      "LOG входящих (firewall)",
-		"a10.blacklist":     "Чёрный список модулей",
-		"a10.devshm":        "/dev/shm защищён",
 	},
 	langEN: {}, // English falls back to Probe.Name; no overrides needed
 }

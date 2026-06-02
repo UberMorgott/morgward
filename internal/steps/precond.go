@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/sshx"
 )
 
 // Precond implements §1 preconditions: apt index refresh, non-root sudo user
-// with key auth + NOPASSWD sudoers, sshusers group, and (soft mode) a console
-// password generated on-box and surfaced once.
+// with key auth + NOPASSWD sudoers, sshusers group, and a console password
+// generated on-box and surfaced once.
 type Precond struct{}
 
 func (Precond) ID() string    { return "PRE" }
@@ -57,22 +56,20 @@ visudo -cf /etc/sudoers.d/90-%[1]s >/dev/null
 		ctx.Log.Warn("admin NOPASSWD sudo check inconclusive: %s", firstLine(chk.Stdout+chk.Stderr))
 	}
 
-	// Soft mode: set a console password, generated on-box, surfaced exactly once.
-	if ctx.Cfg.Mode == config.ModeSoft {
-		// The marker line is emitted on stdout but teeLines suppresses it from the
-		// streamed sink (sshx.SecretMarkerPrefix), so the password is captured into
-		// Result.Stdout for extractMarker yet never hits the log file / TUI (F02).
-		pwScript := fmt.Sprintf(`set +o history
+	// Set a console password, generated on-box, surfaced exactly once.
+	// The marker line is emitted on stdout but teeLines suppresses it from the
+	// streamed sink (sshx.SecretMarkerPrefix), so the password is captured into
+	// Result.Stdout for extractMarker yet never hits the log file / TUI (F02).
+	pwScript := fmt.Sprintf(`set +o history
 ADMIN_PW="$(openssl rand -base64 18)"
 printf '%%s:%%s\n' %q "$ADMIN_PW" | chpasswd
 printf '%s%%s\n' "$ADMIN_PW"
 unset ADMIN_PW`, admin, sshx.SecretMarkerPrefix)
-		r := ctx.Cli.Sudo(pwScript)
-		if pw := extractMarker(r.Stdout, sshx.SecretMarkerPrefix); pw != "" {
-			ctx.Log.Secret(fmt.Sprintf("CONSOLE PASSWORD for %s (store now — shown once)", admin), pw)
-		} else {
-			ctx.Log.Warn("could not set/extract console password (continuing)")
-		}
+	r := ctx.Cli.Sudo(pwScript)
+	if pw := extractMarker(r.Stdout, sshx.SecretMarkerPrefix); pw != "" {
+		ctx.Log.Secret(fmt.Sprintf("CONSOLE PASSWORD for %s (store now — shown once)", admin), pw)
+	} else {
+		ctx.Log.Warn("could not set/extract console password (continuing)")
 	}
 
 	ctx.State.AdminUser = admin

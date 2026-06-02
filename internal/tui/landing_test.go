@@ -6,7 +6,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/version"
 )
 
@@ -346,17 +345,12 @@ func TestUpdateStripKeysExist(t *testing.T) {
 	}
 }
 
-// TestModeSelectorAbsent asserts the soft/strict Mode selector is NOT rendered on
-// the landing form (it moved out of the landing — access lockdown lives in the
-// Security menu), while m.mode is still defaulted so the engine can read it. The
-// primary button label is now "Подключиться" / "Connect".
+// TestModeSelectorAbsent asserts the (removed) soft/strict Mode selector is NOT
+// rendered on the landing form — mode is gone entirely; the default run is
+// crypto-only and the access lockdown lives in the Security menu. The primary
+// button label is now "Подключиться" / "Connect".
 func TestModeSelectorAbsent(t *testing.T) {
 	m := formModel(80, 24)
-	// The model still carries a mode (engine reads it); it just must default to soft
-	// and never appear on the landing.
-	if m.mode != config.ModeSoft {
-		t.Fatalf("m.mode=%q want default config.ModeSoft", m.mode)
-	}
 	for _, adv := range []bool{false, true} {
 		m.advancedOpen = adv
 		rows := m.formRows()

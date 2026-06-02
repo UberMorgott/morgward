@@ -47,8 +47,8 @@ func orderedSteps() []steps.Step {
 // extraSteps are step types that are NOT part of the default full-run sequence
 // (orderedSteps) but ARE resolvable by `step <IDs>` / RunSteps — the TUI security
 // menu drives them explicitly. A2Safe (crypto only, image-default access) and
-// A2Danger (opt-in access lockdown) are the split of the legacy A2SSH; A2SSH
-// stays the full-run step for CLI `run --mode` back-compat.
+// A2Danger (opt-in access lockdown) are the split of A2SSH; A2SSH stays the
+// crypto-only full-run step (image-default access preserved).
 func extraSteps() []steps.Step {
 	return []steps.Step{
 		steps.A2Safe{},
@@ -218,7 +218,7 @@ func Execute(ctx context.Context, cfg *config.Config, cmd string, ids []string, 
 func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrownfield, readOnly bool, h Hooks) (*session, func(), error) {
 	cleanup := func() {}
 
-	log.Banner(fmt.Sprintf("morgward — %s@%s:%d  mode=%s", cfg.User, cfg.Host, cfg.Port, cfg.Mode))
+	log.Banner(fmt.Sprintf("morgward — %s@%s:%d", cfg.User, cfg.Host, cfg.Port))
 	if p := log.Path(); p != "" {
 		log.Info("log file: %s", p)
 	}
@@ -359,7 +359,6 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 
 	chk := state.Load("")
 	chk.Host = cfg.Host
-	chk.Mode = string(cfg.Mode)
 	chk.Greenfield = facts.Greenfield
 	// Read-only audit does not persist a checkpoint (it applies no steps), so the
 	// state file is left untouched.
@@ -414,7 +413,7 @@ func Run(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error
 		s.log.Warn("after snapshot incomplete: %v", serr)
 	}
 
-	res := verify.Run(s.cli, s.log, cfg.Port, string(cfg.Mode))
+	res := verify.Run(s.cli, s.log, cfg.Port)
 	s.log.Banner("SUMMARY")
 	s.log.Info("verify: %d passed, %d failed%s", res.Passed, res.Failed, unmeasuredSuffix(res.Unknown))
 	sum := Summary{
@@ -491,7 +490,7 @@ func VerifyOnly(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks
 	if err != nil {
 		return err
 	}
-	res := verify.Run(s.cli, s.log, cfg.Port, string(cfg.Mode))
+	res := verify.Run(s.cli, s.log, cfg.Port)
 	s.log.Banner("SUMMARY")
 	s.log.Info("verify: %d passed, %d failed%s", res.Passed, res.Failed, unmeasuredSuffix(res.Unknown))
 	tw := tweaks.Run(s.cli, s.log, s.ctx.Facts, cfg)

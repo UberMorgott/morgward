@@ -77,7 +77,6 @@ Flags:
   --user         bootstrap SSH user (default root)
   --password     bootstrap password (prompts if omitted and no --key)
   --key          existing private key path (skips key generation)
-  --mode         soft (crypto only, preserves access) | strict (access lockdown), default soft
   --admin-user   non-root sudo user to create/verify (default vpsadmin)
   --log-file     write a full run log to this file (default: no file written)
   --assume-yes   proceed on a brownfield box (applies in coexistence mode)
@@ -89,12 +88,12 @@ Note:
   ports, forwarding/routing, and disk swap are preserved. See /root/vps-inventory.md.
 
 Examples:
-  morgward --host 1.2.3.4 --user root --password XXX --mode soft
+  morgward --host 1.2.3.4 --user root --password XXX
   morgward detect --host 1.2.3.4 --user root --password XXX
   morgward verify --host 1.2.3.4 --key ./id_ed25519_1-2-3-4
   morgward step A4 A5 --host 1.2.3.4 --key ./id_ed25519_1-2-3-4
   # non-interactive (no prompts): all flags supplied + --assume-yes
-  morgward run --host 1.2.3.4 --user root --password XXX --mode soft --assume-yes
+  morgward run --host 1.2.3.4 --user root --password XXX --assume-yes
 `
 
 func main() {
@@ -163,16 +162,14 @@ func main() {
 	}
 
 	cfg := &config.Config{}
-	var modeStr string
 	fs := flag.NewFlagSet("morgward", flag.ExitOnError)
 	fs.Usage = func() { fmt.Print(usage) }
-	bindFlags(fs, cfg, &modeStr)
+	bindFlags(fs, cfg)
 	// Go's flag package stops at the first non-flag arg, so flags placed after
 	// positional step IDs (e.g. `step A4 A6.5 --host X`) would never be parsed.
 	// Partition args into flags and positionals first so flag order is irrelevant.
 	flagArgs, stepIDs := partitionArgs(args)
 	_ = fs.Parse(flagArgs)
-	cfg.Mode = config.Mode(strings.ToLower(modeStr))
 
 	// Secrets via env (no leak into shell history / process args / transcripts).
 	if cfg.Password == "" {
@@ -185,11 +182,10 @@ func main() {
 	// Interactive prompts when host/credentials are absent (the "open a window,
 	// type host/user/password" flow), then watch the live log in the terminal.
 	if cfg.Host == "" {
-		if err := interactive(cfg, &modeStr); err != nil {
+		if err := interactive(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, "input error:", err)
 			os.Exit(2)
 		}
-		cfg.Mode = config.Mode(strings.ToLower(modeStr))
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -312,7 +308,6 @@ var valueFlags = map[string]bool{
 	"user":       true,
 	"password":   true,
 	"key":        true,
-	"mode":       true,
 	"admin-user": true,
 	"log-file":   true,
 }
@@ -344,19 +339,18 @@ func partitionArgs(args []string) (flagArgs, positional []string) {
 	return flagArgs, positional
 }
 
-func bindFlags(fs *flag.FlagSet, cfg *config.Config, modeStr *string) {
+func bindFlags(fs *flag.FlagSet, cfg *config.Config) {
 	fs.StringVar(&cfg.Host, "host", "", "VPS address (IP or hostname)")
 	fs.IntVar(&cfg.Port, "port", 22, "SSH port")
 	fs.StringVar(&cfg.User, "user", "root", "bootstrap SSH user")
 	fs.StringVar(&cfg.Password, "password", "", "bootstrap password (omit to be prompted)")
 	fs.StringVar(&cfg.KeyPath, "key", "", "existing private key path (skips key generation)")
-	fs.StringVar(modeStr, "mode", "soft", "hardening mode: soft | strict")
 	fs.StringVar(&cfg.AdminUser, "admin-user", "vpsadmin", "non-root sudo user to create/verify")
 	fs.StringVar(&cfg.LogFile, "log-file", "", "write a full run log to this file (default: no file written)")
 	fs.BoolVar(&cfg.Assume, "assume-yes", false, "proceed on a brownfield box without prompting")
 }
 
-func interactive(cfg *config.Config, modeStr *string) error {
+func interactive(cfg *config.Config) error {
 	r := bufio.NewReader(os.Stdin)
 	fmt.Println("=== morgward — interactive setup ===")
 	cfg.Host = prompt(r, "VPS host (IP/hostname)", "")
@@ -373,11 +367,6 @@ func interactive(cfg *config.Config, modeStr *string) error {
 		cfg.Password = pw
 	}
 
-	m := strings.ToLower(prompt(r, "Hardening mode [soft/strict]", "soft"))
-	if m != "soft" && m != "strict" {
-		m = "soft"
-	}
-	*modeStr = m
 	cfg.AdminUser = prompt(r, "Admin user to create", "vpsadmin")
 	return nil
 }
@@ -417,6 +406,6 @@ func atoiDefault(s string, def int) int {
 }
 
 func banner(cfg *config.Config) {
-	fmt.Printf("\nmorgward → %s@%s:%d  mode=%s  admin=%s\n\n",
-		cfg.User, cfg.Host, cfg.Port, cfg.Mode, cfg.AdminUser)
+	fmt.Printf("\nmorgward → %s@%s:%d  admin=%s\n\n",
+		cfg.User, cfg.Host, cfg.Port, cfg.AdminUser)
 }

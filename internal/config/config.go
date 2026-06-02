@@ -15,7 +15,6 @@ var (
 	ErrHostRequired = errors.New("host is required")
 	ErrUserRequired = errors.New("user is required")
 	ErrAuthRequired = errors.New("either password or key is required")
-	ErrBadMode      = errors.New("mode must be soft or strict")
 	// ErrBadAdminUser rejects an admin username that is not a strict Linux name.
 	// AdminUser is spliced (unquoted in places) into root-run shell scripts and a
 	// /home/<user> path, so anything outside this charset is a shell-injection
@@ -28,17 +27,6 @@ var (
 // quotes, $, backticks, and every other shell metacharacter.
 var adminUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
-// Mode is the hardening profile selected by the operator.
-type Mode string
-
-const (
-	// ModeSoft keeps a console password fallback (PermitRootLogin prohibit-password,
-	// root password NOT locked). Default — safer for beginners.
-	ModeSoft Mode = "soft"
-	// ModeStrict locks the root password and sets PermitRootLogin no.
-	ModeStrict Mode = "strict"
-)
-
 // Config is the fully-resolved input for a hardening run.
 type Config struct {
 	Host      string // VPS address the controller connects to
@@ -46,7 +34,6 @@ type Config struct {
 	User      string // bootstrap user (usually root)
 	Password  string // bootstrap password (cleared after key auth works)
 	KeyPath   string // path to an existing private key; empty => generate one
-	Mode      Mode   // soft | strict
 	AdminUser string // non-root sudo user to create/verify (default: vpsadmin)
 	LogFile   string // file path for the full run log; empty => no file written
 	Assume    bool   // non-interactive: proceed on brownfield / prompts using defaults
@@ -63,9 +50,6 @@ func (c *Config) Validate() error {
 	}
 	if c.KeyPath == "" && c.Password == "" {
 		return ErrAuthRequired
-	}
-	if c.Mode != ModeSoft && c.Mode != ModeStrict {
-		return fmt.Errorf("%w, got %q", ErrBadMode, c.Mode)
 	}
 	if c.Port == 0 {
 		c.Port = 22

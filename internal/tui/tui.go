@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
-	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
@@ -121,7 +120,6 @@ type model struct {
 	phase   phase
 	inputs  []textinput.Model
 	focus   int
-	mode    config.Mode
 	command string   // engine command token; the form no longer exposes a selector (stays "run")
 	cmds    []string // step IDs for the "step" command (Dashboard "Применить твики"); nil otherwise
 	errMsg  string
@@ -276,7 +274,6 @@ func newModel() model {
 	m := model{
 		phase:   phaseForm,
 		inputs:  ins,
-		mode:    config.ModeSoft,
 		command: "run",
 		logs:    make(chan string, 4096),
 		done:    make(chan error, 1),

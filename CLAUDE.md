@@ -101,17 +101,19 @@ path → check the other.
 - **`sshx.Client` is not concurrency-safe.** `monitor` dials its **own** SSH session
   for metrics rather than sharing the engine's client.
 
-- **Modes — soft never locks access (A2 fix).** `soft` (default) applies SSH
-  **crypto** hardening only and PRESERVES the image-default access policy: it does
-  NOT write `AllowGroups sshusers`, does NOT override `PermitRootLogin`, keeps
-  `PasswordAuthentication yes`, and never locks root. Whatever root/password login
-  the box already had survives a soft `run`. The access lockdown
-  (`AllowGroups sshusers` + `PermitRootLogin no` + `passwd -l root`) is **strict-only**
-  (and the opt-in `A2-danger` step / TUI security menu). Driven by `build99(strict)`:
-  the `PermitRootLogin no\nAllowGroups sshusers` block is emitted ONLY when `strict`.
-  Don't regress: soft `run` must leave a brownfield operator able to log in exactly
-  as before. (`preserveKeyUsers`→sshusers is therefore gated on `strict` too — soft
-  has no AllowGroups to satisfy.) `strict` additionally adds §A12 OS-hardening.
+- **Modes removed — default `run` is crypto-only and never locks access.** There is
+  NO `--mode` / `config.Mode` / soft / strict any more. A `run` applies SSH **crypto**
+  hardening only and PRESERVES the image-default access policy: A2SSH does NOT write
+  `AllowGroups sshusers`, does NOT override `PermitRootLogin`, keeps
+  `PasswordAuthentication yes`, and never locks root. Whatever root/password login the
+  box already had survives a `run`. `build99(ctx)` emits crypto + session knobs only
+  (NO AllowGroups / PermitRootLogin). The access lockdown
+  (`AllowGroups sshusers` + `PermitRootLogin no` + `passwd -l root`, SSH key-only) is
+  the **opt-in `A2-danger` step / TUI security menu** ONLY — A2Danger keeps its own
+  `preserveKeyUsers`→sshusers grant. Don't regress: a `run` must leave a brownfield
+  operator able to log in exactly as before. The former strict-only §A12 OS-hardening
+  (kernel-module blacklist + `/dev/shm` remount) was REMOVED with strict — gone, not
+  relocated.
 
 - **A8 restores running services it reboots (brownfield).** A8's reboot bounces a
   brownfield box; services without auto-start (docker `restart: no`, systemd units

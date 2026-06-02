@@ -1,7 +1,7 @@
 # morgward — Architecture Index
 
 > Single source for navigating the code. Read this first; then jump to the file.
-> Per-session warnings (heredoc/stdin, Bubble Tea v2, concurrency, modes, secrets,
+> Per-session warnings (heredoc/stdin, Bubble Tea v2, concurrency, secrets,
 > version drift) live in [`../CLAUDE.md`](../CLAUDE.md#critical-gotchas) — load-bearing, keep open.
 
 ## 1. What it is
@@ -84,7 +84,7 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 | [`tui.go`](../internal/tui/tui.go) | model struct, `Run()`/`Result`, `Init`, `View()` dispatch, frame-fields, phase enum |
 | [`update.go`](../internal/tui/update.go) | `Update` — key/mouse/tick/engine-msg handling, run lifecycle, self-update strip |
 | [`dashboard.go`](../internal/tui/dashboard.go) | `phaseDashboard`: post-connect server card + live tweak audit + apply/security buttons |
-| [`form.go`](../internal/tui/form.go) | `phaseForm`: host/port/user/password-or-key/mode entry |
+| [`form.go`](../internal/tui/form.go) | `phaseForm`: host/port/user/password-or-key entry |
 | [`run.go`](../internal/tui/run.go) | `phaseRun`: titled progress box + log viewport + monitor footer |
 | [`security.go`](../internal/tui/security.go) | `phaseSecurity`: access-state card + SAFE actions + DANGER key-only lock (drives A2-safe/A2-danger/A2.5) |
 | [`wiki.go`](../internal/tui/wiki.go) | `phaseWiki`: one fix's what/why/risk/OnBox/Revert page, clickable apply/revert |
@@ -103,7 +103,7 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 |---------|------|----------------|-------------|
 | main | [`cmd/morgward/`](../cmd/morgward/) | CLI flag/env parse, dispatch, self-update | `main`, `performUpdate`, `partitionArgs`, `newUpdater`, `printKeyBlock` |
 | engine | [`internal/engine/`](../internal/engine/) | wires config → bootstrap → detect → ordered steps → verify; gates; revert map | `Execute`, `prepare`, `Run`, `RunSteps`, `VerifyOnly`, `DetectOnly`, `Audit`, `RunRevert`, `orderedSteps`, `Hooks`, `Progress`, `Summary`, `IsRevertable`, `ErrCanceled` |
-| config | [`internal/config/`](../internal/config/) | resolved run config + validation | `Config`, `Validate`, `Mode` (`ModeSoft`/`ModeStrict`), `adminUserRe` (`^[a-z_][a-z0-9_-]{0,31}$`), `Err*` sentinels |
+| config | [`internal/config/`](../internal/config/) | resolved run config + validation | `Config`, `Validate`, `adminUserRe` (`^[a-z_][a-z0-9_-]{0,31}$`), `Err*` sentinels |
 | sshx | [`internal/sshx/`](../internal/sshx/) | embedded SSH client (one-shot executor, base64 delivery), keygen | `Dial`, `DialWithRetry`, `Client.Run`/`Sudo`/`SwitchUser`/`UseKey`/`BootID`/`WaitForReboot`/`SetOutputSink`, `GenerateKeyPair`, `LoadKeyFile`, `SecretMarkerPrefix`, `ErrNoMutualAuth` |
 | steps | [`internal/steps/`](../internal/steps/) | one Step per runbook block; stateless | `Step`, `Context`, `Status`, `BenchResult`, `putFile`/`appendLineIfMissing`/`freshLogin`, `A1Firewall` … `A10Detection` |
 | detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`), `portFromLocal` |
@@ -131,7 +131,7 @@ both modes. Full table in [`BROWNFIELD.md`](BROWNFIELD.md#3-per-step-decision-ta
 | PRE | [`precond.go`](../internal/steps/precond.go) | §1 preconditions: apt index, admin user, key, sshusers group | yes | — |
 | A1 | [`a1_firewall.go`](../internal/steps/a1_firewall.go) | Firewall + fail-safe (iptables-nft, v4+v6) | yes | branches on `FirewallMgr`: `ufw`→`ufw allow` SSH+detected ports (allow-only); `firewalld`/`nftables`→defer, `StatusSkip` (untouched); `iptables`/`none`→coexist INPUT DROP, opens detected `ListenPortsTCP/UDP`, **FORWARD untouched**, chains/nat never flushed. [BROWNFIELD §7](BROWNFIELD.md#7-firewall-managers) |
 | A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | snapshots running docker containers + active-not-enabled systemd units before reboot, `docker start`/`systemctl start`s the ones that didn't auto-return after (never `compose up`) |
-| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, crypto; `AllowGroups`+root-lock **strict-only**) — **legacy full-run** | yes | soft preserves image-default access (no lockout); strict adds non-root `SSHKeyUsers` to `sshusers` before AllowGroups (grant-only) |
+| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, crypto; access policy unchanged) — **crypto-only full-run** | yes | preserves image-default access — never locks out (the opt-in lockdown is A2-danger) |
 | A2.5 | [`a25_cloudinit.go`](../internal/steps/a25_cloudinit.go) | Cloud-init neutralization | no | — |
 | A3 | [`a3_fail2ban.go`](../internal/steps/a3_fail2ban.go) | fail2ban (systemd backend, admin whitelist) | no | — |
 | A4 | [`a4_network.go`](../internal/steps/a4_network.go) | Network tuning (BBR, buffers, I/O sched) + benchmark | no | — |
@@ -141,19 +141,21 @@ both modes. Full table in [`BROWNFIELD.md`](BROWNFIELD.md#3-per-step-decision-ta
 | A6.7 | [`a67_mem.go`](../internal/steps/a67_mem.go) | Memory mgmt (ZRAM zstd + earlyoom) | no | keeps pre-existing disk swap (no `swapoff`); zram still prio 100 |
 | A7 | [`a7_cleanup.go`](../internal/steps/a7_cleanup.go) | Cleanup (purge bloatware, apt-mark guard) | no | IRREVERSIBLE purge runs the same — exclude on a customized box |
 | A9 | [`a9_unattended.go`](../internal/steps/a9_unattended.go) | Unattended security updates | no | — |
-| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, drop-log, OS hardening) | no | — |
+| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, inbound-drop logging) | no | — |
 
 **A2 split** (not in `orderedSteps`, resolvable via `step`/TUI security menu, in
 [`a2_ssh.go`](../internal/steps/a2_ssh.go)): `A2-safe` (`A2Safe`) = crypto only, image-default
 access, **never locks anyone out** (default path); `A2-danger` (`A2Danger`) = opt-in lockdown
 (AllowGroups sshusers + PermitRootLogin no + key-only + `passwd -l root`), lockout-capable.
-`A2SSH` stays the full-run step for CLI `run --mode` back-compat.
+`A2SSH` is the crypto-only full-run step (image-default access preserved).
 
 ## 6. Safety model
 
-- **Modes** (`config.Mode`): `soft` (default) keeps a console-password fallback
-  (`PermitRootLogin prohibit-password`, root **not** locked); `strict` locks the root
-  password, sets `PermitRootLogin no`, adds §A12 OS hardening. SSH is key-only in both.
+- **Crypto-only by default**: a `run` hardens SSH crypto and keeps a console-password
+  fallback (`PermitRootLogin prohibit-password`, root **not** locked, password login on)
+  — it never locks anyone out. The opt-in access lockdown (`AllowGroups sshusers`,
+  `PermitRootLogin no`, `passwd -l root`, SSH key-only) is the **A2-danger** step / TUI
+  security menu only.
 - **ssh-revert timer**: every SSH step `armSSHRevert` installs a **300s** `systemd-run`
   unit that strips morgward's drop-ins + reloads sshd, then `disarmSSHRevert` only **after**
   a verified second-session key login. A bad config self-heals in <300s.
@@ -190,5 +192,5 @@ access, **never locks anyone out** (default path); `A2-danger` (`A2Danger`) = op
 - [`../audit-report.md`](../audit-report.md) — security/audit findings (the `F##` IDs
   referenced throughout the code).
 - [`../CLAUDE.md`](../CLAUDE.md) — per-session **critical gotchas** (heredoc/stdin caveat,
-  Bubble Tea v2 `charm.land` path, `sshx.Client` not concurrency-safe, soft/strict modes,
+  Bubble Tea v2 `charm.land` path, `sshx.Client` not concurrency-safe, crypto-only default,
   secrets handling, version drift). Keep open while editing.

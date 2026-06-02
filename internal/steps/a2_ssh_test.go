@@ -107,32 +107,25 @@ func TestCryptoBlockVersionGate(t *testing.T) {
 	}
 }
 
-// TestA2SSHSoftNoLockdown guards the security fix: the legacy full-run step in
-// SOFT mode must NOT impose the access lockdown — no AllowGroups and no
-// PermitRootLogin line at all (image-default access preserved, so the default
-// `run` can't lock the operator out). Crypto + a session knob must still be
-// present. STRICT mode still applies the full lockdown.
-func TestA2SSHSoftNoLockdown(t *testing.T) {
+// TestA2SSHBuild99NoLockdown guards the security invariant: the full-run A2SSH
+// step is crypto-only — build99 must NEVER impose the access lockdown (no
+// AllowGroups and no PermitRootLogin line at all), so the default `run` can't lock
+// the operator out. Crypto + a session knob must still be present. The opt-in
+// lockdown lives in A2Danger (danger99), asserted separately.
+func TestA2SSHBuild99NoLockdown(t *testing.T) {
 	ctx := newTestCtx()
-	soft := build99(ctx, false)
-	if strings.Contains(soft, "AllowGroups") {
-		t.Errorf("soft build99(false) must NOT emit AllowGroups:\n%s", soft)
+	conf := build99(ctx)
+	if strings.Contains(conf, "AllowGroups") {
+		t.Errorf("build99 must NOT emit AllowGroups:\n%s", conf)
 	}
-	if strings.Contains(soft, "PermitRootLogin") {
-		t.Errorf("soft build99(false) must NOT emit any PermitRootLogin line:\n%s", soft)
+	if strings.Contains(conf, "PermitRootLogin") {
+		t.Errorf("build99 must NOT emit any PermitRootLogin line:\n%s", conf)
 	}
-	if !strings.Contains(soft, "Ciphers ") {
-		t.Errorf("soft build99(false) must still emit crypto (Ciphers):\n%s", soft)
+	if !strings.Contains(conf, "Ciphers ") {
+		t.Errorf("build99 must still emit crypto (Ciphers):\n%s", conf)
 	}
-	if !strings.Contains(soft, "MaxAuthTries 3") {
-		t.Errorf("soft build99(false) must still emit session knob (MaxAuthTries 3):\n%s", soft)
-	}
-	strict := build99(ctx, true)
-	if !strings.Contains(strict, "PermitRootLogin no") {
-		t.Errorf("strict build99(true) must emit PermitRootLogin no:\n%s", strict)
-	}
-	if !strings.Contains(strict, "AllowGroups sshusers") {
-		t.Errorf("strict build99(true) must emit AllowGroups sshusers:\n%s", strict)
+	if !strings.Contains(conf, "MaxAuthTries 3") {
+		t.Errorf("build99 must still emit session knob (MaxAuthTries 3):\n%s", conf)
 	}
 }
 

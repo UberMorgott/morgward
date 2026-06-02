@@ -29,7 +29,7 @@ import (
 // the operator out. It reuses the exact body of the a2_ssh.go ssh-revert payload
 // (armSSHRevert), run immediately instead of via a systemd-run timer.
 //
-// F07: the revert is now FAITHFUL to the A2Danger/strict apply — it also rm's the
+// F07: the revert is now FAITHFUL to the A2Danger lockdown apply — it also rm's the
 // cloud-init 99-disable-passwords.cfg, restores 50-cloud-init.conf's
 // PasswordAuthentication (no→yes), and `passwd -u root` so the box is not left with
 // root locked + cloud-init forcing password-auth off after a "successful" revert.

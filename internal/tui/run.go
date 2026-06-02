@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/version"
 )
 
@@ -111,22 +110,9 @@ func (m model) finishedTail() string {
 		}
 	}
 	if m.command == "run" {
-		tail += "\n" + m.pwOffWarning()
+		tail += "\n" + t(m.lang, kPwOnInfo)
 	}
 	return tail
-}
-
-// pwOffWarning builds the localized SSH-login notice. Shared by the pre-run
-// content (start) and the post-run finished tail. MODE-AWARE: strict shows the
-// loud two-line "password login is now OFF, connect with the generated key"
-// notice; soft shows a single info line — password login STAYS ON, and a key is
-// also generated so either works. The key lives only in memory and is shown on
-// the key screen; there is no on-disk path to reference.
-func (m model) pwOffWarning() string {
-	if m.mode == config.ModeStrict {
-		return t(m.lang, kPwOffWarn) + "\n" + t(m.lang, kPwOffLogin)
-	}
-	return t(m.lang, kPwOnInfo)
 }
 
 // finishedTailRows is the number of content rows finishedTail occupies; runView
