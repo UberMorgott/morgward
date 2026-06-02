@@ -2,10 +2,19 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 )
+
+// TestUsageDocumentsUpdate asserts the CLI `update` self-update command is
+// documented in the usage/help text so operators can discover it.
+func TestUsageDocumentsUpdate(t *testing.T) {
+	if !strings.Contains(usage, "update") {
+		t.Fatalf("usage string does not document the `update` command:\n%s", usage)
+	}
+}
 
 // TestNewUpdaterHasChecksumValidator confirms self-update is wired with a SHA-256
 // ChecksumValidator (F01): without it go-selfupdate would apply an unverified

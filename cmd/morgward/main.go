@@ -61,8 +61,11 @@ Commands:
   run               full Phase A hardening + §V verification (default)
   detect            read-only discovery + inventory; changes nothing
   verify            run only the §V verification matrix
+  audit             read-only audit (server facts + tweak audit); changes nothing
   step <ID...>      run only the named steps, e.g. "step A4 A5"
+  revert <ID...>    revert the named steps, e.g. "revert A2"
   tui               launch the interactive terminal UI (default with no args)
+  update            self-update to the latest GitHub release (checksum-verified)
   version           print the program version and exit
   help              show this help
 
@@ -74,7 +77,7 @@ Flags:
   --user         bootstrap SSH user (default root)
   --password     bootstrap password (prompts if omitted and no --key)
   --key          existing private key path (skips key generation)
-  --mode         soft | strict (default soft)
+  --mode         soft (crypto only, preserves access) | strict (access lockdown), default soft
   --admin-user   non-root sudo user to create/verify (default vpsadmin)
   --log-file     write a full run log to this file (default: no file written)
   --assume-yes   proceed on a brownfield box (applies in coexistence mode)
@@ -141,6 +144,23 @@ func main() {
 		}
 		return
 	}
+	if cmd == "update" {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		newVer, err := applyUpdate(ctx, "")
+		if err != nil {
+			// Being already up-to-date is NOT a failure: the anti-downgrade gate returns
+			// an error when latest is not newer. Detect that case and report it calmly.
+			if strings.Contains(err.Error(), "not newer") {
+				fmt.Printf("%s v%s — уже последняя версия.\n", version.Name, version.Version)
+				return
+			}
+			fmt.Fprintln(os.Stderr, "update failed:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s: обновлено до v%s. Перезапустите morgward.\n", version.Name, newVer)
+		return
+	}
 
 	cfg := &config.Config{}
 	var modeStr string
@@ -193,18 +213,14 @@ func main() {
 	}
 }
 
-// performUpdate downloads + replaces the running binary with the latest release
-// via go-selfupdate, then relaunches the updated executable and exits. On Windows
-// the running exe cannot be deleted, so go-selfupdate renames it to "<exe>.old";
-// the TUI's Init() cleans that leftover on the next launch. targetVer is the
-// version the operator saw on the strip (informational; UpdateSelf re-detects).
-func performUpdate(targetVer string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
+// applyUpdate downloads + verifies + replaces the running binary with the latest
+// release (checksum-validated, anti-downgrade gated). Returns the new version on
+// success. It does NOT relaunch — callers decide (the TUI relaunches; the CLI
+// `update` command just reports and exits).
+func applyUpdate(ctx context.Context, targetVer string) (string, error) {
 	updater, err := newUpdater()
 	if err != nil {
-		return fmt.Errorf("new updater: %w", err)
+		return "", fmt.Errorf("new updater: %w", err)
 	}
 	if targetVer != "" {
 		fmt.Printf("%s: обновление до v%s…\n", version.Name, targetVer)
@@ -217,29 +233,51 @@ func performUpdate(targetVer string) error {
 	// it fails closed here rather than downloading an unverified binary.
 	rel, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(updateRepo))
 	if err != nil {
-		return fmt.Errorf("detect latest: %w", err)
+		return "", fmt.Errorf("detect latest: %w", err)
 	}
 	if !found || rel == nil {
-		return fmt.Errorf("no release asset found for this OS/arch")
+		return "", fmt.Errorf("no release asset found for this OS/arch")
 	}
 	// Anti-downgrade (F08): go-selfupdate's UpdateCommand only gates on version
 	// inequality, so it would happily apply an OLDER "latest". Refuse anything that
 	// is not strictly newer than the running build before touching the binary.
 	if !rel.GreaterThan(version.Version) {
-		return fmt.Errorf("latest release v%s is not newer than current v%s — refusing",
+		return "", fmt.Errorf("latest release v%s is not newer than current v%s — refusing",
 			rel.Version(), version.Version)
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate executable: %w", err)
+		return "", fmt.Errorf("locate executable: %w", err)
 	}
 	// UpdateTo applies exactly the release we just vetted (verifying its checksum),
 	// avoiding a re-detect TOCTOU window between the version gate and the download.
 	if err := updater.UpdateTo(ctx, rel, exe); err != nil {
-		return fmt.Errorf("update self: %w", err)
+		return "", fmt.Errorf("update self: %w", err)
 	}
-	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, rel.Version())
+	return rel.Version(), nil
+}
+
+// performUpdate downloads + replaces the running binary with the latest release
+// via applyUpdate, then relaunches the updated executable and exits. On Windows
+// the running exe cannot be deleted, so go-selfupdate renames it to "<exe>.old";
+// the TUI's Init() cleans that leftover on the next launch. targetVer is the
+// version the operator saw on the strip (informational; applyUpdate re-detects).
+func performUpdate(targetVer string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	newVer, err := applyUpdate(ctx, targetVer)
+	if err != nil {
+		return err
+	}
+
+	// Locate the (now-replaced) executable to relaunch the updated binary.
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate executable: %w", err)
+	}
+	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, newVer)
 	c := exec.Command(exe, os.Args[1:]...) // #nosec G204 G702 -- args are the local operator's own launch argv; no shell; binary path from os.Executable(); update authenticity is enforced by the F01 checksum validator
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
