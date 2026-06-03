@@ -78,6 +78,14 @@ type Hooks struct {
 	OnConnect  func(monitor.ConnInfo) // fires once after key auth is active
 	OnProgress func(Progress)         // fires per step and once at the end
 	OnKey      func(pem string)       // fires once with the generated ed25519 PEM (password path only; never via the logger)
+
+	// PreparedKey, when non-nil, is an ed25519 keypair the CALLER already generated
+	// (the TUI pre-generates it so it can show the key to the operator BEFORE the run
+	// starts). On the password path prepare() uses this keypair's AuthorizedLine +
+	// PrivatePEM INSTEAD of calling sshx.GenerateKeyPair, and skips OnKey (the caller
+	// already holds the PEM). nil ⇒ the original behavior (engine generates the key) —
+	// the CLI leaves it nil so it is entirely unaffected.
+	PreparedKey *sshx.KeyPair
 }
 
 // Progress is a single step lifecycle event (or, with Done set, the run's final
@@ -269,15 +277,24 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 		}
 		notifyConnect(h.OnConnect, cfg, keyPEM, false)
 	case keyPEM == nil:
-		log.Step("KEY", "Generate ed25519 key and switch to key auth")
-		kp, gerr := sshx.GenerateKeyPair("morgward@" + cfg.Host)
-		if gerr != nil {
-			return nil, cleanup, fmt.Errorf("keygen: %w", gerr)
-		}
-		authLine = kp.AuthorizedLine
-		keyPEM = kp.PrivatePEM
-		if h.OnKey != nil {
-			h.OnKey(string(kp.PrivatePEM))
+		// The caller may have pre-generated the keypair (TUI shows it before the run);
+		// in that case reuse it and skip OnKey (the caller already holds the PEM). When
+		// nil (CLI path), generate here exactly as before and fire OnKey.
+		if h.PreparedKey != nil {
+			log.Step("KEY", "Use caller-prepared ed25519 key and switch to key auth")
+			authLine = h.PreparedKey.AuthorizedLine
+			keyPEM = h.PreparedKey.PrivatePEM
+		} else {
+			log.Step("KEY", "Generate ed25519 key and switch to key auth")
+			kp, gerr := sshx.GenerateKeyPair("morgward@" + cfg.Host)
+			if gerr != nil {
+				return nil, cleanup, fmt.Errorf("keygen: %w", gerr)
+			}
+			authLine = kp.AuthorizedLine
+			keyPEM = kp.PrivatePEM
+			if h.OnKey != nil {
+				h.OnKey(string(kp.PrivatePEM))
+			}
 		}
 
 		push := "mkdir -p /root/.ssh && chmod 700 /root/.ssh\n" +

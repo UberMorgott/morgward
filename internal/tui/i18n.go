@@ -132,8 +132,7 @@ const (
 	kNoWord      // нет / no
 
 	// nav hints
-	kSummaryHint // enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык
-	kWikiHint    // esc — назад · ↑↓ — прокрутка · l — язык
+	kWikiHint // esc — назад · ↑↓ — прокрутка · l — язык
 
 	// --- wiki page (phaseWiki) -------------------------------------------
 	kWikiWhat      // ЧТО ДЕЛАЕТ
@@ -161,13 +160,13 @@ const (
 	// --- SSH key screen (phaseKey) ---------------------------------------
 	// The generated private key lives ONLY in memory; this screen is the one
 	// place it is shown so the operator can copy it before it is lost.
-	kKeyTitle      // box title: "SSH key access"
-	kKeyWarnSoft   // password login is KEPT — the key is an optional extra
-	kKeyConnHint   // label before the ssh command (the command is built in code)
-	kKeyCopyBtn    // clickable button label: "Copy key"
-	kKeyCopied     // status after a successful clipboard copy: "✓ copied"
-	kKeyCopyFail   // status after a failed copy: "copy failed — select manually"
-	kKeyHint       // bottom control hint for the key screen
+	kKeyTitle    // box title: "SSH key access"
+	kKeyWarnSoft // password login is KEPT — the key is an optional extra
+	kKeyConnHint // label before the ssh command (the command is built in code)
+	kKeyCopyBtn  // clickable button label: "Copy key"
+	kKeyCopied   // status after a successful clipboard copy: "✓ copied"
+	kKeyCopyFail // status after a failed copy: "copy failed — select manually"
+	kKeyHint     // bottom control hint for the key screen
 
 	// --- main-menu "Save log to file" toggle -----------------------------
 	kSaveLogLabel // form toggle label: "Save log to file"
@@ -226,6 +225,26 @@ const (
 	kSecHint           // security-menu control hint
 	kSecRootByPassword // access-card value: root login allowed by password
 	kSecAdminAbsent    // access-card value: no admin user present
+
+	// --- CHANGE 1: apply-confirm centered modal -------------------------------
+	kApplyModalTitle   // modal title: "Применить твики?"
+	kApplyModalBody    // modal body: applies all tweaks
+	kApplyModalReboot  // extra reboot warning when the bucket includes A8
+	kApplyModalButtons // buttons line: "[Enter] применить   [Esc] отмена"
+
+	// --- CHANGE 2: pre-run generated-key modal --------------------------------
+	kKeyPreRunWarn    // pre-run guidance: save the key — without it you can't get in
+	kKeyPreRunButtons // pre-run buttons: "[Enter] начать применение   [Esc] отмена"
+	kKeyPreRunHint    // pre-run bottom hint
+
+	// --- CHANGE 4: two-column summary (SSH access + home button) --------------
+	kSecColTitle   // right-column header: "SSH-ДОСТУП" / "SSH ACCESS"
+	kSumRAM        // stats-strip / disk-mem row label: "ОЗУ" / "RAM"
+	kSumKeyAdded   // ssh-access row: "ключ добавлен" / "key added"
+	kSumKeyShow    // clickable ssh-access row: "ключ ‹показать›" / "key ‹show›"
+	kSumHomeButton // clickable home pill: "[ На главную ]" / "[ Home ]"
+	kSumColFixes   // left-column header: "ФИКСЫ" / "FIXES"
+	kSummaryHint2  // updated summary hint mentioning the home button + key row
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -309,8 +328,7 @@ var tr = map[Lang]map[stringKey]string{
 		kYesWord:      "да",
 		kNoWord:       "нет",
 
-		kSummaryHint: "enter/esc — меню · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
-		kWikiHint:    "esc — назад · ↑↓ — прокрутка · l — язык",
+		kWikiHint: "esc — назад · ↑↓ — прокрутка · l — язык",
 
 		kWikiWhat:      "ЧТО ДЕЛАЕТ",
 		kWikiWhy:       "ЗАЧЕМ",
@@ -335,10 +353,10 @@ var tr = map[Lang]map[stringKey]string{
 		kKeyTitle:    "Доступ по SSH-ключу",
 		kKeyWarnSoft: "Вход по логину и паролю (root и от хостинга) СОХРАНЁН — доступ ты не потеряешь. Этот ключ — дополнительный способ входа, можешь сохранить его (необязательно).",
 		kKeyConnHint: "Подключение:",
-		kKeyCopyBtn:    "Скопировать ключ",
-		kKeyCopied:     "✓ скопировано",
-		kKeyCopyFail:   "не удалось скопировать — выдели вручную",
-		kKeyHint:       "esc — назад · c — копировать · l — язык",
+		kKeyCopyBtn:  "Скопировать ключ",
+		kKeyCopied:   "✓ скопировано",
+		kKeyCopyFail: "не удалось скопировать — выдели вручную",
+		kKeyHint:     "esc — назад · c — копировать · l — язык",
 
 		kSaveLogLabel: "Сохранять лог в файл",
 		kSaveLogOn:    "да",
@@ -388,6 +406,23 @@ var tr = map[Lang]map[stringKey]string{
 		kSecHint:           "1/2 — безопасные действия · 3 — опасное · esc назад · l — язык",
 		kSecRootByPassword: "разрешён по паролю",
 		kSecAdminAbsent:    "отсутствует",
+
+		kApplyModalTitle:   "Применить твики?",
+		kApplyModalBody:    "Будут применены все доступные твики (сеть, ядро, память, обслуживание).",
+		kApplyModalReboot:  "⚠ Включает полное обновление и ПЕРЕЗАГРУЗКУ (A8): VPN и сервисы прервутся примерно на 1–2 минуты.",
+		kApplyModalButtons: "[Enter] применить   [Esc] отмена",
+
+		kKeyPreRunWarn:    "Сохрани этот ключ — без него ты не зайдёшь, если позже отключишь вход по паролю. Ключ существует только в памяти и нигде не сохраняется автоматически.",
+		kKeyPreRunButtons: "[Enter] начать применение   [Esc] отмена",
+		kKeyPreRunHint:    "enter — начать · c — копировать ключ · esc — отмена · l — язык",
+
+		kSecColTitle:   "SSH-ДОСТУП",
+		kSumRAM:        "ОЗУ",
+		kSumKeyAdded:   "ключ добавлен",
+		kSumKeyShow:    "ключ ‹показать›",
+		kSumHomeButton: "[ На главную ]",
+		kSumColFixes:   "ФИКСЫ",
+		kSummaryHint2:  "enter/esc — на главную · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -468,8 +503,7 @@ var tr = map[Lang]map[stringKey]string{
 		kYesWord:      "yes",
 		kNoWord:       "no",
 
-		kSummaryHint: "enter/esc — menu · click a fix for details · ↑↓ — scroll · l — lang",
-		kWikiHint:    "esc — back · ↑↓ — scroll · l — lang",
+		kWikiHint: "esc — back · ↑↓ — scroll · l — lang",
 
 		kWikiWhat:      "WHAT IT DOES",
 		kWikiWhy:       "WHY",
@@ -494,10 +528,10 @@ var tr = map[Lang]map[stringKey]string{
 		kKeyTitle:    "SSH key access",
 		kKeyWarnSoft: "Password login (root and your hosting login) is KEPT — you won't lose access. This key is an extra way in; save it if you like (optional).",
 		kKeyConnHint: "Connect:",
-		kKeyCopyBtn:    "Copy key",
-		kKeyCopied:     "✓ copied",
-		kKeyCopyFail:   "copy failed — select manually",
-		kKeyHint:       "esc — back · c — copy · l — lang",
+		kKeyCopyBtn:  "Copy key",
+		kKeyCopied:   "✓ copied",
+		kKeyCopyFail: "copy failed — select manually",
+		kKeyHint:     "esc — back · c — copy · l — lang",
 
 		kSaveLogLabel: "Save log to file",
 		kSaveLogOn:    "yes",
@@ -547,6 +581,23 @@ var tr = map[Lang]map[stringKey]string{
 		kSecHint:           "1/2 — safe actions · 3 — danger · esc back · l — lang",
 		kSecRootByPassword: "allowed by password",
 		kSecAdminAbsent:    "absent",
+
+		kApplyModalTitle:   "Apply tweaks?",
+		kApplyModalBody:    "This applies all available tweaks (network, kernel, memory, maintenance).",
+		kApplyModalReboot:  "⚠ Includes a full upgrade and a REBOOT (A8): VPN and services bounce for ~1–2 minutes.",
+		kApplyModalButtons: "[Enter] apply   [Esc] cancel",
+
+		kKeyPreRunWarn:    "Save this key — without it you can't get in if you later disable password login. The key lives only in memory and is never saved automatically.",
+		kKeyPreRunButtons: "[Enter] start applying   [Esc] cancel",
+		kKeyPreRunHint:    "enter — start · c — copy key · esc — cancel · l — lang",
+
+		kSecColTitle:   "SSH ACCESS",
+		kSumRAM:        "RAM",
+		kSumKeyAdded:   "key added",
+		kSumKeyShow:    "key ‹show›",
+		kSumHomeButton: "[ Home ]",
+		kSumColFixes:   "FIXES",
+		kSummaryHint2:  "enter/esc — home · click a fix for details · ↑↓ — scroll · l — lang",
 	},
 }
 

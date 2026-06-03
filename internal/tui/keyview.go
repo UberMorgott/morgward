@@ -32,10 +32,14 @@ func (m model) keyConnLine() string {
 // rendered (the OpenSSH PEM is multi-line, ~400 chars); long lines are clipped to
 // innerW so they never cross the border.
 func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
-	// The default run KEEPS password login, so the key is an optional convenience —
-	// render it non-alarming (labelStyle); it never implies the operator is locked
-	// out. The opt-in lockdown (A2-danger) is a separate flow.
-	lines = append(lines, wrap(labelStyle.Render(t(m.lang, kKeyWarnSoft)), innerW)...)
+	// Warning text differs by mode: the PRE-RUN modal (CHANGE 2) tells the operator to
+	// save the key BEFORE the run starts; the post-run/read-only viewer keeps the
+	// non-alarming "password login is kept" note. Both render the PEM + copy button.
+	if m.keyPreRun {
+		lines = append(lines, wrap(focusStyle.Render(t(m.lang, kKeyPreRunWarn)), innerW)...)
+	} else {
+		lines = append(lines, wrap(labelStyle.Render(t(m.lang, kKeyWarnSoft)), innerW)...)
+	}
 	lines = append(lines, "")
 	for ln := range strings.SplitSeq(strings.TrimRight(m.keyPEM, "\n"), "\n") {
 		lines = append(lines, truncDisplay(ln, innerW))
@@ -52,6 +56,12 @@ func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
 		lines = append(lines, errStyle.Render(t(m.lang, kKeyCopyFail)))
 	default:
 		lines = append(lines, "")
+	}
+	// On the pre-run modal, the action line ("[Enter] начать применение  [Esc] отмена")
+	// makes it explicit that Enter STARTS the run from here.
+	if m.keyPreRun {
+		lines = append(lines, "")
+		lines = append(lines, pillOnStyle.Render(t(m.lang, kKeyPreRunButtons)))
 	}
 	return lines, buttonIdx
 }
@@ -83,7 +93,11 @@ func (m model) keyView() string {
 	viewH := m.bodyViewH()
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, 0)
 
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kKeyHint)), innerW))
+	hintKey := kKeyHint
+	if m.keyPreRun {
+		hintKey = kKeyPreRunHint
+	}
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, hintKey)), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')

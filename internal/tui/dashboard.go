@@ -32,6 +32,12 @@ import (
 // rows are resolved against the scroll region (honoring the scroll offset). Both
 // hit-tests reuse the SAME builders the renderer iterates so geometry cannot drift.
 func (m model) dashboardView() string {
+	// CHANGE 1: when the apply-confirm is armed, show a clearly-visible CENTERED MODAL
+	// over the screen instead of merely swapping the bottom hint. Enter/Esc are still
+	// handled by the existing phaseDashboard key handler (launchApplyTweaks / cancel).
+	if m.dashApplyConfirm {
+		return m.applyConfirmModalView()
+	}
 	bw := m.boxWidth()
 	innerW := innerWidth(bw)
 	b := lipgloss.RoundedBorder()
@@ -56,17 +62,55 @@ func (m model) dashboardView() string {
 	off := clampScroll(m.dashScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
-	hint := t(m.lang, kDashHint)
-	if m.dashApplyConfirm {
-		hint = t(m.lang, kDashApplyConfirm)
-	}
-	sb.WriteString(contentLine(b, helpStyle.Render(hint), innerW))
+	// dashApplyConfirm is handled by applyConfirmModalView (returned early above), so
+	// the normal dashboard always shows the plain navigation hint here.
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kDashHint)), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')
 
 	sb.WriteString(m.monitorBox(innerW))
 	return sb.String()
+}
+
+// modalBoxStyle is the bordered frame for a centered confirm modal (CHANGE 1): an
+// accent rounded border with padding, so the box reads as an overlay distinct from
+// the plain hand-drawn chrome.
+var modalBoxStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("57")).
+	Padding(1, 3)
+
+// applyConfirmModalView renders the apply-tweaks confirm as a CENTERED modal box
+// (CHANGE 1). It states plainly that this applies all tweaks and, when the bucket
+// includes A8, WARNS that it performs a full upgrade + REBOOT (services bounce
+// ~1-2 min). The buttons line restates the Enter/Esc controls. Enter/Esc remain
+// handled by the phaseDashboard key handler (launchApplyTweaks / cancel) — this is
+// purely the visual. The box is centered in the full terminal viewport.
+func (m model) applyConfirmModalView() string {
+	// Modal inner width: bounded so the box never spans the whole terminal but stays
+	// readable on a narrow one.
+	w := m.boxWidth()
+	innerW := min(max(innerWidth(w)-8, 32), 64)
+
+	title := sumHeadStyle.Render(t(m.lang, kApplyModalTitle))
+
+	var parts []string
+	parts = append(parts, title)
+	parts = append(parts, "")
+	parts = append(parts, wrap(labelStyle.Render(t(m.lang, kApplyModalBody)), innerW)...)
+	if bucketHasA8(tweakBucketIDs()) {
+		parts = append(parts, "")
+		parts = append(parts, wrap(errStyle.Render(t(m.lang, kApplyModalReboot)), innerW)...)
+	}
+	parts = append(parts, "")
+	parts = append(parts, pillOnStyle.Render(t(m.lang, kApplyModalButtons)))
+
+	box := modalBoxStyle.Render(strings.Join(parts, "\n"))
+
+	// Center the box over a full-viewport canvas so it visibly floats in the middle.
+	cw, ch := m.boxWidth(), max(m.h, 1)
+	return lipgloss.Place(cw, ch, lipgloss.Center, lipgloss.Center, box)
 }
 
 // dashButtonNames is the ordered list of the two Dashboard action-button labels

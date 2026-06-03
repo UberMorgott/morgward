@@ -16,11 +16,11 @@ import (
 type Status int
 
 const (
-	StatusPass   Status = iota
-	StatusWarn          // non-lockout check failed
-	StatusFail          // lockout-capable check failed
-	StatusSkip          // check not applicable (precondition absent) — reason in Detail
-	StatusUnknown       // transport/exec error — the row could NOT be measured (not a WARN)
+	StatusPass    Status = iota
+	StatusWarn           // non-lockout check failed
+	StatusFail           // lockout-capable check failed
+	StatusSkip           // check not applicable (precondition absent) — reason in Detail
+	StatusUnknown        // transport/exec error — the row could NOT be measured (not a WARN)
 )
 
 func (s Status) String() string {

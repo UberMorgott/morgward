@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/stats"
@@ -163,7 +164,8 @@ func (m model) summaryStatLines(innerW int) []string {
 	}
 	emitGroup(kSecPkgKernel, pkg)
 
-	// ДИСК И ПАМЯТЬ.
+	// ДИСК И ПАМЯТЬ. RAM before→after lives ONLY in the top stats strip (so the
+	// operator sees it once) — do not repeat it here.
 	disk := []statRow{{t(m.lang, kRowDiskUsed), sumValue(sumDiskStr(b), sumDiskStr(a))}}
 	if !b.ZramActive && a.ZramActive {
 		disk = append(disk, statRow{t(m.lang, kRowZram), t(m.lang, kZramAdded)})
@@ -255,7 +257,7 @@ func (m model) summaryView() string {
 	innerW := innerWidth(bw)
 	b := lipgloss.RoundedBorder()
 
-	body := m.summaryBodyLines() // header + blocks + fix-list header + fix rows
+	body := m.summaryBodyLines() // strip + header + two-column block
 
 	var sb strings.Builder
 	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
@@ -263,14 +265,20 @@ func (m model) summaryView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	// Scrollable middle region (the only resizable part); the chrome above (2 rows)
-	// and below (hint + bottom + 3-row monitor) is fixed, so the footer never moves.
-	viewH := m.bodyViewH()
+	// Scrollable middle region (the only resizable part). One row is reserved below
+	// it for the pinned [ На главную ] button, so the home button never scrolls away;
+	// the chrome above (2 rows) and below (button + hint + bottom + 3-row monitor) is
+	// fixed, so the footer never moves.
+	viewH := m.summaryBodyViewH()
 	off := clampScroll(m.sumScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
+	// Pinned clickable "На главную" button row (CHANGE 4), styled like the run back-pill.
+	sb.WriteString(contentLine(b, pillOnStyle.Render(t(m.lang, kSumHomeButton)), innerW))
+	sb.WriteByte('\n')
+
 	// Hint + main box bottom border.
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kSummaryHint)), innerW))
+	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kSummaryHint2)), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')
@@ -280,54 +288,329 @@ func (m model) summaryView() string {
 	return sb.String()
 }
 
-// summaryBodyLines builds the ordered body line slice (the single source of truth
-// for BOTH summaryView's render and fixAtClick's geometry): header, blank, stat
-// blocks (possibly empty), blank, fix-list header, then one row per fix.
+// summaryBodyViewH is the scrollable middle height on the summary screen: the shared
+// bodyViewH minus the one fixed row reserved for the pinned home button, floored at 1.
+func (m model) summaryBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+
+// summaryHomeRow is the FIXED screen Y of the pinned [ На главную ] button: it follows
+// the 2 chrome rows and the scrollable region, so it never moves with the scroll offset.
+func (m model) summaryHomeRow() int { return summaryBodyTopRow + m.summaryBodyViewH() }
+
+// summaryStatStrip builds the compact one-line stats strip under the header:
+// RAM before→after, datacenter + internet ping, and a posture token (BBR / firewall)
+// when known. Each segment is dropped when its data is unavailable; "" when nothing
+// is known (the caller then omits the strip). The whole line is clamped to innerW.
+func (m model) summaryStatStrip(innerW int) string {
+	b, a := m.summary.Before, m.summary.After
+	if b == nil && a == nil {
+		return ""
+	}
+	empty := stats0()
+	if b == nil {
+		b = empty
+	}
+	if a == nil {
+		a = empty
+	}
+	var segs []string
+	// RAM before→after (NEW): MemKB is the total RAM; show old→new humanized.
+	if ram := sumValue(sumMemStr(b), sumMemStr(a)); ram != "" {
+		segs = append(segs, t(m.lang, kSumRAM)+" "+ram)
+	}
+	if p := sumValue(sumSpeedStr(b.GatewayPingMs), sumSpeedStr(a.GatewayPingMs)); p != "" {
+		segs = append(segs, t(m.lang, kRowPingGW)+" "+p)
+	}
+	if p := sumValue(sumSpeedStr(b.InternetPingMs), sumSpeedStr(a.InternetPingMs)); p != "" {
+		segs = append(segs, t(m.lang, kRowPingNet)+" "+p)
+	}
+	// Posture token: firewall on/off after the run.
+	if a.FirewallActive {
+		segs = append(segs, t(m.lang, kRowFirewall)+" "+m.boolWordL(true))
+	}
+	if len(segs) == 0 {
+		return ""
+	}
+	return truncDisplay(strings.Join(segs, "  ·  "), innerW)
+}
+
+// sumMemStr humanizes a snapshot's total RAM (MemKB), or "" when unknown.
+func sumMemStr(s *stats.Snapshot) string {
+	if s.MemKB <= 0 {
+		return ""
+	}
+	return humanKB64(s.MemKB)
+}
+
+// summaryAccessRows builds the right-column "SSH-ДОСТУП" rows from the After
+// snapshot: root login, key-only, and (when a key was generated this run) a clickable
+// "ключ ‹показать›" row. The second return value reports the row index of that
+// clickable key row within the access-rows slice (-1 when absent), so the hit-test
+// can map a click to "open the key viewer".
+func (m model) summaryAccessRows() (rows []string, keyShowIdx int) {
+	keyShowIdx = -1
+	a := m.summary.After
+	if a == nil {
+		a = stats0()
+	}
+	rows = append(rows, "  "+labelStyle.Render(t(m.lang, kRowRootLogin)+": ")+valueOrDash(a.RootLogin))
+	rows = append(rows, "  "+labelStyle.Render(t(m.lang, kRowKeyOnly)+": ")+m.boolWordL(a.KeyOnly))
+	if m.keyGenerated && m.keyPEM != "" {
+		keyShowIdx = len(rows)
+		rows = append(rows, "  "+focusStyle.Render(t(m.lang, kSumKeyShow)))
+	} else {
+		rows = append(rows, "  "+labelStyle.Render(t(m.lang, kSumKeyAdded)+": ")+m.boolWordL(a.KeyOnly || a.RootLogin != ""))
+	}
+	return rows, keyShowIdx
+}
+
+// valueOrDash returns v, or "—" when v is empty, so a missing snapshot field shows a
+// neutral placeholder rather than a blank.
+func valueOrDash(v string) string {
+	if v == "" {
+		return "—"
+	}
+	return v
+}
+
+// summaryTwoCol reports whether the terminal is wide enough for the two-column body.
+// Below this, the layout stacks into a single column.
+func (m model) summaryTwoCol(innerW int) bool {
+	return innerW >= 2*minSummaryColW+sumColGap
+}
+
+const (
+	// minSummaryColW is the smallest per-column width that still fits a useful fix /
+	// access row; below it (each of two columns narrower) the body stacks to one column.
+	minSummaryColW = 26
+	// sumColGap is the spaces between the two summary columns.
+	sumColGap = 3
+)
+
+// summaryBodyLines builds the ordered body line slice — the single source of truth for
+// BOTH summaryView's render and the hit-tests. Layout: header (line 0), optional stats
+// strip, blank, then the two-column block (LEFT = ФИКСЫ list, RIGHT = SSH-ДОСТУП) when
+// wide enough, else the two columns stacked. fixAtClick / summaryKeyShowAtClick
+// reconstruct the SAME geometry so clicks stay accurate.
 func (m model) summaryBodyLines() []string {
+	innerW := innerWidth(m.boxWidth())
 	var body []string
 	body = append(body, m.summaryHeader())
-	if blocks := m.summaryStatLines(innerWidth(m.boxWidth())); len(blocks) > 0 {
-		body = append(body, "")
-		body = append(body, blocks...)
+	if strip := m.summaryStatStrip(innerW); strip != "" {
+		body = append(body, strip)
 	}
-	if len(m.summary.Results) > 0 {
+
+	left := m.summaryLeftColumn()
+	right := m.summaryRightColumn()
+
+	body = append(body, "")
+	if m.summaryTwoCol(innerW) {
+		body = append(body, m.zipColumns(left, right, innerW)...)
+	} else {
+		// Stacked single column: LEFT block, blank, RIGHT block.
+		body = append(body, left...)
 		body = append(body, "")
-		body = append(body, sumHeadStyle.Render(t(m.lang, kSecFixes)))
-		body = append(body, m.fixListLines()...)
+		body = append(body, right...)
 	}
 	return body
 }
 
+// summaryLeftColumn is the "ФИКСЫ" column: a header then one clickable row per fix.
+func (m model) summaryLeftColumn() []string {
+	col := []string{sumHeadStyle.Render(t(m.lang, kSumColFixes))}
+	col = append(col, m.fixListLines()...)
+	return col
+}
+
+// summaryRightColumn is the "SSH-ДОСТУП" column: a header then the access rows
+// (root login / key-only / key-added or clickable key-show), plus the compact stat
+// blocks (disk/zram, packages) so the detailed metrics still have a home.
+func (m model) summaryRightColumn() []string {
+	col := []string{sumHeadStyle.Render(t(m.lang, kSecColTitle))}
+	rows, _ := m.summaryAccessRows()
+	col = append(col, rows...)
+	if blocks := m.summaryStatLines(innerWidth(m.boxWidth())); len(blocks) > 0 {
+		col = append(col, "")
+		col = append(col, blocks...)
+	}
+	return col
+}
+
+// zipColumns renders two columns side by side: left cell padded to colW so the right
+// cell begins at a fixed X. Rows beyond the shorter column render the longer one's
+// remaining cells (left-padded for right-only rows). colW is half the inner width
+// minus the gap. Display-width math is lipgloss-based (Cyrillic-safe).
+func (m model) zipColumns(left, right []string, innerW int) []string {
+	colW := (innerW - sumColGap) / 2
+	n := max(len(left), len(right))
+	out := make([]string, 0, n)
+	pad := func(s string) string {
+		s = truncDisplay(s, colW)
+		if d := colW - lipgloss.Width(s); d > 0 {
+			s += strings.Repeat(" ", d)
+		}
+		return s
+	}
+	for i := 0; i < n; i++ {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out = append(out, pad(l)+strings.Repeat(" ", sumColGap)+truncDisplay(r, colW))
+	}
+	return out
+}
+
 // fixAtClick maps a click at (x,y) to a fix-list row's step ID, accounting for the
-// scroll offset. The middle region occupies screen rows [summaryBodyTopRow,
-// summaryBodyTopRow+viewH); a click there maps to body index sumScroll+(y-top), and
-// the fix rows are the tail of the body (after the header + stat blocks + fix-list
-// header). X must fall within the rendered row width. Returns ok=false on a miss.
+// scroll offset and the two-column layout. The middle region occupies screen rows
+// [summaryBodyTopRow, summaryBodyTopRow+viewH); a click there maps to body index
+// sumScroll+(y-top). The fix rows live in the LEFT column (after the ФИКСЫ header),
+// so a hit requires X to fall in the left column AND the body row to map to a fix.
 func (m model) fixAtClick(x, y int) (string, bool) {
 	if m.phase != phaseSummary || len(m.summary.Results) == 0 {
 		return "", false
 	}
-	body := m.summaryBodyLines()
-	viewH := m.bodyViewH()
-	off := clampScroll(m.sumScroll, len(body), viewH)
-
-	rowInRegion := y - summaryBodyTopRow
-	if rowInRegion < 0 || rowInRegion >= viewH {
-		return "", false // click is in the chrome (switcher/hint/border/monitor), not the body
-	}
-	bodyIdx := off + rowInRegion
-	fixStart := len(body) - len(m.summary.Results) // fix rows are the body tail
-	idx := bodyIdx - fixStart
-	if idx < 0 || idx >= len(m.summary.Results) {
+	innerW := innerWidth(m.boxWidth())
+	bodyIdx, ok := m.summaryRowAtClick(y)
+	if !ok {
 		return "", false
 	}
+	twoCol := m.summaryTwoCol(innerW)
+	colW := (innerW - sumColGap) / 2
 	const contentX0 = 2 // borderLeft(1) + space(1)
-	row := "  " + fixGlyph(m.summary.Results[idx].Status) + " " + m.fixRowText(m.summary.Results[idx])
-	w := lipgloss.Width(truncDisplay(row, innerWidth(m.boxWidth())))
+	// In two-column mode the fixes are the LEFT column; require X within it.
+	if twoCol && x >= contentX0+colW {
+		return "", false
+	}
+
+	// Resolve which grid row of the body this is, then which left-column entry.
+	gridStart := m.summaryColBlockStart()
+	rowInBlock := bodyIdx - gridStart
+	if rowInBlock < 0 {
+		return "", false
+	}
+	left := m.summaryLeftColumn()
+	// Stacked mode: the left block is contiguous from gridStart; two-col mode: each
+	// grid row holds left[rowInBlock] in its left cell (the zip is row-aligned).
+	var leftIdx int
+	if twoCol {
+		leftIdx = rowInBlock
+	} else {
+		leftIdx = rowInBlock // stacked: left block starts at gridStart too
+		if leftIdx >= len(left) {
+			return "", false // past the left block into the blank/right block
+		}
+	}
+	// leftIdx 0 is the ФИКСЫ header; fix rows are leftIdx 1.. .
+	fixIdx := leftIdx - 1
+	if fixIdx < 0 || fixIdx >= len(m.summary.Results) {
+		return "", false
+	}
+	row := "  " + fixGlyph(m.summary.Results[fixIdx].Status) + " " + m.fixRowText(m.summary.Results[fixIdx])
+	w := lipgloss.Width(truncDisplay(row, colW))
 	if x >= contentX0 && x < contentX0+w {
-		return m.summary.Results[idx].ID, true
+		return m.summary.Results[fixIdx].ID, true
 	}
 	return "", false
+}
+
+// summaryColBlockStart is the body index where the two-column (or stacked) block
+// begins: after the header, the optional stats strip, and the one blank separator.
+func (m model) summaryColBlockStart() int {
+	innerW := innerWidth(m.boxWidth())
+	idx := 1 // header
+	if m.summaryStatStrip(innerW) != "" {
+		idx++
+	}
+	idx++ // the blank separator before the block
+	return idx
+}
+
+// summaryRowAtClick maps a screen Y to a body index in the scrollable region, honoring
+// the scroll offset, or ok=false when Y is in the chrome (switcher/home/hint/monitor).
+func (m model) summaryRowAtClick(y int) (int, bool) {
+	body := m.summaryBodyLines()
+	viewH := m.summaryBodyViewH()
+	off := clampScroll(m.sumScroll, len(body), viewH)
+	rowInRegion := y - summaryBodyTopRow
+	if rowInRegion < 0 || rowInRegion >= viewH {
+		return 0, false
+	}
+	idx := off + rowInRegion
+	if idx < 0 || idx >= len(body) {
+		return 0, false
+	}
+	return idx, true
+}
+
+// summaryKeyShowAtClick reports whether the click at (x,y) hit the right-column
+// "ключ ‹показать›" row (only present when a key was generated this run). It mirrors
+// the two-column / stacked geometry of summaryBodyLines.
+func (m model) summaryKeyShowAtClick(x, y int) bool {
+	if m.phase != phaseSummary {
+		return false
+	}
+	_, keyShowIdx := m.summaryAccessRows()
+	if keyShowIdx < 0 {
+		return false
+	}
+	innerW := innerWidth(m.boxWidth())
+	bodyIdx, ok := m.summaryRowAtClick(y)
+	if !ok {
+		return false
+	}
+	twoCol := m.summaryTwoCol(innerW)
+	colW := (innerW - sumColGap) / 2
+	const contentX0 = 2
+	gridStart := m.summaryColBlockStart()
+	rowInBlock := bodyIdx - gridStart
+	if rowInBlock < 0 {
+		return false
+	}
+	// Right-column entry index (0 = SSH-ДОСТУП header; rows[i] is access-row i, so the
+	// key-show row sits at rightIdx = 1+keyShowIdx).
+	wantRightIdx := 1 + keyShowIdx
+	if twoCol {
+		// Two-column: right cell begins at contentX0+colW+sumColGap. Require X there.
+		rightX0 := contentX0 + colW + sumColGap
+		if x < rightX0 {
+			return false
+		}
+		return rowInBlock == wantRightIdx
+	}
+	// Stacked: right block follows the left block + one blank. Left block length =
+	// 1 header + N fixes; then a blank; then the right block.
+	leftLen := 1 + len(m.summary.Results)
+	rightStart := leftLen + 1
+	return rowInBlock == rightStart+wantRightIdx && x >= contentX0
+}
+
+// summaryHomeAtClick reports whether the click at (x,y) hit the pinned [ На главную ]
+// button. X spans the rendered button width from the content column (absolute X = 2).
+func (m model) summaryHomeAtClick(x, y int) bool {
+	if m.phase != phaseSummary {
+		return false
+	}
+	if y != m.summaryHomeRow() {
+		return false
+	}
+	const contentX0 = 2
+	w := lipgloss.Width(t(m.lang, kSumHomeButton))
+	return x >= contentX0 && x < contentX0+w
+}
+
+// summaryGoHome navigates from the summary to the post-connect home: the Dashboard
+// when we have audit facts to render it (the hub reachable from a connected session),
+// else back to the landing form. Mirrors the existing nav (goBack / phaseDashboard).
+func (m model) summaryGoHome() (tea.Model, tea.Cmd) {
+	if m.dashFacts != nil {
+		m.phase = phaseDashboard
+		m.dashScroll = 0
+		return m, nil
+	}
+	return m.goBack()
 }
 
 // stats0 returns a pointer to a zero Snapshot, used when one side is nil so the

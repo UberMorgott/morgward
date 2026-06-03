@@ -17,7 +17,7 @@ import (
 // (the TUI security menu); A2Safe is its crypto-only twin for the split path.
 type A2SSH struct{}
 
-func (A2SSH) ID() string    { return "A2" }
+func (A2SSH) ID() string { return "A2" }
 func (A2SSH) Title() string {
 	return "SSH crypto hardening (drop-ins, crypto; access policy unchanged)"
 }

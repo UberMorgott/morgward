@@ -14,6 +14,7 @@ import (
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
+	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/tweaks"
 	"github.com/UberMorgott/morgward/internal/version"
 	"github.com/creativeprojects/go-selfupdate"
@@ -187,14 +188,24 @@ type model struct {
 	wikiUpdateConfirm bool
 
 	// SSH key screen (phaseKey): the generated private-key PEM (lives only in
-	// memory; never logged), the copy-to-clipboard status, where esc returns to,
-	// and whether the auto-route to this screen has already fired once. All plain
-	// copyable types — the model is copied by value every Update.
+	// memory; never logged), the copy-to-clipboard status, and where esc returns to.
+	// All plain copyable types — the model is copied by value every Update.
 	keyPEM        string
 	keyCopied     bool
 	keyCopyFailed bool
 	keyReturn     phase
-	keyShown      bool
+	// keyPreRun marks the phaseKey modal as the PRE-RUN key screen (CHANGE 2):
+	// shown on the password path BEFORE the engine launches, where Enter STARTS the
+	// run rather than dismissing back to keyReturn. False on the post-run/read-only
+	// key viewer (summary "ключ ‹показать›" or the danger-lock flow). Plain bool,
+	// value-copy safe.
+	keyPreRun bool
+	// keyGenerated records that an ephemeral key was generated this run (password
+	// path), so the summary's SSH-access column can offer the "ключ ‹показать›" row.
+	keyGenerated bool
+	// pendingKey is the keypair the TUI pre-generated and handed to the engine via
+	// Hooks.PreparedKey on the password path (CHANGE 2). nil on the --key path.
+	pendingKey *sshx.KeyPair
 
 	// scroll offsets for the directly-rendered summary + wiki screens (the run
 	// screen scrolls its own m.vp instead). They are clamped to the current body

@@ -13,6 +13,7 @@ import (
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
+	"github.com/UberMorgott/morgward/internal/sshx"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -90,6 +91,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case phaseSummary:
+			// The pinned [ На главную ] button navigates to the post-connect home
+			// (Dashboard if connected, else the form). Checked first; its row never
+			// overlaps the scrollable fix/access rows.
+			if m.summaryHomeAtClick(mc.X, mc.Y) {
+				return m.summaryGoHome()
+			}
+			// The right-column "ключ ‹показать›" row re-opens the key viewer (read-only;
+			// keyReturn=phaseSummary so Esc comes back here).
+			if m.summaryKeyShowAtClick(mc.X, mc.Y) {
+				m.keyPreRun = false
+				m.keyReturn = phaseSummary
+				m.phase = phaseKey
+				return m, nil
+			}
 			// A click on a fix row opens its wiki description.
 			if id, ok := m.fixAtClick(mc.X, mc.Y); ok {
 				m.wikiStep = id
@@ -142,7 +157,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if down {
 				d = wheelStep
 			}
-			m.sumScroll = clampScroll(m.sumScroll+d, len(m.summaryBodyLines()), m.bodyViewH())
+			m.sumScroll = clampScroll(m.sumScroll+d, len(m.summaryBodyLines()), m.summaryBodyViewH())
 		case phaseWiki:
 			d := 0
 			if up {
@@ -245,15 +260,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case phaseSummary:
-			// On the summary, "back" returns to the form/menu (stops the sampler);
-			// ↑↓/k/j scroll the stats + fix list when it overflows the middle region.
+			// On the summary, enter/esc/b go to the post-connect home (Dashboard when
+			// connected, else the form); ↑↓/k/j scroll the two-column body when it
+			// overflows the (button-reserved) middle region.
 			switch msg.String() {
 			case "enter", "esc", "b":
-				return m.goBack()
+				return m.summaryGoHome()
 			case "up", "k":
-				m.sumScroll = clampScroll(m.sumScroll-1, len(m.summaryBodyLines()), m.bodyViewH())
+				m.sumScroll = clampScroll(m.sumScroll-1, len(m.summaryBodyLines()), m.summaryBodyViewH())
 			case "down", "j":
-				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.bodyViewH())
+				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.summaryBodyViewH())
 			}
 			return m, nil
 		case phaseMatrix:
@@ -327,13 +343,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case phaseKey:
-			// 'c' copies the key to the system clipboard; any "back" key returns to
-			// wherever the key screen was opened from (the run, or the summary).
+			// 'c' copies the key to the system clipboard. On the PRE-RUN key modal
+			// (CHANGE 2) Enter STARTS the run with the prepared key, while Esc/b aborts
+			// back to the form; on the post-run/read-only key viewer, any "back" key
+			// returns to wherever the screen was opened from.
 			switch msg.String() {
 			case "c":
 				m = m.copyKey()
-			case "enter", "esc", "b":
-				m.phase = m.keyReturn
+				return m, nil
+			case "enter":
+				if m.keyPreRun {
+					return m.confirmPreRunKey()
+				}
+				m = m.dismissKeyViewer()
+				return m, nil
+			case "esc", "b":
+				if m.keyPreRun {
+					// Abort before the run even starts: clear the staged key and go home.
+					m.keyPreRun = false
+					m.pendingKey = nil
+					return m.goBack()
+				}
+				m = m.dismissKeyViewer()
+				return m, nil
 			}
 			return m, nil
 		}
@@ -432,15 +464,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stopSample = cancel
 		m.sampler = monitor.New(monitor.ConnInfo(msg))
 		go m.sampler.Run(ctx, m.statsCh)
-		// The engine hands over the private-key PEM here. Stash it for other screens,
-		// but auto-route to the key screen ONLY for a freshly GENERATED ephemeral key
-		// (password path). With a user-supplied --key, KeyGenerated is false and we
-		// must NOT flash the operator their own private key.
-		m.keyPEM = string(msg.KeyPEM)
-		if msg.KeyGenerated && m.keyPEM != "" && !m.keyShown {
-			m.keyShown = true
-			m.keyReturn = m.phase
-			m.phase = phaseKey
+		// The engine hands over the private-key PEM here. Stash it for other screens
+		// (the summary's "ключ ‹показать›" row). CHANGE 2: the generated key is now
+		// shown as a PRE-RUN modal (start() routes to phaseKey before launching), so
+		// we DO NOT auto-route here on connect — that would double-show the key after
+		// the run already started. We only record that a key was generated so the
+		// summary can offer to re-show it. With a user-supplied --key, KeyGenerated is
+		// false and keyPEM stays the operator's own key, never auto-shown.
+		if len(msg.KeyPEM) > 0 {
+			m.keyPEM = string(msg.KeyPEM)
+		}
+		if msg.KeyGenerated {
+			m.keyGenerated = true
 		}
 		return m, m.listenStats()
 
@@ -626,6 +661,14 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.running = false
 	m.haveSummary = false
 	m.summary = engine.Summary{}
+	// Reset the pre-run key staging (CHANGE 2) so a fresh run re-generates and
+	// re-shows its own key; clear the in-memory PEM + flags so nothing leaks across runs.
+	m.keyPreRun = false
+	m.keyGenerated = false
+	m.pendingKey = nil
+	m.keyPEM = ""
+	m.keyCopied = false
+	m.keyCopyFailed = false
 	m.elapsed = 0
 	m.spin = 0
 	m.vp.SetContent("")
@@ -709,6 +752,13 @@ func (m *model) refocus() tea.Cmd {
 	return cmd
 }
 
+// start is the FRONT half of a run launch (CHANGE 2): it validates the form, then
+// branches. On the PASSWORD path of a MUTATING command (run/step/revert) it
+// pre-generates the ephemeral ed25519 keypair and shows it as a modal (phaseKey,
+// keyPreRun=true) FIRST — the engine launches only when the operator presses Enter
+// on that screen (launchEngineCmd). On the --key path, or for the read-only audit
+// (which never generates a key), it launches the engine immediately. The CLI is
+// unaffected (it never calls this).
 func (m model) start() (tea.Model, tea.Cmd) {
 	cfg := &config.Config{
 		Host:      strings.TrimSpace(m.inputs[fHost].Value()),
@@ -734,6 +784,88 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Decide whether to show the generated key BEFORE the run. The key is generated
+	// only on the PASSWORD path (no --key) of a MUTATING command (the read-only audit
+	// never touches the box, so it produces no key). On that path, pre-generate the
+	// keypair, stash it, and show the pre-run key modal; Enter there launches the
+	// engine with this prepared key. Otherwise launch immediately.
+	if cfg.KeyPath == "" && mutatingCmd(m.command) {
+		kp, err := sshx.GenerateKeyPair("morgward@" + cfg.Host)
+		if err != nil {
+			m.errMsg = fmt.Sprintf(t(m.lang, kErrValidationFail), err.Error())
+			return m, nil
+		}
+		m.pendingKey = kp
+		m.keyPEM = string(kp.PrivatePEM)
+		m.keyGenerated = true
+		m.keyCopied = false
+		m.keyCopyFailed = false
+		m.host = strings.TrimSpace(m.inputs[fHost].Value())
+		m.keyReturn = phaseForm // Esc on the pre-run modal aborts back to the form
+		m.keyPreRun = true
+		m.phase = phaseKey
+		return m, nil
+	}
+	return m.launchEngine(cfg)
+}
+
+// mutatingCmd reports whether an engine command actually applies changes (and thus
+// generates an ephemeral key on the password path). The read-only "audit"/"detect"/
+// "verify" commands never mutate the box and produce no key.
+func mutatingCmd(cmd string) bool {
+	switch cmd {
+	case "run", "step", "revert":
+		return true
+	}
+	return false
+}
+
+// dismissKeyViewer closes the post-run/read-only key viewer (NOT the pre-run modal).
+// CHANGE 3 hardening: if the run finished with a summary while this viewer was up
+// (keyReturn would send us back to the now-stale run log), route via advanceFromRun
+// so a finished run always lands on the rich summary/dashboard, never stranded on the
+// run log. Otherwise return to wherever the viewer was opened from (e.g. the summary).
+func (m model) dismissKeyViewer() model {
+	if m.finished && m.haveSummary && m.keyReturn == phaseRun {
+		return m.advanceFromRun()
+	}
+	m.phase = m.keyReturn
+	return m
+}
+
+// confirmPreRunKey is invoked when the operator presses Enter on the PRE-RUN key
+// modal (CHANGE 2): it rebuilds the validated config from the form (re-running the
+// same checks start() did) and launches the engine with the already-staged
+// m.pendingKey handed over as Hooks.PreparedKey. keyPreRun is cleared so the run's
+// log view replaces the modal. Any validation regression here returns to the form
+// with a localized error rather than launching half-formed.
+func (m model) confirmPreRunKey() (tea.Model, tea.Cmd) {
+	cfg := &config.Config{
+		Host:      strings.TrimSpace(m.inputs[fHost].Value()),
+		User:      strings.TrimSpace(m.inputs[fUser].Value()),
+		Password:  m.inputs[fPass].Value(),
+		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
+		AdminUser: defaultAdminUser,
+		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
+		Lang:      m.langCode(),
+	}
+	if err := cfg.Validate(); err != nil {
+		m.keyPreRun = false
+		m.pendingKey = nil
+		m.phase = phaseForm
+		m.errMsg = m.localizeValidateErr(err)
+		return m, nil
+	}
+	m.keyPreRun = false
+	return m.launchEngine(cfg)
+}
+
+// launchEngine is the BACK half of a run launch (CHANGE 2): it builds the run-scoped
+// state, spawns the engine goroutine, and returns the streaming listeners. Called
+// directly on the --key / audit path, or from the pre-run key modal's Enter once the
+// operator has acknowledged the generated key. cfg carries the validated config; when
+// m.pendingKey is non-nil it is handed to the engine as Hooks.PreparedKey.
+func (m model) launchEngine(cfg *config.Config) (tea.Model, tea.Cmd) {
 	host := strings.TrimSpace(m.inputs[fHost].Value())
 	m.host = host
 	// Save-log toggle (default off): point cfg.LogFile at a per-host timestamped
@@ -770,6 +902,11 @@ func (m model) start() (tea.Model, tea.Cmd) {
 	// Capture logs/connCh/progCh/done/abort as LOCALS: goBack reassigns the model's
 	// fields, but this closure must keep talking to the channels this run owns.
 	ids := m.cmds
+	// preparedKey is the keypair the TUI pre-generated on the password path (CHANGE 2);
+	// hand it to the engine so it reuses it instead of generating its own. nil on the
+	// --key / audit path ⇒ unchanged engine behavior. Captured as a LOCAL like the
+	// channels below so goBack reassigning model fields can't disturb this run.
+	preparedKey := m.pendingKey
 	runCtx, cancel := context.WithCancel(context.Background())
 	m.engineCancel = cancel
 	m.abort = make(chan struct{})
@@ -777,6 +914,7 @@ func (m model) start() (tea.Model, tea.Cmd) {
 	logs, connCh, progCh, done := m.logs, m.connCh, m.progCh, m.done
 	go func() {
 		err := engine.Execute(runCtx, cfg, cmd, ids, engine.Hooks{
+			PreparedKey: preparedKey,
 			Sink: func(line string) {
 				select {
 				case logs <- line:

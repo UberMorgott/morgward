@@ -269,9 +269,11 @@ func (m model) securityAction(btn secButton) (tea.Model, tea.Cmd) {
 // launchKeyOnlyDanger runs the opt-in key-only lockdown: A2-danger (AllowGroups +
 // PermitRootLogin no + PasswordAuthentication no + passwd -l root, behind the
 // existing ssh-revert safety timer + freshLogin key-only verify) then A2.5 (cloud-
-// init neutralization). The generated key is surfaced to phaseKey by the connMsg
-// handler (KeyGenerated path) BEFORE the lockdown applies, so the operator can copy
-// it first.
+// init neutralization). This is a mutating "step" command on the password path, so
+// start() pre-generates the ephemeral key and shows the PRE-RUN key modal (CHANGE 2)
+// BEFORE the lockdown applies — the operator must Enter past the key screen (where
+// they can copy the key) before the run begins, exactly the guarantee the lockdown
+// needs (don't lock root-by-password before the key is shown).
 func (m model) launchKeyOnlyDanger() (tea.Model, tea.Cmd) {
 	return m.startSteps([]string{"A2-danger", "A2.5"})
 }

@@ -31,23 +31,23 @@ func TestConnMsg_SuppliedKey_NoKeyScreen(t *testing.T) {
 	if m.phase == phaseKey {
 		t.Fatalf("supplied --key routed to phaseKey; phase=%v want %v", m.phase, phaseRun)
 	}
-	if m.keyShown {
-		t.Fatalf("supplied --key set keyShown=true; want false")
-	}
 }
 
-// A freshly generated ephemeral key (KeyGenerated=true) MUST route to the key
-// screen once so the operator can copy it before it is lost.
-func TestConnMsg_GeneratedKey_RoutesToKeyScreen(t *testing.T) {
+// CHANGE 2: the generated key is now shown as a PRE-RUN modal (start() routes to
+// phaseKey BEFORE launching the engine), so a generated-key connect must NOT
+// re-route to the key screen on connect (that would double-show it after the run
+// started). It records keyGenerated=true (so the summary can re-show the key) and
+// stashes the PEM, but stays on the run view.
+func TestConnMsg_GeneratedKey_NoReRouteButRecorded(t *testing.T) {
 	m, stop := route(t, monitor.ConnInfo{KeyPEM: []byte("PRIVATE"), KeyGenerated: true})
 	defer stop()
-	if m.phase != phaseKey {
-		t.Fatalf("generated key did not route to phaseKey; phase=%v", m.phase)
+	if m.phase == phaseKey {
+		t.Fatalf("generated key re-routed to phaseKey on connect; want it shown pre-run only (phase=%v)", m.phase)
 	}
-	if !m.keyShown {
-		t.Fatalf("generated key left keyShown=false; want true")
+	if !m.keyGenerated {
+		t.Fatalf("generated-key connect left keyGenerated=false; want true (summary key-show row)")
 	}
-	if m.keyReturn != phaseRun {
-		t.Fatalf("keyReturn=%v want %v (the prior phase)", m.keyReturn, phaseRun)
+	if m.keyPEM != "PRIVATE" {
+		t.Fatalf("generated-key connect did not stash the PEM; keyPEM=%q", m.keyPEM)
 	}
 }
