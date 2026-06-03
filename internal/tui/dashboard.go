@@ -3,9 +3,11 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/tweaks"
 	"github.com/UberMorgott/morgward/internal/version"
 )
@@ -147,13 +149,17 @@ func (m model) dashButtonsLine() string {
 
 // dashFixedLines builds the FIXED (non-scrolling) Dashboard prefix — the single
 // source of truth for BOTH dashboardView's render and the fixed hit-tests
-// (dashButtonAtClick). Order: server card (framed, N lines), the buttons row, the
-// audit status line. The buttons row index within this slice is len(card); the
-// status line is len(card)+1. Every width uses lipgloss.Width.
+// (dashButtonAtClick). Order: server card (framed, N lines), the buttons row, a BLANK
+// spacer, then the audit status line. The buttons row index within this slice is
+// len(card) (so dashButtonsRowY = summaryBodyTopRow+len(card) is unchanged by the
+// spacer); the blank is len(card)+1 and the status line len(card)+2. dashScrollTopRow
+// / dashScrollViewH derive from len(dashFixedLines), so the +1 spacer shifts the
+// scroll region down automatically. Every width uses lipgloss.Width.
 func (m model) dashFixedLines(innerW int) []string {
 	var fixed []string
 	fixed = append(fixed, m.dashServerCard(innerW)...)
 	fixed = append(fixed, m.dashButtonsLine())
+	fixed = append(fixed, "") // spacer so the buttons row doesn't blend into the status line
 	fixed = append(fixed, m.dashStatusLine(innerW))
 	return fixed
 }
@@ -304,17 +310,8 @@ func (m model) dashServerCard(innerW int) []string {
 			parts = append(parts, t(m.lang, kDashIPv6)+" "+m.boolWordL(true))
 		}
 	}
-	// RAM/disk from the live monitor sample (best-effort; the sampler fills them
-	// once connected). The sample is the same source the footer uses.
-	s := m.sample
-	if m.haveSample {
-		if s.RAMTotalKB > 0 {
-			parts = append(parts, t(m.lang, kDashMemory)+" "+humanKB(s.RAMUsedKB)+"/"+humanKB(s.RAMTotalKB))
-		}
-		if s.DiskTotalKB > 0 {
-			parts = append(parts, t(m.lang, kDashDisk)+" "+humanKB(s.DiskUsedKB)+"/"+humanKB(s.DiskTotalKB))
-		}
-	}
+	// RAM/Disk are intentionally NOT shown here: the live monitor footer already
+	// renders RAM + DISK, so duplicating them in the card was redundant.
 
 	mid := func(content string) string {
 		content = " " + content
@@ -325,17 +322,134 @@ func (m model) dashServerCard(innerW int) []string {
 		return borderStyle.Render(bd.Left) + content + borderStyle.Render(bd.Right)
 	}
 
-	// One fact per card line so nothing is hidden on a narrow width. dashButtonsRowY /
-	// dashScrollTopRow use len(card) dynamically, so a taller card stays hit-test-correct.
+	// Build the RIGHT column = detected services (FEATURE A). Present only when the
+	// audit surfaced any ListenService AND the card is wide enough for two columns;
+	// otherwise the layout stays the single-column facts list (services omitted).
+	right := m.dashServiceLines()
+
 	lines := []string{top}
-	if len(parts) == 0 {
-		lines = append(lines, mid(labelStyle.Render("…")))
+	if len(right) > 0 && dashCardTwoCol(finner) {
+		// Two columns: LEFT = facts, RIGHT = services header + service rows. Card height
+		// is max(left, right); the shorter column is blank-padded. Pick a left width that
+		// fits the facts, the right column gets the remaining inner width.
+		leftW := dashCardLeftWidth(finner, parts)
+		rightW := finner - leftW - dashCardColGap
+		n := max(len(parts), len(right))
+		if n == 0 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			l, r := "", ""
+			if i < len(parts) {
+				l = parts[i]
+			}
+			if i < len(right) {
+				r = right[i]
+			}
+			lcell := truncDisplay(l, leftW)
+			if pad := leftW - lipgloss.Width(lcell); pad > 0 {
+				lcell += strings.Repeat(" ", pad)
+			}
+			rcell := truncDisplay(r, rightW)
+			lines = append(lines, mid(lcell+strings.Repeat(" ", dashCardColGap)+rcell))
+		}
 	} else {
-		for _, p := range parts {
-			lines = append(lines, mid(p))
+		// One fact per card line so nothing is hidden on a narrow width. dashButtonsRowY /
+		// dashScrollTopRow use len(card) dynamically, so a taller card stays hit-test-correct.
+		if len(parts) == 0 {
+			lines = append(lines, mid(labelStyle.Render("…")))
+		} else {
+			for _, p := range parts {
+				lines = append(lines, mid(p))
+			}
 		}
 	}
 	lines = append(lines, bottom)
+	return lines
+}
+
+// dashCardColGap is the spaces between the facts column and the services column.
+const dashCardColGap = 3
+
+// dashServicesCap caps the number of detected-service rows rendered in the card so it
+// can never grow unbounded; if more remain, the last right-column line becomes the
+// "… +N more" overflow marker (so cap-1 services + 1 marker are shown).
+const dashServicesCap = 12
+
+// minDashCardColW is the smallest per-column inner width for the two-column server
+// card; below it (the card is too narrow to usefully split) the card stays single
+// column and the services are omitted.
+const minDashCardColW = 18
+
+// dashCardTwoCol reports whether the card inner width finner can host two columns.
+func dashCardTwoCol(finner int) bool {
+	return finner >= 2*minDashCardColW+dashCardColGap
+}
+
+// dashCardLeftWidth picks the facts (left) column width: the widest fact line plus a
+// little slack, clamped so the right (services) column still keeps at least
+// minDashCardColW. Display-cell math (Cyrillic-safe).
+func dashCardLeftWidth(finner int, parts []string) int {
+	w := 0
+	for _, p := range parts {
+		if x := lipgloss.Width(p); x > w {
+			w = x
+		}
+	}
+	w += 1 // one cell of slack so the gap reads clearly
+	maxLeft := finner - dashCardColGap - minDashCardColW
+	if w > maxLeft {
+		w = maxLeft
+	}
+	if w < minDashCardColW {
+		w = minDashCardColW
+	}
+	return w
+}
+
+// dashServiceLines builds the services right-column body: a styled header then one
+// line per detected service sorted by Port, formatted "proto/port process" (or just
+// "proto/port" when the process is unknown), capped at dashServicesCap with a
+// "… +N more" overflow marker. Returns nil when there are no services. Each line is
+// re-truncated to the real right-column width by the dashServerCard zip caller.
+func (m model) dashServiceLines() []string {
+	f := m.dashFacts
+	if f == nil || len(f.ListenServices) == 0 {
+		return nil
+	}
+	svcs := append([]detect.ListenService(nil), f.ListenServices...)
+	sort.Slice(svcs, func(i, j int) bool {
+		if svcs[i].Port != svcs[j].Port {
+			return svcs[i].Port < svcs[j].Port
+		}
+		return svcs[i].Proto < svcs[j].Proto
+	})
+
+	lines := []string{sumHeadStyle.Render(t(m.lang, kDashServicesTitle))}
+	// Reserve the last slot for the overflow marker when the list exceeds the cap.
+	shown := svcs
+	overflow := 0
+	if len(svcs) > dashServicesCap {
+		shown = svcs[:dashServicesCap-1]
+		overflow = len(svcs) - len(shown)
+	}
+	for _, s := range shown {
+		label := fmt.Sprintf("%s/%d", s.Proto, s.Port)
+		if s.Process != "" {
+			label += " " + s.Process
+		}
+		// Universal origin tag (FEATURE): "proto/port process [origin]". The tag is a
+		// technical token (host/docker/k8s/podman/systemd/lxc + names) — NOT localized.
+		// The card zip re-truncates each line to the real column width, so a long tag is
+		// clipped last rather than overflowing the border.
+		if s.Origin != "" {
+			label += " [" + s.Origin + "]"
+		}
+		lines = append(lines, label)
+	}
+	if overflow > 0 {
+		lines = append(lines, monDimStyle.Render(fmt.Sprintf(t(m.lang, kDashServicesMore), overflow)))
+	}
 	return lines
 }
 

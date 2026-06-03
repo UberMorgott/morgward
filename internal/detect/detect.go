@@ -66,13 +66,20 @@ type Facts struct {
 	HardenMarkers   []string // which markers were found
 }
 
-// ListenService is one public listening socket: its protocol, port, and the
-// owning process name (empty when ss could not attribute one). It is the
-// role-agnostic surfacing record — observed, never matched against a whitelist.
+// ListenService is one public listening socket: its protocol, port, the owning
+// process name (empty when ss could not attribute one), the owning PID, and a
+// universal Origin tag classified by PROVENANCE (the listener's cgroup + a docker
+// ps cross-ref) — never by an app whitelist. It is the role-agnostic surfacing
+// record — observed, never matched against a service whitelist.
 type ListenService struct {
 	Proto   string // "tcp" | "udp"
 	Port    int
 	Process string // program name from users:(("NAME",pid=...)) or ""
+	PID     int    // owning pid from users:(("NAME",pid=N,...)); 0 when unattributed
+	// Origin is the provenance tag: "host" | "docker" | "docker: <name>" | "k8s" |
+	// "podman" | "lxc" | "systemd: <unit>" — filled by a second cgroup/docker pass
+	// (classifyServiceOrigins). "" when the pass could not run (best-effort).
+	Origin string
 }
 
 // Run executes all detection probes against the connected box.
@@ -122,6 +129,11 @@ func Run(c *sshx.Client) *Facts {
 	// also feeds the coexistence port sets (A1 opens these on the brownfield path).
 	ss := c.Sudo(`ss -tulpnH 2>/dev/null`).Stdout
 	f.ListenPortsTCP, f.ListenPortsUDP, f.ListenServices, f.Listeners = parseListeners(ss)
+
+	// Universal origin tag per service (provenance by cgroup + docker ps cross-ref).
+	// Surfacing-only and best-effort — never touches the ruleset/coexistence fields
+	// above and never fails the scan. Requires f.DockerSeen (set earlier).
+	classifyServiceOrigins(c, f)
 
 	// WireGuard / OpenVPN presence: any of an up wg interface, an active
 	// wg-quick@*/openvpn* unit, or a *.conf under /etc/wireguard.
@@ -235,7 +247,12 @@ func parseListeners(ssOut string) (tcp, udp []int, services []ListenService, lis
 			// deduped by proto:port across the v4/v6 mirror.
 			if key := proto + ":" + strconv.Itoa(port); !seenSvc[key] {
 				seenSvc[key] = true
-				services = append(services, ListenService{Proto: proto, Port: port, Process: processFromSS(line)})
+				services = append(services, ListenService{
+					Proto:   proto,
+					Port:    port,
+					Process: processFromSS(line),
+					PID:     pidFromSS(line),
+				})
 			}
 		}
 		// systemd-resolved stub on 127.0.0.53 is loopback — already skipped above.
@@ -263,6 +280,30 @@ func processFromSS(line string) string {
 	return ""
 }
 
+// pidFromSS extracts the FIRST pid from an ss line's process column, i.e. the N in
+// `users:(("NAME",pid=N,fd=M))`. Returns 0 when ss omitted the attribution or the
+// pid is unparsable (e.g. a kernel socket reported as pid=0).
+func pidFromSS(line string) int {
+	i := strings.Index(line, "pid=")
+	if i < 0 {
+		return 0
+	}
+	rest := line[i+len("pid="):]
+	// The pid runs until the first non-digit (',', ')', etc.).
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	pid, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0
+	}
+	return pid
+}
+
 // sortServices orders service records by proto then port for deterministic
 // inventory output and stable tests.
 func sortServices(s []ListenService) {
@@ -272,6 +313,218 @@ func sortServices(s []ListenService) {
 		}
 		return s[i].Port < s[j].Port
 	})
+}
+
+// --- Service origin classification (provenance, NOT a whitelist) ---------------
+//
+// Each listening socket gets a universal Origin tag derived from the listener pid's
+// cgroup (container/systemd provenance) plus a docker ps cross-ref for the container
+// name. Everything is best-effort and role-agnostic: a missing /proc, no docker, or
+// an unreadable cgroup leaves the tag at "host"/"" and NEVER fails the scan.
+
+// classifyServiceOrigins fills f.ListenServices[i].Origin in place. It batch-reads the
+// cgroup of every listener pid in ONE sudo command (pids are ints → injection-safe),
+// classifies each via classifyCgroupOrigin, then — when docker is present — upgrades
+// "docker" tags to "docker: <name>" by matching the service port to a docker ps
+// published port. Pure helpers (classifyCgroupOrigin / dockerPortNames / parseCgroupBatch)
+// carry the logic so this wiring stays trivially correct; this function only does I/O.
+func classifyServiceOrigins(c *sshx.Client, f *Facts) {
+	if len(f.ListenServices) == 0 {
+		return
+	}
+	// Collect the distinct, valid (>0) pids to read.
+	pidSet := map[int]bool{}
+	for _, s := range f.ListenServices {
+		if s.PID > 0 {
+			pidSet[s.PID] = true
+		}
+	}
+	cgroups := map[int]string{}
+	if len(pidSet) > 0 {
+		pids := make([]int, 0, len(pidSet))
+		for p := range pidSet {
+			pids = append(pids, p)
+		}
+		sort.Ints(pids)
+		var sb strings.Builder
+		sb.WriteString("for p in")
+		for _, p := range pids {
+			sb.WriteString(" ")
+			sb.WriteString(strconv.Itoa(p))
+		}
+		// Emit "<pid>\t<first cgroup line>\n" per pid; missing /proc → empty cgroup col.
+		sb.WriteString(`; do printf '%s\t' "$p"; cat /proc/$p/cgroup 2>/dev/null | head -1; printf '\n'; done`)
+		cgroups = parseCgroupBatch(c.Sudo(sb.String()).Stdout)
+	}
+
+	// Docker container-name map (best-effort, only when docker is present).
+	var dockerNames map[int]string
+	if f.DockerSeen {
+		dockerNames = dockerPortNames(c.Run(`docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null`).Stdout)
+	}
+
+	for i := range f.ListenServices {
+		s := &f.ListenServices[i]
+		origin := classifyCgroupOrigin(cgroups[s.PID])
+		if origin == "docker" && dockerNames != nil {
+			if name, ok := dockerNames[s.Port]; ok && name != "" {
+				origin = "docker: " + name
+			}
+		}
+		s.Origin = origin
+	}
+}
+
+// parseCgroupBatch parses the "<pid>\t<cgroup line>" output of the batch cgroup read
+// into a pid→cgroupPath map. A line with no cgroup column (unreadable /proc) maps the
+// pid to "". Malformed lines are skipped.
+func parseCgroupBatch(out string) map[int]string {
+	m := map[int]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		tab := strings.IndexByte(line, '\t')
+		if tab < 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(line[:tab]))
+		if err != nil {
+			continue
+		}
+		m[pid] = strings.TrimSpace(line[tab+1:])
+	}
+	return m
+}
+
+// classifyCgroupOrigin maps a /proc/<pid>/cgroup first-line path to a provenance tag,
+// handling both cgroup v2 ("0::/system.slice/foo.service") and v1
+// ("N:controller:/path"). Container classes win over the generic systemd slice; the
+// generic container manager units (docker.service/containerd.service) are normalized
+// to "docker" rather than "systemd: docker". An empty/unrecognized path → "host".
+func classifyCgroupOrigin(cgroupLine string) string {
+	line := strings.TrimSpace(cgroupLine)
+	if line == "" {
+		return "host"
+	}
+	// Reduce "N:controllers:/path" (v1) or "0::/path" (v2) to just the path part.
+	path := line
+	if i := strings.LastIndex(line, ":"); i >= 0 {
+		path = line[i+1:]
+	}
+	low := strings.ToLower(path)
+
+	// Container classes first (conservative substring checks).
+	switch {
+	case strings.Contains(low, "kubepods"):
+		return "k8s"
+	case strings.Contains(low, "libpod"):
+		return "podman"
+	case strings.Contains(low, "/lxc/") || strings.Contains(low, "lxc.payload"):
+		return "lxc"
+	case strings.Contains(low, "/docker/") || strings.Contains(low, "/moby/") ||
+		strings.Contains(low, "containerd-") || strings.Contains(low, "docker-"):
+		return "docker"
+	}
+
+	// systemd unit slice: /system.slice/<unit>.service (possibly nested). Take the
+	// LAST path segment ending in ".service".
+	if unit, ok := systemdUnitFromPath(path); ok {
+		// The generic container-manager units are really "docker" provenance.
+		if unit == "docker" || unit == "containerd" {
+			return "docker"
+		}
+		return "systemd: " + unit
+	}
+
+	// /init.scope, /user.slice, root "/", anything else → host.
+	return "host"
+}
+
+// systemdUnitFromPath returns the systemd unit name (without ".service") from a cgroup
+// path's last ".service" segment, e.g. "/system.slice/postgresql.service" → "postgresql".
+// ok=false when no ".service" segment is present.
+func systemdUnitFromPath(path string) (string, bool) {
+	segs := strings.Split(path, "/")
+	for i := len(segs) - 1; i >= 0; i-- {
+		seg := segs[i]
+		if unit, ok := strings.CutSuffix(seg, ".service"); ok && unit != "" {
+			return unit, true
+		}
+	}
+	return "", false
+}
+
+// dockerPortNames parses `docker ps --format '{{.Names}}\t{{.Ports}}'` output into a
+// published-port → container-name map. The Ports column lists comma-separated mappings
+// like "0.0.0.0:443->443/tcp, :::443->443/tcp, 0.0.0.0:8000-8001->8000-8001/tcp"; it
+// records the HOST published port (left of "->", after the last ":") for each, and
+// expands "A-B" host ranges. Bare exposed ports (no "->") are ignored — they are not
+// published. Best-effort: malformed entries are skipped.
+func dockerPortNames(psOut string) map[int]string {
+	m := map[int]string{}
+	for line := range strings.SplitSeq(psOut, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		tab := strings.IndexByte(line, '\t')
+		if tab < 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[:tab])
+		ports := line[tab+1:]
+		if name == "" {
+			continue
+		}
+		for _, mapping := range strings.Split(ports, ",") {
+			mapping = strings.TrimSpace(mapping)
+			arrow := strings.Index(mapping, "->")
+			if arrow < 0 {
+				continue // exposed-only, not published
+			}
+			hostPart := mapping[:arrow] // e.g. "0.0.0.0:8000-8001" or ":::443" or "[::]:443"
+			// Host published port(s) are after the LAST ':'.
+			colon := strings.LastIndex(hostPart, ":")
+			if colon < 0 {
+				continue
+			}
+			portTok := hostPart[colon+1:]
+			for _, p := range expandPortRange(portTok) {
+				if _, exists := m[p]; !exists {
+					m[p] = name
+				}
+			}
+		}
+	}
+	return m
+}
+
+// expandPortRange turns a "PORT" or "A-B" token into its list of ints. Invalid tokens
+// yield nil. A descending or oversized range is bounded by simple sanity checks.
+func expandPortRange(tok string) []int {
+	tok = strings.TrimSpace(tok)
+	if tok == "" {
+		return nil
+	}
+	if dash := strings.IndexByte(tok, '-'); dash >= 0 {
+		lo, err1 := strconv.Atoi(strings.TrimSpace(tok[:dash]))
+		hi, err2 := strconv.Atoi(strings.TrimSpace(tok[dash+1:]))
+		if err1 != nil || err2 != nil || lo <= 0 || hi < lo || hi-lo > 1024 {
+			return nil
+		}
+		out := make([]int, 0, hi-lo+1)
+		for p := lo; p <= hi; p++ {
+			out = append(out, p)
+		}
+		return out
+	}
+	p, err := strconv.Atoi(tok)
+	if err != nil || p <= 0 {
+		return nil
+	}
+	return []int{p}
 }
 
 // classifyFirewallMgr resolves the active firewall manager from the raw probe
@@ -382,9 +635,10 @@ func coexistSummary(f *Facts) string {
 	fmt.Fprintf(&b, "disk swap preserved: %v\n", f.DiskSwap)
 	fmt.Fprintf(&b, "ssh key users (added to sshusers): %v\n", f.SSHKeyUsers)
 
-	// Role-agnostic "what's found" table: observed listening sockets and their
-	// owning process, so the operator can read the box's de-facto role.
-	b.WriteString("\ndetected services (proto port -> process):\n")
+	// Role-agnostic "what's found" table: observed listening sockets, their owning
+	// process, and the universal provenance origin tag, so the operator can read the
+	// box's de-facto role.
+	b.WriteString("\ndetected services (proto port -> process [origin]):\n")
 	if len(f.ListenServices) == 0 {
 		b.WriteString("  (none observed)\n")
 	} else {
@@ -393,7 +647,11 @@ func coexistSummary(f *Facts) string {
 			if proc == "" {
 				proc = "(unknown)"
 			}
-			fmt.Fprintf(&b, "  %-3s %-6d -> %s\n", s.Proto, s.Port, proc)
+			origin := s.Origin
+			if origin == "" {
+				origin = "host"
+			}
+			fmt.Fprintf(&b, "  %-3s %-6d -> %s [%s]\n", s.Proto, s.Port, proc, origin)
 		}
 	}
 	return b.String()

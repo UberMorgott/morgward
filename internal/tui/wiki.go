@@ -3,6 +3,7 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -64,6 +65,112 @@ func (m model) wikiActionRows() []wikiActionKind {
 	return rows
 }
 
+// --- FEATURE B: action BUTTON pills collapse onto ONE horizontal row -----------
+//
+// The wiki action area is at most TWO fixed rows: an optional non-clickable update
+// WARNING text line, then a SINGLE row carrying every present action button pill
+// (update / apply / revert / back) side by side, gap-separated — like the Dashboard
+// two-pill row. wikiButtonKinds is the SINGLE ordered source for both the render and
+// the hit-tests, so a pill's index in the row matches between draw and click.
+
+// wikiButtonKinds returns the present action-button kinds in left→right row order
+// (update, apply, revert, back — only those currently shown). The warning is NOT a
+// button and is excluded; the back pill is always present (last).
+func (m model) wikiButtonKinds() []wikiActionKind {
+	var kinds []wikiActionKind
+	for _, k := range m.wikiActionRows() {
+		if k == wikiRowUpdateWarn {
+			continue
+		}
+		kinds = append(kinds, k)
+	}
+	return kinds
+}
+
+// wikiButtonLabel maps a button kind to its localized pill label.
+func (m model) wikiButtonLabel(k wikiActionKind) string {
+	switch k {
+	case wikiRowUpdateButton:
+		return t(m.lang, kWikiUpdateButton)
+	case wikiRowApplyButton:
+		return t(m.lang, kWikiApplyButton)
+	case wikiRowRevertButton:
+		return t(m.lang, kWikiRevertButton)
+	case wikiRowBack:
+		return t(m.lang, kWikiBack)
+	}
+	return ""
+}
+
+// wikiButtonLabels is the ordered label list for the single buttons row — the shared
+// geometry source for wikiButtonsLine (render) and pillIndexAt (hit-test).
+func (m model) wikiButtonLabels() []string {
+	kinds := m.wikiButtonKinds()
+	labels := make([]string, len(kinds))
+	for i, k := range kinds {
+		labels[i] = m.wikiButtonLabel(k)
+	}
+	return labels
+}
+
+// wikiHasUpdateWarn reports whether the update WARNING text row is shown (it precedes
+// the buttons row when present).
+func (m model) wikiHasUpdateWarn() bool {
+	return slices.Contains(m.wikiActionRows(), wikiRowUpdateWarn)
+}
+
+// wikiActionRowCount is the number of fixed-chrome action rows reserved below the
+// scrollable description: the optional warning row plus the single buttons row (which
+// is always present, since the back pill is always present).
+func (m model) wikiActionRowCount() int {
+	if m.wikiHasUpdateWarn() {
+		return 2
+	}
+	return 1
+}
+
+// wikiButtonsRowY is the screen Y of the single buttons row: it follows the
+// scrollable middle region and the optional warning row.
+func (m model) wikiButtonsRowY() int {
+	y := summaryBodyTopRow + m.wikiBodyViewH()
+	if m.wikiHasUpdateWarn() {
+		y++
+	}
+	return y
+}
+
+// wikiButtonsLine joins every present action pill on one row, gap-separated, starting
+// at wikiBackStartCol. The back pill uses the dim style; the action pills (update/
+// apply/revert) use the accent style — visually distinct. pillRanges over
+// wikiButtonLabels recovers the x-geometry for the hit-tests.
+func (m model) wikiButtonsLine() string {
+	kinds := m.wikiButtonKinds()
+	pills := make([]string, len(kinds))
+	for i, k := range kinds {
+		label := m.wikiButtonLabel(k)
+		if k == wikiRowBack {
+			pills[i] = pillStyle.Render(label)
+		} else {
+			pills[i] = pillOnStyle.Render(label)
+		}
+	}
+	return strings.Join(pills, " ")
+}
+
+// wikiButtonAtClick reports whether (x,y) hit the given button kind on the single
+// buttons row, using pillIndexAt over the SAME ordered labels wikiButtonsLine renders.
+func (m model) wikiButtonAtClick(kind wikiActionKind, x, y int) bool {
+	if m.phase != phaseWiki || y != m.wikiButtonsRowY() {
+		return false
+	}
+	labels := m.wikiButtonLabels()
+	idx := pillIndexAt(labels, wikiBackStartCol, x)
+	if idx < 0 || idx >= len(labels) {
+		return false
+	}
+	return m.wikiButtonKinds()[idx] == kind
+}
+
 // wikiProbeState looks up m.wikiProbeID in m.dashAuditRaw and returns the probe's
 // Applied + Informational verdicts. ok=false when the probe id is empty or has no
 // matching audit Result (e.g. pre-connect or the summary path).
@@ -94,72 +201,48 @@ func (m model) wikiProbeStep() (string, bool) {
 }
 
 // wikiActionRowY returns the screen Y of the given action-row kind, or ok=false when
-// that row is not currently shown. The action rows are fixed chrome that begins
-// right after the scrollable middle region (rows [summaryBodyTopRow, +viewH)), in
-// the order wikiActionRows reports.
+// that row is not currently shown. With FEATURE B every BUTTON kind shares the single
+// buttons row (wikiButtonsRowY); the warning kind, when present, sits on the row just
+// above it. Used by the keyboard handlers only to test whether a button is SHOWN.
 func (m model) wikiActionRowY(kind wikiActionKind) (int, bool) {
-	base := summaryBodyTopRow + m.wikiBodyViewH()
-	for i, k := range m.wikiActionRows() {
-		if k == kind {
-			return base + i, true
+	if kind == wikiRowUpdateWarn {
+		if m.wikiHasUpdateWarn() {
+			return summaryBodyTopRow + m.wikiBodyViewH(), true
 		}
+		return 0, false
+	}
+	if slices.Contains(m.wikiButtonKinds(), kind) {
+		return m.wikiButtonsRowY(), true
 	}
 	return 0, false
 }
 
-// wikiBackRow is the screen Y of the back-button row — the LAST action row.
-func (m model) wikiBackRow() int {
-	y, _ := m.wikiActionRowY(wikiRowBack) // back pill is always present
-	return y
-}
+// wikiBackRow is the screen Y of the buttons row (the back pill always lives there).
+func (m model) wikiBackRow() int { return m.wikiButtonsRowY() }
 
-// wikiBackAtClick reports whether (x,y) hit the wiki "← Назад" pill, mirroring
-// dashButtonAtClick's pillRanges geometry for one pill.
+// wikiBackAtClick reports whether (x,y) hit the wiki "← Назад" pill on the shared
+// buttons row.
 func (m model) wikiBackAtClick(x, y int) bool {
-	if m.phase != phaseWiki || y != m.wikiBackRow() {
-		return false
-	}
-	return pillIndexAt([]string{t(m.lang, kWikiBack)}, wikiBackStartCol, x) == 0
+	return m.wikiButtonAtClick(wikiRowBack, x, y)
 }
 
 // wikiApplyAtClick reports whether (x,y) hit the "[Применить]" pill — present only
 // when wikiActionRows includes it (per-PROBE path, probe not applied + not informational).
 func (m model) wikiApplyAtClick(x, y int) bool {
-	if m.phase != phaseWiki {
-		return false
-	}
-	ry, ok := m.wikiActionRowY(wikiRowApplyButton)
-	if !ok || y != ry {
-		return false
-	}
-	return pillIndexAt([]string{t(m.lang, kWikiApplyButton)}, wikiBackStartCol, x) == 0
+	return m.wikiButtonAtClick(wikiRowApplyButton, x, y)
 }
 
 // wikiRevertAtClick reports whether (x,y) hit the "[Откатить]" pill — present only
 // when wikiActionRows includes it (per-PROBE path, probe APPLIED + not informational
-// + step is engine-revertable). Mirrors wikiApplyAtClick's geometry.
+// + step is engine-revertable).
 func (m model) wikiRevertAtClick(x, y int) bool {
-	if m.phase != phaseWiki {
-		return false
-	}
-	ry, ok := m.wikiActionRowY(wikiRowRevertButton)
-	if !ok || y != ry {
-		return false
-	}
-	return pillIndexAt([]string{t(m.lang, kWikiRevertButton)}, wikiBackStartCol, x) == 0
+	return m.wikiButtonAtClick(wikiRowRevertButton, x, y)
 }
 
 // wikiUpdateAtClick reports whether (x,y) hit the "[Обновить и перезагрузить]" pill —
 // present only when there are pending upgrades (m.dashFacts.PendingUpgrades > 0).
 func (m model) wikiUpdateAtClick(x, y int) bool {
-	if m.phase != phaseWiki {
-		return false
-	}
-	ry, ok := m.wikiActionRowY(wikiRowUpdateButton)
-	if !ok || y != ry {
-		return false
-	}
-	return pillIndexAt([]string{t(m.lang, kWikiUpdateButton)}, wikiBackStartCol, x) == 0
+	return m.wikiButtonAtClick(wikiRowUpdateButton, x, y)
 }
 
 // tweakBucketIDs is the canonical Tweaks-bucket step ID set applied by the
@@ -237,28 +320,17 @@ func (m model) wikiView() string {
 	off := clampScroll(m.wikiScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
-	// Fixed-chrome action rows pinned just above the hint line, in the exact order
-	// (and under the exact conditions) wikiActionRows reports — the SAME source the
-	// hit-tests use, so render and click geometry can never drift. The two action
-	// pills (apply/update) appear only on the per-PROBE path; the back pill always.
-	for _, kind := range m.wikiActionRows() {
-		var line string
-		switch kind {
-		case wikiRowUpdateWarn:
-			line = errStyle.Render(t(m.lang, kWikiUpdateWarn))
-		case wikiRowUpdateButton:
-			line = pillOnStyle.Render(t(m.lang, kWikiUpdateButton))
-		case wikiRowApplyButton:
-			line = pillOnStyle.Render(t(m.lang, kWikiApplyButton))
-		case wikiRowRevertButton:
-			// Distinct (dim) style so revert reads as a secondary action vs apply/update.
-			line = pillStyle.Render(t(m.lang, kWikiRevertButton))
-		case wikiRowBack:
-			line = pillOnStyle.Render(t(m.lang, kWikiBack))
-		}
-		sb.WriteString(contentLine(b, line, innerW))
+	// Fixed-chrome action rows pinned just above the hint line (FEATURE B): an optional
+	// update WARNING text line, then a SINGLE row carrying every present action button
+	// pill side by side. wikiButtonsLine + wikiHasUpdateWarn are the SAME sources the
+	// hit-tests use (wikiButtonsRowY / wikiButtonLabels), so render and click geometry
+	// can never drift.
+	if m.wikiHasUpdateWarn() {
+		sb.WriteString(contentLine(b, errStyle.Render(t(m.lang, kWikiUpdateWarn)), innerW))
 		sb.WriteByte('\n')
 	}
+	sb.WriteString(contentLine(b, m.wikiButtonsLine(), innerW))
+	sb.WriteByte('\n')
 	hintKey := kWikiHint
 	if m.wikiUpdateConfirm {
 		hintKey = kWikiUpdateConfirm
@@ -370,7 +442,7 @@ func (m model) stepStatusWord(stepID string) (string, bool) {
 // wikiActionRows). Reserving EXACTLY len(wikiActionRows) rows keeps the footer
 // pinned and the action-row screen Ys correct. Used for BOTH the wiki render and
 // every wiki scroll clamp so geometry never drifts.
-func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-len(m.wikiActionRows()), 1) }
+func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-m.wikiActionRowCount(), 1) }
 
 // auditConnected reports whether we are post-connect: an audit has completed and
 // carried results. Gates the wiki live-status column (a step's status word is only

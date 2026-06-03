@@ -44,34 +44,35 @@ func TestWikiApplyAndUpdateHitTest(t *testing.T) {
 		}
 	}
 
-	// Apply pill hit-test at its rendered Y, inside the pill.
-	applyY, ok := m.wikiActionRowY(wikiRowApplyButton)
-	if !ok {
-		t.Fatalf("apply row not shown")
-	}
-	applyX := pillRanges([]string{t2(m.lang, kWikiApplyButton)}, wikiBackStartCol)[0][0] + 1
-	if !m.wikiApplyAtClick(applyX, applyY) {
-		t.Fatalf("apply hit-test missed at x=%d y=%d", applyX, applyY)
+	// FEATURE B: every button pill shares ONE row (wikiButtonsRowY); pillXForKind
+	// (package helper) gives a click X inside a given kind's pill from the multi-pill
+	// ranges over wikiButtonLabels (the single geometry source).
+	btnY := m.wikiButtonsRowY()
+
+	// Apply pill hit-test at the shared row, inside the apply pill.
+	applyX, _ := pillXForKind(m, wikiRowApplyButton)
+	if !m.wikiApplyAtClick(applyX, btnY) {
+		t.Fatalf("apply hit-test missed at x=%d y=%d", applyX, btnY)
 	}
 	// A click one row off must NOT register as apply.
-	if m.wikiApplyAtClick(applyX, applyY+1) {
+	if m.wikiApplyAtClick(applyX, btnY+1) {
 		t.Fatalf("apply hit-test matched off its row")
 	}
 
-	// Update pill hit-test at its rendered Y, inside the pill.
-	upY, ok := m.wikiActionRowY(wikiRowUpdateButton)
-	if !ok {
-		t.Fatalf("update row not shown")
-	}
-	upX := pillRanges([]string{t2(m.lang, kWikiUpdateButton)}, wikiBackStartCol)[0][0] + 1
-	if !m.wikiUpdateAtClick(upX, upY) {
-		t.Fatalf("update hit-test missed at x=%d y=%d", upX, upY)
+	// Update pill hit-test on the same row, inside the update pill.
+	upX, _ := pillXForKind(m, wikiRowUpdateButton)
+	if !m.wikiUpdateAtClick(upX, btnY) {
+		t.Fatalf("update hit-test missed at x=%d y=%d", upX, btnY)
 	}
 
-	// Back pill still resolves.
-	backX := pillRanges([]string{t2(m.lang, kWikiBack)}, wikiBackStartCol)[0][0] + 1
+	// Back pill still resolves (also on the shared row), and the apply X must NOT
+	// resolve as update (separate pills, separate X ranges).
+	backX, _ := pillXForKind(m, wikiRowBack)
 	if !m.wikiBackAtClick(backX, m.wikiBackRow()) {
 		t.Fatalf("back hit-test missed")
+	}
+	if m.wikiUpdateAtClick(applyX, btnY) {
+		t.Fatalf("apply-pill X wrongly resolved as the update pill — pills not separated")
 	}
 
 	// The view renders the action labels and the warning text.

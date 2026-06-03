@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,12 +19,7 @@ func firstRunes(s string, n int) string {
 
 // hasActionRow reports whether wikiActionRows currently includes the given kind.
 func hasActionRow(m model, kind wikiActionKind) bool {
-	for _, k := range m.wikiActionRows() {
-		if k == kind {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.wikiActionRows(), kind)
 }
 
 // TestWikiRevertButtonShowsForAppliedRevertable: an APPLIED, non-informational probe
@@ -196,12 +192,11 @@ func TestWikiUpdateConfirmEscCancels(t *testing.T) {
 // (does not launch); a second non-update click cancels it.
 func TestWikiUpdateFirstClickArmsConfirm(t *testing.T) {
 	m := wikiProbeModel(100, 40, "a4.bbr_active", "A4", false, 5)
-	upY, ok := m.wikiActionRowY(wikiRowUpdateButton)
-	if !ok {
-		t.Fatalf("update row not shown")
-	}
-	upX := pillRanges([]string{t2(m.lang, kWikiUpdateButton)}, wikiBackStartCol)[0][0] + 1
-	n1, _ := m.Update(tea.MouseClickMsg{X: upX, Y: upY, Button: tea.MouseLeft})
+	// FEATURE B: pills share one row; pillXForKind (package helper) gives a click X
+	// inside a kind's pill.
+	btnY := m.wikiButtonsRowY()
+	upX, _ := pillXForKind(m, wikiRowUpdateButton)
+	n1, _ := m.Update(tea.MouseClickMsg{X: upX, Y: btnY, Button: tea.MouseLeft})
 	m1 := n1.(model)
 	if !m1.wikiUpdateConfirm {
 		t.Fatalf("update click did not arm the confirm")
@@ -209,8 +204,11 @@ func TestWikiUpdateFirstClickArmsConfirm(t *testing.T) {
 	if m1.command == "step" {
 		t.Fatalf("update click launched A8 before confirm")
 	}
-	// A second, unrelated click (back row) cancels the confirm (harmless).
-	n2, _ := m1.Update(tea.MouseClickMsg{X: 4, Y: m1.wikiBackRow(), Button: tea.MouseLeft})
+	// A second, unrelated click (the back pill, NOT the update pill) cancels the
+	// confirm (harmless): the update-pill hit-test misses, so the confirm-swallow
+	// branch fires and clears it.
+	backX, _ := pillXForKind(m1, wikiRowBack)
+	n2, _ := m1.Update(tea.MouseClickMsg{X: backX, Y: m1.wikiBackRow(), Button: tea.MouseLeft})
 	if m2 := n2.(model); m2.wikiUpdateConfirm {
 		t.Fatalf("a second click did not cancel the pending confirm")
 	}

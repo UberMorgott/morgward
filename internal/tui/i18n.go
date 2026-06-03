@@ -204,12 +204,14 @@ const (
 	kDashOS           // "ОС" / "OS"
 	kDashKernel       // "Ядро" / "Kernel"
 	kDashVirt         // "Виртуализация" / "Virt"
-	kDashMemory       // "Память" / "Memory"
-	kDashDisk         // "Диск" / "Disk"
 	kDashPorts        // "Порты" / "Ports"
 	kDashIPv6         // "IPv6"
 	kDashHint         // dashboard control hint
 	kDashApplyConfirm // A8 reboot warning shown before applying tweaks
+
+	// --- FEATURE A: detected-services right column in the server card ----
+	kDashServicesTitle // services right-column header: "Сервисы" / "Services"
+	kDashServicesMore  // "… +%d ещё" / "… +%d more" — overflow line when capped
 
 	// --- security menu (phaseSecurity, P4) -------------------------------
 	kSecMenuTitle      // box title: "Безопасность и доступ" / "Security and access"
@@ -387,12 +389,13 @@ var tr = map[Lang]map[stringKey]string{
 		kDashOS:           "ОС",
 		kDashKernel:       "Ядро",
 		kDashVirt:         "Виртуализация",
-		kDashMemory:       "Память",
-		kDashDisk:         "Диск",
 		kDashPorts:        "Порты",
 		kDashIPv6:         "IPv6",
 		kDashHint:         "↑/↓ прокрутка · enter описание твика · esc назад",
 		kDashApplyConfirm: "Включает полное обновление и перезагрузку (A8) — несколько минут. Enter — применить, esc — отмена.",
+
+		kDashServicesTitle: "Сервисы",
+		kDashServicesMore:  "… +%d ещё",
 
 		kSecMenuTitle:      " Безопасность и доступ ",
 		kSecRootLogin:      "Вход root",
@@ -563,12 +566,13 @@ var tr = map[Lang]map[stringKey]string{
 		kDashOS:           "OS",
 		kDashKernel:       "Kernel",
 		kDashVirt:         "Virt",
-		kDashMemory:       "Memory",
-		kDashDisk:         "Disk",
 		kDashPorts:        "Ports",
 		kDashIPv6:         "IPv6",
 		kDashHint:         "↑/↓ scroll · enter tweak detail · esc back",
 		kDashApplyConfirm: "Includes a full upgrade and reboot (A8) — several minutes. Enter to apply, esc to cancel.",
+
+		kDashServicesTitle: "Services",
+		kDashServicesMore:  "… +%d more",
 
 		kSecMenuTitle:      " Security and access ",
 		kSecRootLogin:      "Root login",
