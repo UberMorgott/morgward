@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/UberMorgott/morgward/internal/engine"
@@ -23,17 +24,111 @@ func TestApplyConfirmModalRenders(t *testing.T) {
 	out := m.dashboardView()
 	for _, want := range []string{
 		t2(m.lang, kApplyModalTitle),
-		t2(m.lang, kApplyModalButtons),
+		t2(m.lang, kApplyModalConfirm), // confirm pill label
+		t2(m.lang, kApplyModalCancel),  // cancel pill label
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("apply-confirm modal missing %q\n%s", want, out)
 		}
+	}
+	// BUG 2: the two pills must be SEPARATE, with a visible plain gap between them —
+	// the confirm label's pill must end (reset) before the cancel label begins, so
+	// there are >=2 plain spaces between the two labels on the buttons line.
+	confirm := t2(m.lang, kApplyModalConfirm)
+	cancel := t2(m.lang, kApplyModalCancel)
+	ci := strings.Index(out, confirm)
+	xi := strings.Index(out, cancel)
+	if ci < 0 || xi <= ci {
+		t.Fatalf("confirm/cancel labels not ordered in output")
+	}
+	between := out[ci+len(confirm) : xi]
+	if !strings.Contains(between, "   ") {
+		t.Fatalf("no plain 3-space gap between confirm and cancel pills; between=%q", between)
 	}
 	// The bucket includes A8, so the reboot warning must be present. The warning is
 	// word-wrapped, so assert on a distinctive non-wrapping token (the ⚠ marker).
 	if bucketHasA8(tweakBucketIDs()) && !strings.Contains(out, "⚠") {
 		t.Fatalf("apply-confirm modal missing the A8 reboot warning marker")
 	}
+}
+
+// --- BUG 1: stale completion state on a second run ----------------------------
+
+// TestResetRunStateClearsCompletion asserts resetRunState() zeroes every field that
+// gates the finished tail / summary line / progress bar, so a second run cannot
+// inherit the first run's "✓ done / запуск завершён" indicators.
+func TestResetRunStateClearsCompletion(t *testing.T) {
+	m := newModel()
+	m.w, m.h = 100, 40
+	// Simulate a just-finished prior run carrying all the stale completion flags.
+	m.finished = true
+	m.finalErr = nil
+	m.haveSummary = true
+	m.summary = engine.Summary{OK: 9, Results: []engine.StepResult{{ID: "A1", Status: steps.StatusOK}}}
+	m.index, m.total = 9, 9
+	m.curID, m.curTitle = "A1", "Firewall"
+	m.dashAuditRunning, m.dashAuditDone = true, true
+	m.dashAuditTotal, m.dashAuditApplied = 9, 9
+	m.content = "old log line\n"
+
+	m = m.resetRunState()
+
+	if m.finished || m.haveSummary || m.finalErr != nil {
+		t.Fatalf("resetRunState left completion flags set: finished=%v haveSummary=%v finalErr=%v", m.finished, m.haveSummary, m.finalErr)
+	}
+	if m.index != 0 || m.total != 0 || m.curID != "" || m.curTitle != "" {
+		t.Fatalf("resetRunState left progress state: index=%d total=%d curID=%q curTitle=%q", m.index, m.total, m.curID, m.curTitle)
+	}
+	if m.summary.Total() != 0 {
+		t.Fatalf("resetRunState left a non-empty summary: %d results", m.summary.Total())
+	}
+	if m.dashAuditRunning || m.dashAuditDone || m.dashAuditTotal != 0 || m.dashAuditApplied != 0 {
+		t.Fatalf("resetRunState left dash audit flags set")
+	}
+	if m.content != "" {
+		t.Fatalf("resetRunState left stale log content: %q", m.content)
+	}
+}
+
+// TestSecondRunNoStaleFinishedTail is the render-level guard for BUG 1: after a run
+// finishes (finished + haveSummary + summary), the per-run reset must leave the run
+// view with NO completion indicator — no finished tail ("запуск завершён"/"run
+// finished"), no "✓ done" summary line — until this run's own completion lands. It
+// renders runView in the running state AFTER resetRunState, mirroring exactly what
+// launchEngine sets up (resetRunState → phaseRun → running=true), without spawning the
+// engine goroutine (no network).
+func TestSecondRunNoStaleFinishedTail(t *testing.T) {
+	m := newModel()
+	m.w, m.h = 100, 40
+	m.phase = phaseRun
+	// Stale finished state from a prior run.
+	m.finished = true
+	m.haveSummary = true
+	m.summary = engine.Summary{OK: 5, Results: []engine.StepResult{{ID: "A1", Status: steps.StatusOK}}}
+
+	// Apply the same reset launchEngine performs, then enter the running state.
+	m = m.resetRunState()
+	m.running = true
+	m.vp = viewportForTest(&m)
+
+	if m.finished || m.haveSummary {
+		t.Fatalf("reset left completion flags: finished=%v haveSummary=%v", m.finished, m.haveSummary)
+	}
+	out := m.runView()
+	if strings.Contains(out, t2(m.lang, kFinishedOK)) {
+		t.Fatalf("running view shows the stale finished tail %q\n%s", t2(m.lang, kFinishedOK), out)
+	}
+	if strings.Contains(out, t2(m.lang, kDoneWord)) {
+		t.Fatalf("running view shows the stale summary 'done' word\n%s", out)
+	}
+}
+
+// viewportForTest builds a viewport sized for the model so runView can render without
+// a real WindowSizeMsg. It mirrors launchEngine's viewport construction.
+func viewportForTest(m *model) viewport.Model {
+	vp := viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
+	vp.SetContent("")
+	return vp
 }
 
 // --- CHANGE 2: pre-run generated-key modal ------------------------------------

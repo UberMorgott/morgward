@@ -104,7 +104,12 @@ func (m model) applyConfirmModalView() string {
 		parts = append(parts, wrap(errStyle.Render(t(m.lang, kApplyModalReboot)), innerW)...)
 	}
 	parts = append(parts, "")
-	parts = append(parts, pillOnStyle.Render(t(m.lang, kApplyModalButtons)))
+	// Two SEPARATE pills with a plain (un-styled) gap between them (BUG 2): a single
+	// pillOnStyle over the whole "[Enter] … [Esc] …" string would share one background
+	// and read as one merged button. Accent pill for confirm, dim pill for cancel.
+	confirmPill := pillOnStyle.Render(t(m.lang, kApplyModalConfirm))
+	cancelPill := pillStyle.Render(t(m.lang, kApplyModalCancel))
+	parts = append(parts, confirmPill+"   "+cancelPill)
 
 	box := modalBoxStyle.Render(strings.Join(parts, "\n"))
 

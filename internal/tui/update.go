@@ -860,6 +860,33 @@ func (m model) confirmPreRunKey() (tea.Model, tea.Cmd) {
 	return m.launchEngine(cfg)
 }
 
+// resetRunState clears every per-run completion/progress field to its zero value so a
+// SECOND run in the same session (e.g. audit → dashboard "apply tweaks" → start →
+// launchEngine) cannot inherit the prior run's state. Without this the run view would
+// immediately render the previous run's finished tail / "✓ done" summary line before
+// this run's own doneMsg/progMsg(Done) lands (BUG 1). It clears: the finished tail
+// gates (finished/finalErr), the summary-line gates (haveSummary/summary), the
+// progress-bar gates (index/total/curID/curTitle), the streamed log (content), the
+// spinner, and the dash audit counters (so a re-audit re-counts cleanly). Pure value
+// receiver — the model is copied by value every Update.
+func (m model) resetRunState() model {
+	m.content = ""
+	m.finished = false
+	m.finalErr = nil
+	m.haveSummary = false
+	m.summary = engine.Summary{}
+	m.index = 0
+	m.total = 0
+	m.curID = ""
+	m.curTitle = ""
+	m.spin = 0
+	m.dashAuditRunning = false
+	m.dashAuditDone = false
+	m.dashAuditTotal = 0
+	m.dashAuditApplied = 0
+	return m
+}
+
 // launchEngine is the BACK half of a run launch (CHANGE 2): it builds the run-scoped
 // state, spawns the engine goroutine, and returns the streaming listeners. Called
 // directly on the --key / audit path, or from the pre-run key modal's Enter once the
@@ -877,14 +904,19 @@ func (m model) launchEngine(cfg *config.Config) (tea.Model, tea.Cmd) {
 	}
 	m.phase = phaseRun
 	m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
+
+	// Reset per-run completion/progress state (BUG 1) so a SECOND run never inherits
+	// the prior run's finished/summary flags.
+	m = m.resetRunState()
+
 	// A full `run` hardens SSH crypto but leaves access policy at the image default —
 	// show the operator an info notice up front (password login STAYS ON + a key is
 	// also generated) and again in the finished tail. detect/verify don't run the
 	// step, so the notice would be misleading there.
 	if m.command == "run" {
 		m.content = t(m.lang, kPwOnInfo) + "\n\n"
-		m.vp.SetContent(m.wrapped())
 	}
+	m.vp.SetContent(m.wrapped())
 	// Start the live elapsed timer + spinner heartbeat for the run.
 	m.runStart = time.Now()
 	m.elapsed = 0

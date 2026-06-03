@@ -230,7 +230,8 @@ const (
 	kApplyModalTitle   // modal title: "Применить твики?"
 	kApplyModalBody    // modal body: applies all tweaks
 	kApplyModalReboot  // extra reboot warning when the bucket includes A8
-	kApplyModalButtons // buttons line: "[Enter] применить   [Esc] отмена"
+	kApplyModalConfirm // confirm pill label: "[Enter] применить"
+	kApplyModalCancel  // cancel pill label: "[Esc] отмена"
 
 	// --- CHANGE 2: pre-run generated-key modal --------------------------------
 	kKeyPreRunWarn    // pre-run guidance: save the key — without it you can't get in
@@ -410,7 +411,8 @@ var tr = map[Lang]map[stringKey]string{
 		kApplyModalTitle:   "Применить твики?",
 		kApplyModalBody:    "Будут применены все доступные твики (сеть, ядро, память, обслуживание).",
 		kApplyModalReboot:  "⚠ Включает полное обновление и ПЕРЕЗАГРУЗКУ (A8): VPN и сервисы прервутся примерно на 1–2 минуты.",
-		kApplyModalButtons: "[Enter] применить   [Esc] отмена",
+		kApplyModalConfirm: "[Enter] применить",
+		kApplyModalCancel:  "[Esc] отмена",
 
 		kKeyPreRunWarn:    "Сохрани этот ключ — без него ты не зайдёшь, если позже отключишь вход по паролю. Ключ существует только в памяти и нигде не сохраняется автоматически.",
 		kKeyPreRunButtons: "[Enter] начать применение   [Esc] отмена",
@@ -585,7 +587,8 @@ var tr = map[Lang]map[stringKey]string{
 		kApplyModalTitle:   "Apply tweaks?",
 		kApplyModalBody:    "This applies all available tweaks (network, kernel, memory, maintenance).",
 		kApplyModalReboot:  "⚠ Includes a full upgrade and a REBOOT (A8): VPN and services bounce for ~1–2 minutes.",
-		kApplyModalButtons: "[Enter] apply   [Esc] cancel",
+		kApplyModalConfirm: "[Enter] apply",
+		kApplyModalCancel:  "[Esc] cancel",
 
 		kKeyPreRunWarn:    "Save this key — without it you can't get in if you later disable password login. The key lives only in memory and is never saved automatically.",
 		kKeyPreRunButtons: "[Enter] start applying   [Esc] cancel",
