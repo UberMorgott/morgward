@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,13 @@ func main() {
 	// Set the console window title up front so the taskbar/title bar shows the
 	// program name rather than the launch command path (Windows; no-op elsewhere).
 	setConsoleTitle(version.Name + " — " + version.Tagline)
+
+	// Sweep the self-update leftover on EVERY launch (CLI or TUI). On Windows a
+	// running exe can't be deleted in place, so go-selfupdate renames the prior
+	// binary to ".<base>.old"; that file stays locked until the old process exits,
+	// so only a later launch can remove it. Doing this here (not just in the TUI)
+	// means any command clears it — no hidden junk lingers after an update.
+	cleanupOldBinary()
 
 	// First non-flag arg is the command. Bare invocation (no args) launches the
 	// TUI — the "open a window, type host/port/user/password" flow.
@@ -254,10 +262,23 @@ func applyUpdate(ctx context.Context, targetVer string) (string, error) {
 	return rel.Version(), nil
 }
 
+// cleanupOldBinary removes the ".<base>.old" leftover go-selfupdate creates next
+// to the executable on Windows (a running binary can't be replaced in place, so
+// the prior version is renamed aside). It stays locked until the old process
+// exits, so this runs at startup of the NEXT launch — by then it's removable.
+// Best-effort: any error (no leftover, still locked, non-Windows) is ignored.
+func cleanupOldBinary() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"))
+}
+
 // performUpdate downloads + replaces the running binary with the latest release
 // via applyUpdate, then relaunches the updated executable and exits. On Windows
 // the running exe cannot be deleted, so go-selfupdate renames it to "<exe>.old";
-// the TUI's Init() cleans that leftover on the next launch. targetVer is the
+// the next launch's cleanupOldBinary() sweeps that leftover. targetVer is the
 // version the operator saw on the strip (informational; applyUpdate re-detects).
 func performUpdate(targetVer string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

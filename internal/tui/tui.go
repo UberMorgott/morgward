@@ -5,8 +5,6 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"context"
-	"os"
-	"path/filepath"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -318,13 +316,8 @@ func (m *model) toggleLang() {
 }
 
 func (m model) Init() tea.Cmd {
-	// Best-effort: a prior Windows self-update renames the running exe to a hidden
-	// ".<base>.old" dotfile in the exe dir (go-selfupdate cannot delete a running
-	// binary), so clean up that leftover on the next launch. Errors are ignored — it
-	// simply won't exist on first run / non-Windows.
-	if exe, err := os.Executable(); err == nil {
-		_ = os.Remove(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"))
-	}
+	// The self-update ".<base>.old" leftover is swept by main()'s cleanupOldBinary()
+	// on every launch (CLI or TUI), so no cleanup is needed here.
 	// v2 has no tea.SetWindowTitle Cmd; the window title is a tea.View field built
 	// per-frame in View() from m.titleK + m.lang (see windowTitle).
 	// Start the always-on resize poll (Windows has no SIGWINCH — see resizeTick) and
