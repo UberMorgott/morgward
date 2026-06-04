@@ -11,4 +11,4 @@ const (
 
 // Version is the Morgward release version (semver). A var (not const) so release
 // builds / tests can stamp it via -ldflags "-X .../version.Version=X.Y.Z".
-var Version = "0.7.0"
+var Version = "0.7.1"
