@@ -1,11 +1,77 @@
 package sshx
 
 import (
+	"errors"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
+
+// fakePublicKey is a minimal ssh.PublicKey stub whose Marshal output is fully
+// controlled by the test, so the host-key pin logic can be exercised without a
+// real handshake or live server.
+type fakePublicKey struct {
+	typ  string
+	wire []byte
+}
+
+func (k fakePublicKey) Type() string                        { return k.typ }
+func (k fakePublicKey) Marshal() []byte                     { return k.wire }
+func (k fakePublicKey) Verify([]byte, *ssh.Signature) error { return nil }
+
+// TestHostKeyPinTOFU proves the in-run TOFU pin: the first host key seen by a
+// Client is trusted+pinned; an identical key on a later handshake is accepted; a
+// DIFFERENT key is rejected with ErrHostKeyChanged (possible MITM mid-run).
+func TestHostKeyPinTOFU(t *testing.T) {
+	c := &Client{}
+	cb := c.hostKeyCallback()
+	addr := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 22}
+
+	keyA := fakePublicKey{typ: ssh.KeyAlgoED25519, wire: []byte("HOSTKEY-A")}
+	keyB := fakePublicKey{typ: ssh.KeyAlgoED25519, wire: []byte("HOSTKEY-B")}
+
+	// First sight: trust + pin.
+	if err := cb("host", addr, keyA); err != nil {
+		t.Fatalf("first connect (TOFU) should accept any key, got %v", err)
+	}
+	// Same key on a reconnect: accepted.
+	if err := cb("host", addr, keyA); err != nil {
+		t.Fatalf("matching pinned key should be accepted, got %v", err)
+	}
+	// Changed key on a reconnect: rejected as MITM.
+	err := cb("host", addr, keyB)
+	if err == nil {
+		t.Fatal("changed host key must be rejected, got nil")
+	}
+	if !errors.Is(err, ErrHostKeyChanged) {
+		t.Fatalf("want ErrHostKeyChanged, got %v", err)
+	}
+}
+
+// TestIsNoMutualAuth confirms the auth-rejection phrases WaitForReboot relies on
+// to surface ErrRebootAuthFailed are still recognized (and unrelated transport
+// errors are not misclassified as auth failures).
+func TestIsNoMutualAuth(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey]"), true},
+		{errors.New("ssh: no supported methods remain"), true},
+		{errors.New("dial tcp 10.0.0.1:22: connect: connection refused"), false},
+		{errors.New("i/o timeout"), false},
+		{nil, false},
+	}
+	for _, tc := range cases {
+		if got := isNoMutualAuth(tc.err); got != tc.want {
+			t.Errorf("isNoMutualAuth(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}
 
 // slowReader yields its payload in chunks with a small delay between them, so the
 // test exercises the streaming path (emit must fire per line as data arrives, not
