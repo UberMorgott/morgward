@@ -305,3 +305,54 @@ Remedies (iptables path only):
 
 Under **ufw** or **firewalld/nftables** this is moot — the operator's own manager governs
 which ports are allowed, so add the range there (`ufw allow 30000:32767/tcp`, etc.).
+
+## 9. Proposed / future — brownfield VPN MTU/MSS coexistence (NOT YET IMPLEMENTED)
+
+> Status: **proposal only — no code exists for this yet.** Documented here so the gap is
+> on record and the design is fixed before anyone wires it. Don't cite it as shipped
+> behavior; a `run` today does **none** of the below.
+
+**Problem.** On a brownfield box running a **routed** VPN (WireGuard / AmneziaWG /
+OpenVPN that forwards a client subnet → `MASQUERADE` → uplink), forwarded **client** TCP
+flows hit a **PMTUD blackhole** whenever ICMP `frag-needed` (type 3 code 4) is filtered
+somewhere on the path — common on RU ISP links and behind obfuscated transports. Symptom
+is the classic intermittent "VPN works then doesn't": small packets (DNS lookups, page
+open, the handshake) pass, large packets (TLS records, downloads, video) are silently
+dropped, so pages hang or half-load. Live diagnosis on an AmneziaWG box bears this out —
+`IcmpOutDestUnreachs ≈ 105k` vs `IcmpInDestUnreachs ≈ 1.2k` (PMTUD **return** path
+broken), `IpFragCreates ≈ 740k`, tunnel iface `awg0` (MTU 1420) `TX dropped ≈ 22k`, and
+**zero** MSS-clamp present in the host nft/iptables or in any container.
+
+**Why morgward does NOT cover it today (the gap, code-verified):**
+- A4 ([`a4_network.go`](../internal/steps/a4_network.go)) sets only
+  `net.ipv4.tcp_mtu_probing = 1` in `netTuneConf`. That is PLPMTUD for
+  **host-terminated** TCP sockets; it does **nothing** for **forwarded** (router-role)
+  client flows, and the outer WireGuard layer is **UDP** (`tcp_mtu_probing` is TCP-only).
+  A4's own header comment states MTU tuning is **SKIPPED** in universal Phase A.
+- **No TCP MSS clamping exists anywhere in `internal/`** (`grep -i mss|clamp|TCPMSS` →
+  none). Nothing on the forward path adjusts MSS.
+- A1 deliberately leaves the **FORWARD policy + docker/nat chains UNTOUCHED** on
+  brownfield (§1, §5) — so by design nothing morgward does today fixes the forwarded path.
+
+**Proposed step (working name "A4.5" — exact ID is the author's call):**
+brownfield-only, detection-driven, role-agnostic (no service whitelist),
+greenfield path **byte-identical / unchanged**. Gated on `!Greenfield` and a detected
+routed-VPN signal (`Facts.Forwarding` + a VPN tunnel iface — `detect.Facts` has
+`WireguardSeen`/`Forwarding` today but **no tunnel-iface field yet**; this step would add
+detection of `awg0`/`wg0`/`tun0`).
+- **(a) zero-downtime — default, hot-applied, no reconnect:** TCP **MSS clamp** on the
+  forward path for tunnelled traffic —
+  `iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu`
+  (or `--set-mss <tunnel_mtu-40>`). On a **docker** box insert into the **`DOCKER-USER`**
+  chain — the docker-sanctioned operator chain that survives `docker` reloads and that
+  morgward must **never flush** (consistent with the existing "never flush docker chains"
+  rule, §1/§5). Idempotent / additive, like the A1 allow-only paths.
+- **(b) opt-in — needs an iface restart, so NOT zero-downtime:** lower the detected VPN
+  tunnel iface MTU (`awg0`/`wg0`/`tun0`) to a safe **1280**, and surface a recommendation
+  that **client** configs set the same MTU (WireGuard does **not** push MTU to clients).
+  An MTU change bounces the iface → gate behind an explicit opt-in and warn; never fold it
+  into the default zero-downtime path.
+
+Default behavior is the **(a) MSS clamp only**; **(b)** is opt-in. Both are
+**lockout-safe** (forward-path / tunnel-iface only — neither touches INPUT or sshd), so
+neither can abort a `run` or trip ssh-revert.
