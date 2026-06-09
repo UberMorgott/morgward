@@ -18,7 +18,7 @@ func (Precond) Title() string { return "§1 Preconditions (apt index, admin user
 func (Precond) Run(ctx *Context) (Status, string, error) {
 	// apt index refresh — HARD gate before the first apt-install (A1).
 	ctx.Log.Detail("apt-get update (apt index gate)…")
-	upd := ctx.Cli.Sudo("export DEBIAN_FRONTEND=noninteractive; stdbuf -oL -eL apt-get update")
+	upd := ctx.Cli.Sudo("export DEBIAN_FRONTEND=noninteractive; stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 update")
 	if upd.RC != 0 {
 		return StatusFail, "apt-get update failed: " + firstLine(upd.Stderr), fmt.Errorf("apt index refresh failed")
 	}

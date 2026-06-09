@@ -40,7 +40,7 @@ bantime  = 3600
 
 	port := ctx.Cfg.Port
 	script := `export DEBIAN_FRONTEND=noninteractive
-stdbuf -oL -eL apt-get install -y fail2ban python3-systemd
+stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y fail2ban python3-systemd
 ` + putFile("/etc/fail2ban/jail.local", jail, "0644")
 	if port != 22 {
 		// Tell fail2ban which port sshd listens on.

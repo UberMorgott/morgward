@@ -85,9 +85,11 @@ systemd-run --on-active=300 --unit=fw-rollback /usr/local/sbin/fw-rollback.sh
 	persistInstall := `export DEBIAN_FRONTEND=noninteractive
 echo 'iptables-persistent iptables-persistent/autosave_v4 boolean false' | debconf-set-selections
 echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debconf-set-selections
-stdbuf -oL -eL apt-get install -y iptables-persistent
+stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y iptables-persistent
 `
+	persistInstallFailed := false
 	if r := ctx.Cli.Sudo(persistInstall); r.RC != 0 {
+		persistInstallFailed = true
 		ctx.Log.Warn("iptables-persistent install rc=%d (continuing to verify)", r.RC)
 	}
 
@@ -112,7 +114,11 @@ netfilter-persistent save >/dev/null 2>&1
 		ctx.Log.Warn("fw-rollback timer still listed after disarm")
 	}
 	if pchk != "ok" {
-		return StatusFail, "firewall not persisted with SSH port open in rules.v4", fmt.Errorf("persistence incomplete")
+		detail := "firewall not persisted with SSH port open in rules.v4"
+		if persistInstallFailed {
+			detail += " (iptables-persistent install may have failed — check apt/dpkg lock)"
+		}
+		return StatusFail, detail, fmt.Errorf("persistence incomplete")
 	}
 
 	if ctx.Facts.Greenfield {

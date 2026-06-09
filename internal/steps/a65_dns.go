@@ -35,7 +35,7 @@ mkdir -p /etc/systemd/resolved.conf.d
 # Ensure dig is available; if not, install dnsutils non-interactively. If it is
 # still missing we fall back to hardcoded defaults rather than failing the step.
 if ! command -v dig >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q dnsutils >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -q dnsutils >/dev/null 2>&1 || true
 fi
 
 write_conf() {

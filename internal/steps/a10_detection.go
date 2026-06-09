@@ -35,7 +35,7 @@ func (a A10Detection) Run(ctx *Context) (Status, string, error) {
 
 	// auditd + rules.
 	script := `export DEBIAN_FRONTEND=noninteractive
-stdbuf -oL -eL apt-get install -y auditd audispd-plugins
+stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y auditd audispd-plugins
 mkdir -p /etc/audit/rules.d
 ` + putFile("/etc/audit/rules.d/99-vps.rules", auditRules, "0640") +
 		"augenrules --load >/dev/null 2>&1\nsystemctl enable --now auditd >/dev/null 2>&1\n"

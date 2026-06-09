@@ -19,7 +19,7 @@ Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 
 func (a A9Unattended) Run(ctx *Context) (Status, string, error) {
 	script := `export DEBIAN_FRONTEND=noninteractive
-stdbuf -oL -eL apt-get install -y unattended-upgrades
+stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y unattended-upgrades
 ` + putFile("/etc/apt/apt.conf.d/20auto-upgrades", autoUpgrades, "0644") +
 		putFile("/etc/apt/apt.conf.d/52-unattended-upgrades-local", unattendedLocal, "0644")
 	if r := ctx.Cli.Sudo(script); r.RC != 0 {

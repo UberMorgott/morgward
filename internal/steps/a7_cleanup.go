@@ -34,19 +34,19 @@ PKGS="apport apport-symptoms whoopsie sysstat packagekit"
 for p in $PKGS; do
   if dpkg -l "$p" 2>/dev/null | grep -q '^ii'; then
     apt-get -s purge "$p" 2>/dev/null | awk '/^(Remv|Purg)/{print $2}' >> "$LOG"
-    stdbuf -oL -eL apt-get purge -y "$p"
+    stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 purge -y "$p"
   fi
 done
 
 if [ "$MP_SAFE" = "1" ] && dpkg -l multipath-tools 2>/dev/null | grep -q '^ii'; then
   echo multipath-tools >> "$LOG"
   systemctl disable --now multipathd.service multipathd.socket >/dev/null 2>&1
-  stdbuf -oL -eL apt-get purge -y multipath-tools multipath-tools-boot
+  stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 purge -y multipath-tools multipath-tools-boot
   stdbuf -oL -eL update-initramfs -u -k all
 fi
 
 # Guard cloud-init survives the cascade, then autoremove.
-stdbuf -oL -eL apt-get autoremove -y --purge
+stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 autoremove -y --purge
 stdbuf -oL -eL apt-get clean
 journalctl --vacuum-size=500M >/dev/null 2>&1
 systemctl reset-failed >/dev/null 2>&1

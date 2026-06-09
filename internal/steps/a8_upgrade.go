@@ -62,8 +62,8 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
 	up := ctx.Cli.Sudo(`export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
-` + putFile(dpkgWrapper, wrapperBody, "0755") + `stdbuf -oL -eL apt-get update
-stdbuf -oL -eL apt-get full-upgrade -y -o Dir::Bin::dpkg=` + dpkgWrapper + ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+` + putFile(dpkgWrapper, wrapperBody, "0755") + `stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 update
+stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 full-upgrade -y -o Dir::Bin::dpkg=` + dpkgWrapper + ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
 __rc=$?
 rm -f ` + dpkgWrapper + `
 exit $__rc`)
