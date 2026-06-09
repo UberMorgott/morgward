@@ -79,10 +79,42 @@ path → check the other.
   `ListenPortsTCP/UDP`. iptables coexist opens ports LISTENING at apply time only — later
   ephemeral ports (k8s NodePort, torrents) need a re-run of `step A1` or an explicit rule.
 
+- **Brownfield round 3 — `ManagesIPTables()` propagation.** The round-2 A1 branch now
+  propagates to every step/path that ASSUMES a morgward-owned iptables ruleset, via the
+  single predicate `detect.Facts.ManagesIPTables()` (`internal/detect/detect.go`):
+  `true` on Greenfield OR `FirewallMgr` ∈ `{iptables, none, ""}` (CONSERVATIVE — unknown
+  ⇒ managed); `false` only on explicit `ufw`/`firewalld`/`nftables`. Gate iptables-specific
+  assertions behind it, don't hard-code them. **A8** pre/post-reboot firewall gate:
+  `rules.v4`/`-P INPUT DROP` checks only when `ManagesIPTables`; on `ufw` substitute
+  `ufw status` *active* as the SSH-survives-reboot gate; on `firewalld`/`nftables` skip
+  the gate (operator owns persistence) — no more full-run ABORT on a ufw brownfield box.
+  **`verify.Run` now takes `*detect.Facts`** (engine passes `s.ctx.Facts`; nil ⇒ treated
+  as managed, byte-identical): `firewallChecks` rows are manager-aware — managed →
+  original iptables `Firewall order`/`SSH port open` (Lockout); `ufw` → `Firewall (ufw)
+  active` + `SSH port allowed (ufw)`; `firewalld`/`nftables` → two NA skip-with-reason
+  rows, **never Abort**. **revert A1** is facts-aware: on ufw/firewalld/nftables a
+  deliberate no-op `Skip` ("reverts only open access"); managed → the original flush.
+  **A10** inbound-drop `LOG` rule + `netfilter-persistent save` gated on `ManagesIPTables`
+  (else `Detail`: "inbound-drop LOG rule skipped: <mgr> manages the firewall (no second
+  layer)"). **tweaks** audit probes `a1.{input_drop,ssh_accept,rules_v4,rules_v6}` +
+  `a10.log_rule` gate behind the same `managesIPT` so a manager-owned box shows no false
+  "not applied". Greenfield/iptables output stays byte-identical (probes still lead the
+  registry in the same order). Verified-live: greenfield + ufw-brownfield full runs on
+  Ubuntu 26.04 passed.
+
+- **apt-get lock contention (v0.7.3).** All 13 lock-acquiring `apt-get` invocations
+  across `internal/steps` (PRE, A1, A3, A6.5, A6.7, A7×3, A8×2, A9, A10) carry
+  `-o DPkg::Lock::Timeout=300`, so unattended-upgrades holding the dpkg lock on a
+  fresh-boot box waits up to 5 min instead of aborting the step. Add the flag to any NEW
+  lock-acquiring apt-get call.
+
 - **§A1 stdin caveat — NEVER use heredocs in remote scripts.** The script itself is
   piped to `bash` over stdin, so a heredoc would contend for that stdin. Deliver all
   file content via nested base64: use `putFile` / `appendLineIfMissing` / `anchorSysctl`
-  in `steps/step.go`, never `cat <<EOF`.
+  in `steps/step.go`, never `cat <<EOF`. To run a multi-line script body without landing
+  a file, use `pipeToBash(script)` (`steps/step.go`: `echo <b64> | base64 -d | bash`) —
+  A6.5 DNS calibration (`a65_dns.go`) uses it instead of a predictable `/tmp` path
+  (symlink/TOCTOU target for a local unprivileged user, since the script runs as root).
 
 - **TUI is Bubble Tea v2** (`charm.land/bubbletea/v2 v2.0.6` + `charm.land/bubbles/v2
   v2.1.0` + `charm.land/lipgloss/v2 v2.0.3`). The module path is **`charm.land`**, NOT
@@ -97,9 +129,41 @@ path → check the other.
   and rebuilds the localized title per frame in `View()` (`windowTitle()`).
   STILL TRUE: the model is **copied by value** every `Update` — never put a `strings.Builder`
   (or other non-copyable) in the model struct; use a plain `string` (`m.content`).
+  **In-session re-run hygiene (v0.7.4):** the re-run paths (`dashStale` re-audit,
+  `launchApplyTweaks`, `startSteps`, `startRevert`) funnel into `launchEngine` WITHOUT
+  going through `goBack`, so listeners stay parked on reused channels. `launchEngine`
+  bumps `m.runGen` per run and every streaming listener (`listen`/`listenConn`/
+  `listenStats`/`listenProg`) captures its generation; `Update` DROPS any `genMsg` whose
+  `gen != m.runGen` and does not re-issue it (no interleaved progress across runs). The
+  `connMsg` handler calls `stopSampler()` (nil-safe + idempotent) before re-creating the
+  stats channel so monitor SSH connections don't leak. **After a MUTATING run** (step /
+  revert / run) the model sets `dashStale`; on returning to the Dashboard it re-runs an
+  `audit` and `captureAudit` repopulates the dash fields with post-apply state (stale
+  connect-time checkmarks fixed).
+
+- **Stream sanitization lives in `internal/ui` (v0.7.4).** `ui.SanitizeStreamLine` /
+  `ui.StripControlAndANSI` strip ANSI escapes + C0 control chars (CR-redraw collapses to
+  last segment, tabs→space, newlines preserved) from untrusted remote output. Both the
+  CLI terminal print path AND the log file go through it (`ui.Logger`), and the TUI
+  delegates (`tui/render.go` `sanitizeStreamLine` → `ui.SanitizeStreamLine`) — so remote
+  ANSI/control injection can't corrupt either sink. One hardened stripper, don't
+  re-implement per surface.
 
 - **`sshx.Client` is not concurrency-safe.** `monitor` dials its **own** SSH session
-  for metrics rather than sharing the engine's client.
+  for metrics rather than sharing the engine's client. **Transport liveness + pin
+  (v0.7.4):** each `Dial` does a manual TCP dial with OS keepalive
+  (`SetKeepAlivePeriod`) AND a protocol-level `keepalive@openssh.com` global request
+  every `keepaliveInterval` (30s); after `keepaliveMaxFails` (3) consecutive misses it
+  `Close()`s the client so a blocked `Run`/`sess.Wait` (hung command, dead NAT) unblocks
+  with a transport error instead of wedging the run forever. **In-run TOFU host-key pin:**
+  the FIRST successful handshake pins the host key (`hostKeyCallback`); every later redial
+  by the same `Client` (reboot, `SwitchUser`, `UseKey`, second session) must present a
+  byte-identical key or it's refused with `ErrHostKeyChanged` ("possible MITM").
+  `HostKeyAlgorithms` is **ed25519-first** (`pinnedHostKeyAlgos`) on purpose — A2 removes
+  the box's ECDSA host key, so pinning ed25519 (which A2 preserves) keeps the pin valid
+  across the A8 reboot. **`WaitForReboot`** returns `ErrRebootAuthFailed` after
+  `rebootAuthFailMax` (5) CONSECUTIVE auth rejections (box reachable but our creds
+  rejected — distinct from the generic "never reconnected / may be bricked" timeout).
 
 - **Modes removed — default `run` is crypto-only and never locks access.** There is
   NO `--mode` / `config.Mode` / soft / strict any more. A `run` applies SSH **crypto**

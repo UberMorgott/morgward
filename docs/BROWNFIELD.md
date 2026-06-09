@@ -82,6 +82,7 @@ zero/empty and never fails detection.
 | `SSHKeyUsers` | `[]string` | login users (root + every `/home/*`) with a NON-empty `~/.ssh/authorized_keys` — used by A2 so it doesn't lock out existing key users |
 | `FirewallMgr` | `string` | the active firewall manager: `ufw` \| `firewalld` \| `nftables` \| `iptables` \| `none` (`classifyFirewallMgr`, priority order, best-effort). nftables verdict is CONSERVATIVE — needs the unit active, a non-empty `nft` ruleset, AND an effectively-empty `iptables -S` (`iptablesEffectivelyEmpty`); else it falls through to `iptables`. A1 branches on it so morgward never imposes a conflicting second firewall layer — see §7 |
 | `ListenServices` | `[]ListenService` | `ListenService{ Proto string; Port int; Process string }` parsed from the same `ss -tulpnH` output (Process via `processFromSS`, or `""`/`(unknown)`), deduped by `proto:port` — the rich role-agnostic "what's found" map for surfacing the box's de-facto role. `ListenPortsTCP/UDP` stay as the ruleset inputs |
+| `ManagesIPTables()` | `func() bool` | method, not a field: does morgward OWN the box's raw iptables ruleset? `true` on `Greenfield` OR `FirewallMgr` ∈ `{iptables, none, ""}` (CONSERVATIVE — unknown ⇒ managed); `false` only on explicit `ufw`/`firewalld`/`nftables`. The single predicate every iptables-specific assertion (A8 reboot gate, A10 LOG rule, `verify` firewall rows, `tweaks` a1/a10 probes, `revert` A1) keys off so a manager-owned box never gets a false "not applied" or a second firewall layer |
 
 These fields are populated even on a greenfield box (where they come out empty), so the
 steps branch purely on `Greenfield`/`Forwarding` without re-probing.
@@ -152,7 +153,7 @@ Steps not listed below behave identically in both modes.
 | **A5** kernel ([`a5_kernel.go`](../internal/steps/a5_kernel.go)) | `kernelHardenConf(false)`: `net.ipv4.conf.{all,default}.rp_filter = 1` (strict) | `kernelHardenConf(true)`: `rp_filter = 2` (loose) when `Forwarding` — strict reverse-path silently drops asymmetric-routed return packets and breaks WireGuard/OpenVPN/multi-egress. Rest of the sysctl conf is router-safe, identical on both paths; live rpf-revert fail-safe kept | `Forwarding` |
 | **A6.7** memory ([`a67_mem.go`](../internal/steps/a67_mem.go)) | install zram + earlyoom, then `swapoff -a` + comment disk-swap fstab lines (tagged `# morgward-disabled-swap`) | install zram + earlyoom + swappiness, but **keep pre-existing disk swap** (`disableDiskSwap` block gated behind `Greenfield` only). zram default priority 100 > disk swap, so zram is still used first; the zram-high + disk-low layered layout is recommended | `Greenfield` |
 | **A2** SSH ([`a2_ssh.go`](../internal/steps/a2_ssh.go)) | `AllowGroups sshusers` admits only sshusers members | `preserveKeyUsers`: BEFORE the `AllowGroups` drop-in takes effect, add every existing key user (non-root) in `SSHKeyUsers` to `sshusers` (`usermod -aG sshusers <u> \|\| true`) so they keep SSH access; **root is intentionally excluded** (stays blocked: not in group, `prohibit-password`). Additive/grant-only — never lockout-capable; crypto + PermitRootLogin logic unchanged. Runs in both A2SSH (legacy) and A2Danger; A2Safe untouched (it never sets AllowGroups) | `SSHKeyUsers` |
-| **verify / tweaks** ([`../internal/verify/`](../internal/verify/), [`../internal/tweaks/`](../internal/tweaks/)) | assert FORWARD DROP, `rp_filter == 1` | coexist-aware: accept `rp_filter == 2` when `Forwarding`, and do **not** assert a FORWARD policy on a brownfield box (it is docker/operator-managed), so a correctly-coexisting box does not report false failures. All other matrix rows intact | `Forwarding` |
+| **verify / tweaks** ([`../internal/verify/`](../internal/verify/), [`../internal/tweaks/`](../internal/tweaks/)) | assert FORWARD DROP, `rp_filter == 1`, iptables INPUT-DROP/SSH-open/`rules.v4`/LOG | coexist-aware: accept `rp_filter == 2` when `Forwarding`, do **not** assert a FORWARD policy on a brownfield box. **`verify.Run` takes `*detect.Facts`** and `firewallChecks` are manager-aware: managed (`ManagesIPTables`) → original iptables `Firewall order`/`SSH port open` (Lockout); `ufw` → `Firewall (ufw) active` + `SSH port allowed (ufw)`; `firewalld`/`nftables` → two NA skip-with-reason rows, never Abort. `tweaks` `a1.{input_drop,ssh_accept,rules_v4,rules_v6}` + `a10.log_rule` probes are gated behind `ManagesIPTables` so a manager-owned box shows no false "not applied". All other rows intact | `Forwarding`, `ManagesIPTables()` |
 
 Notes:
 - A1's skip-if guard (INPUT DROP + `cfg.Port` open + persisted) still fires correctly on
@@ -264,6 +265,39 @@ leave it unhardened. **Lockout-safety holds on every path:** the ufw path is all
 (never deny/enable), the firewalld/nftables path changes nothing, the iptables path is
 the proven round-1 build — no path sets a default-deny without first opening SSH + the
 detected ports.
+
+### Round 3 — manager-awareness propagates past A1 (`Facts.ManagesIPTables()`)
+
+A1 was round 2; round 3 carries the same verdict to **every** path that previously
+assumed morgward owns the raw iptables ruleset, via the single predicate
+`Facts.ManagesIPTables()` (`true` on greenfield or `iptables`/`none`/unknown; `false` on
+ufw/firewalld/nftables). Without this, a ufw box that A1 correctly left alone would later
+ABORT or report false failures when a downstream step asserted `rules.v4`. Propagated to:
+
+- **A8 reboot gate** ([`a8_upgrade.go`](../internal/steps/a8_upgrade.go)) — pre- and
+  post-reboot the SSH-survives-reboot gate is manager-aware: `ManagesIPTables` →
+  `rules.v4` non-empty + `--dport` present (pre) / `-P INPUT DROP` + SSH dport ACCEPT
+  loaded (post); `ufw` → substitute gate `ufw status` reports **active** (ufw persists its
+  own rules); `firewalld`/`nftables` → gate skipped (operator owns persistence). A ufw
+  brownfield box no longer aborts the whole run at A8.
+- **`verify.Run`** ([`../internal/verify/verify.go`](../internal/verify/verify.go)) — now
+  takes `*detect.Facts`; `firewallChecks` emits manager-specific rows (see §3): ufw →
+  `Firewall (ufw) active` + `SSH port allowed (ufw)`; firewalld/nftables → two NA
+  skip-with-reason rows that never Abort; managed → the original iptables rows.
+- **`tweaks`** ([`../internal/tweaks/tweaks.go`](../internal/tweaks/tweaks.go)) — the
+  `a1.{input_drop,ssh_accept,rules_v4,rules_v6}` and `a10.log_rule` probes only enter the
+  registry when `ManagesIPTables()`, so a manager-owned box's audit stays honest (no false
+  "not applied"). Greenfield/iptables order is byte-identical.
+- **A10** ([`a10_detection.go`](../internal/steps/a10_detection.go)) — the inbound-drop
+  `LOG` rule + `netfilter-persistent save` are gated on `ManagesIPTables`; otherwise a
+  `Detail` line `inbound-drop LOG rule skipped: <mgr> manages the firewall (no second
+  layer)` and nothing is written.
+- **revert A1** ([`../internal/engine/revert.go`](../internal/engine/revert.go)) — on a
+  ufw/firewalld/nftables box A1's revert is a deliberate no-op `Skip` (`A1 left the
+  firewall to <mgr> — nothing to revert (reverts only open access)`); only on a managed
+  box does it do the original flush.
+
+Live-verified: full greenfield and full ufw-brownfield `run`s on Ubuntu 26.04 both passed.
 
 ### ufw path — live-verified (`147.45.79.231`)
 

@@ -91,7 +91,7 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 | [`summary.go`](../internal/tui/summary.go) | `phaseSummary`: post-finish stats + clickable fix list |
 | [`matrix.go`](../internal/tui/matrix.go) | `phaseMatrix`: per-tweak audit ("анализ") table |
 | [`keyview.go`](../internal/tui/keyview.go) | `phaseKey`: generated PEM + clipboard "Copy key" button |
-| [`render.go`](../internal/tui/render.go) | `sanitizeStreamLine` — CR/tab/width-safe streamed output |
+| [`render.go`](../internal/tui/render.go) | `sanitizeStreamLine` — thin delegate to `ui.SanitizeStreamLine` (one hardened stripper shared with CLI/log) |
 | [`monitor_footer.go`](../internal/tui/monitor_footer.go) | CPU/RAM/DISK footer row rendering |
 | [`i18n.go`](../internal/tui/i18n.go) | `Lang` (RU default / EN) + every localized string |
 | [`styles.go`](../internal/tui/styles.go) | lipgloss styles + box chrome |
@@ -104,15 +104,15 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 | main | [`cmd/morgward/`](../cmd/morgward/) | CLI flag/env parse, dispatch, self-update | `main`, `performUpdate`, `partitionArgs`, `newUpdater`, `printKeyBlock` |
 | engine | [`internal/engine/`](../internal/engine/) | wires config → bootstrap → detect → ordered steps → verify; gates; revert map | `Execute`, `prepare`, `Run`, `RunSteps`, `VerifyOnly`, `DetectOnly`, `Audit`, `RunRevert`, `orderedSteps`, `Hooks`, `Progress`, `Summary`, `IsRevertable`, `ErrCanceled` |
 | config | [`internal/config/`](../internal/config/) | resolved run config + validation | `Config`, `Validate`, `adminUserRe` (`^[a-z_][a-z0-9_-]{0,31}$`), `Err*` sentinels |
-| sshx | [`internal/sshx/`](../internal/sshx/) | embedded SSH client (one-shot executor, base64 delivery), keygen | `Dial`, `DialWithRetry`, `Client.Run`/`Sudo`/`SwitchUser`/`UseKey`/`BootID`/`WaitForReboot`/`SetOutputSink`, `GenerateKeyPair`, `LoadKeyFile`, `SecretMarkerPrefix`, `ErrNoMutualAuth` |
+| sshx | [`internal/sshx/`](../internal/sshx/) | embedded SSH client (one-shot executor, base64 delivery), keygen; OS+protocol keepalive, in-run TOFU host-key pin | `Dial`, `DialWithRetry`, `Client.Run`/`Sudo`/`SwitchUser`/`UseKey`/`BootID`/`WaitForReboot`/`SetOutputSink`, `GenerateKeyPair`, `LoadKeyFile`, `SecretMarkerPrefix`, `ErrNoMutualAuth`, `ErrHostKeyChanged`, `ErrRebootAuthFailed` |
 | steps | [`internal/steps/`](../internal/steps/) | one Step per runbook block; stateless | `Step`, `Context`, `Status`, `BenchResult`, `putFile`/`appendLineIfMissing`/`freshLogin`, `A1Firewall` … `A10Detection` |
-| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`), `portFromLocal` |
-| verify | [`internal/verify/`](../internal/verify/) | §V verification matrix (effective behavior, not config text) | `Run`, `Result`, `Status` (`StatusPass`/`Warn`/`Fail`/`Skip`/`StatusUnknown`) |
+| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`; round 3: `ManagesIPTables()` — true on Greenfield or `FirewallMgr` ∈ {iptables,none,""}, false on ufw/firewalld/nftables), `portFromLocal` |
+| verify | [`internal/verify/`](../internal/verify/) | §V verification matrix (effective behavior, not config text); firewall rows manager-aware via `*detect.Facts` | `Run(c, log, port, *detect.Facts)`, `firewallChecks`, `Result`, `Status` (`StatusPass`/`Warn`/`Fail`/`Skip`/`StatusUnknown`) |
 | tweaks | [`internal/tweaks/`](../internal/tweaks/) | per-tweak audit registry (one privileged round-trip); view-only | `Run`, `Probe`, `Result` |
 | monitor | [`internal/monitor/`](../internal/monitor/) | live CPU/RAM/DISK over its **OWN** SSH session; reconnects | `ConnInfo`, `Sample`, sampler loop |
 | state | [`internal/state/`](../internal/state/) | in-memory per-run checkpoint (no disk, no cross-run skip) | `Checkpoint`, `Load`, `Done`, `Mark`, `Save` (no-op) |
 | stats | [`internal/stats/`](../internal/stats/) | best-effort before/after snapshot (cosmetic) | `Capture`, `Snapshot`, `parse.go` parsers |
-| ui | [`internal/ui/`](../internal/ui/) | colored terminal + file logger; `SetSink` redirects to TUI | `Logger`, `New`, `Step`/`OK`/`Skip`/`Fail`/`Stream`, `SetSink` |
+| ui | [`internal/ui/`](../internal/ui/) | colored terminal + file logger; `SetSink` redirects to TUI; owns remote-output sanitizer (CLI print + log file + TUI all delegate) | `Logger`, `New`, `Step`/`OK`/`Skip`/`Fail`/`Stream`, `SetSink`, `SanitizeStreamLine`, `StripControlAndANSI` |
 | wiki | [`internal/wiki/`](../internal/wiki/) | localized what/why/risk/OnBox/Revert per fix (no TUI import) | `Doc`, `FixDoc`, `Lang` |
 | version | [`internal/version/`](../internal/version/) | program name/version/tagline (no `main` import) | `Name`, `Version`, `Tagline` |
 
@@ -130,18 +130,18 @@ both modes. Full table in [`BROWNFIELD.md`](BROWNFIELD.md#3-per-step-decision-ta
 |----|------|-------------|:---:|--------------------------|
 | PRE | [`precond.go`](../internal/steps/precond.go) | §1 preconditions: apt index, admin user, key, sshusers group | yes | — |
 | A1 | [`a1_firewall.go`](../internal/steps/a1_firewall.go) | Firewall + fail-safe (iptables-nft, v4+v6) | yes | branches on `FirewallMgr`: `ufw`→`ufw allow` SSH+detected ports (allow-only); `firewalld`/`nftables`→defer, `StatusSkip` (untouched); `iptables`/`none`→coexist INPUT DROP, opens detected `ListenPortsTCP/UDP`, **FORWARD untouched**, chains/nat never flushed. [BROWNFIELD §7](BROWNFIELD.md#7-firewall-managers) |
-| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | snapshots running docker containers + active-not-enabled systemd units before reboot, `docker start`/`systemctl start`s the ones that didn't auto-return after (never `compose up`) |
+| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | snapshots running docker containers + active-not-enabled systemd units before reboot, `docker start`/`systemctl start`s the ones that didn't auto-return after (never `compose up`); pre/post-reboot firewall gate is manager-aware (`ManagesIPTables`→`rules.v4`/INPUT-DROP; `ufw`→`ufw status` active; firewalld/nftables→skip) so a ufw box doesn't abort |
 | A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, crypto; access policy unchanged) — **crypto-only full-run** | yes | preserves image-default access — never locks out (the opt-in lockdown is A2-danger) |
 | A2.5 | [`a25_cloudinit.go`](../internal/steps/a25_cloudinit.go) | Cloud-init neutralization | no | — |
 | A3 | [`a3_fail2ban.go`](../internal/steps/a3_fail2ban.go) | fail2ban (systemd backend, admin whitelist) | no | — |
 | A4 | [`a4_network.go`](../internal/steps/a4_network.go) | Network tuning (BBR, buffers, I/O sched) + benchmark | no | — |
 | A5 | [`a5_kernel.go`](../internal/steps/a5_kernel.go) | Kernel hardening (sysctl, THP=madvise, core_pattern) | no | `rp_filter=2` (loose) when `Forwarding` instead of 1 |
 | A6 | [`a6_maint.go`](../internal/steps/a6_maint.go) | Maintenance (journald, needrestart, NOFILE, ntp) | no | — |
-| A6.5 | [`a65_dns.go`](../internal/steps/a65_dns.go) | DNS hardening (calibrated upstream + DoT/DNSSEC) | no | skips if `systemd-resolved` inactive (custom resolver kept) |
+| A6.5 | [`a65_dns.go`](../internal/steps/a65_dns.go) | DNS hardening (calibrated upstream + DoT/DNSSEC); calibration runs via `pipeToBash` (no `/tmp` file — TOCTOU-safe) | no | skips if `systemd-resolved` inactive (custom resolver kept) |
 | A6.7 | [`a67_mem.go`](../internal/steps/a67_mem.go) | Memory mgmt (ZRAM zstd + earlyoom) | no | keeps pre-existing disk swap (no `swapoff`); zram still prio 100 |
 | A7 | [`a7_cleanup.go`](../internal/steps/a7_cleanup.go) | Cleanup (purge bloatware, apt-mark guard) | no | IRREVERSIBLE purge runs the same — exclude on a customized box |
 | A9 | [`a9_unattended.go`](../internal/steps/a9_unattended.go) | Unattended security updates | no | — |
-| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, inbound-drop logging) | no | — |
+| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, inbound-drop logging) | no | inbound-drop `LOG` rule + `netfilter-persistent save` gated on `ManagesIPTables` (skipped, with reason, when a manager owns the firewall) |
 
 **A2 split** (not in `orderedSteps`, resolvable via `step`/TUI security menu, in
 [`a2_ssh.go`](../internal/steps/a2_ssh.go)): `A2-safe` (`A2Safe`) = crypto only, image-default
@@ -177,6 +177,16 @@ access, **never locks anyone out** (default path); `A2-danger` (`A2Danger`) = op
 - **In-memory state**: `state.Load` ignores its path and returns a fresh checkpoint; `Save`
   is a no-op. Every run starts clean — no cross-invocation skip; on-box configs are the
   durable checkpoints.
+- **Transport liveness + host-key pin (v0.7.4)**: every `Client` runs OS keepalive + a
+  `keepalive@openssh.com` probe every 30s; 3 consecutive misses `Close()` the conn so a
+  blocked command/dead NAT surfaces a transport error instead of hanging the run. The
+  first dial pins the host key (in-run TOFU); any later redial presenting a different key
+  is refused with `ErrHostKeyChanged` (`HostKeyAlgorithms` ed25519-first so the pin
+  survives A2 removing the ECDSA host key + the A8 reboot). `WaitForReboot` distinguishes
+  `ErrRebootAuthFailed` (reachable, creds rejected — 5 consecutive) from the bricked-timeout.
+- **Untrusted remote output is sanitized**: `ui.SanitizeStreamLine`/`StripControlAndANSI`
+  strip ANSI/C0 control sequences from streamed server output before it reaches the CLI
+  terminal, the log file, OR the TUI pane — one shared stripper, no injection path.
 
 ## 7. Known minor
 
