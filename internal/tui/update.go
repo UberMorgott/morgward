@@ -506,6 +506,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.command == "audit" {
 				m.captureAudit(p.Summary)
 			}
+			// A mutating run (step/revert/run) changed the box, so the audit checkmarks
+			// captured at connect time are stale. Mark them so the next Dashboard entry
+			// re-audits. Set even on a failed/aborted run — a partial apply still mutated
+			// the box. The engine's RunSteps Summary carries no Tweaks/Facts, so a real
+			// re-audit (not a capture here) is required.
+			if mutatingCmd(m.command) {
+				m.dashStale = true
+			}
 			// Auto-advance once BOTH completion signals have landed (see doneMsg).
 			// Guard on finished so a summary that somehow precedes doneMsg waits, and
 			// on phaseRun so the key view isn't yanked away.
@@ -688,6 +696,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.dashFacts = nil
 	m.dashScroll = 0
 	m.dashApplyConfirm = false
+	m.dashStale = false
 	// command resets to the read-only audit so a subsequent Connect never applies.
 	m.command = "audit"
 	return m, m.refocus()

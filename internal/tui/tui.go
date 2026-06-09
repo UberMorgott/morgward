@@ -227,6 +227,12 @@ type model struct {
 	dashFacts        *detect.Facts
 	dashScroll       int  // audit list scroll offset (clamped like sumScroll)
 	dashApplyConfirm bool // true while the A8 reboot-warning confirm is shown
+	// dashStale is set when a MUTATING run (step/revert/run) completes — the box
+	// changed, so the audit checkmarks captured at connect time are now out of date.
+	// A plain bool, copy-safe under the value-copied v2 model. When a Dashboard-entry
+	// path (summaryGoHome) sees it set, it clears the flag and re-runs the audit so
+	// the grid reflects the post-apply state instead of stale connect-time results.
+	dashStale bool
 
 	// Security menu state (phaseSecurity). All plain strings/bool — value-copy safe.
 	// The three sec*State fields are derived from the audit BEFORE entering the menu

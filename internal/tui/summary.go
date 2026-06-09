@@ -606,6 +606,15 @@ func (m model) summaryHomeAtClick(x, y int) bool {
 // else back to the landing form. Mirrors the existing nav (goBack / phaseDashboard).
 func (m model) summaryGoHome() (tea.Model, tea.Cmd) {
 	if m.dashFacts != nil {
+		// A mutating run since the last audit left the Dashboard checkmarks stale.
+		// Re-run the read-only audit via the SAME machinery the connect path uses
+		// (command="audit" → start()); its final Done lands back on the Dashboard
+		// and captureAudit repopulates the dash fields with the post-apply state.
+		if m.dashStale {
+			m.dashStale = false
+			m.command = "audit"
+			return m.start()
+		}
 		m.phase = phaseDashboard
 		m.dashScroll = 0
 		return m, nil
