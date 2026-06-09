@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/UberMorgott/morgward/internal/engine"
 )
 
 // TestUpdateCheckMsgValueCopy confirms updateCheckMsg (and the model fields that
@@ -228,6 +230,71 @@ func TestUpdateStripI18nParity(t *testing.T) {
 				t.Fatalf("lang %d key %d: empty translation", lang, k)
 			}
 		}
+	}
+}
+
+// TestGenGuard_StaleDropped confirms a streamed run message carrying a STALE run
+// generation is dropped: it neither mutates the model nor re-issues a listener
+// (nil cmd). This is the guard that stops a previous in-session run's parked
+// listeners — the re-run paths reach launchEngine without goBack and reuse the same
+// channels, then launchEngine bumps runGen — from interleaving with the new run.
+func TestGenGuard_StaleDropped(t *testing.T) {
+	m := newModel()
+	m.runGen = 2 // current run is generation 2
+	m.phase = phaseRun
+
+	// A progMsg from the OLD generation (1) arrives wrapped. It must be dropped:
+	// progress fields untouched and NO listener re-issued.
+	stale := genMsg{gen: 1, msg: progMsg(engine.Progress{Index: 7, Total: 9, ID: "A9"})}
+	out, cmd := m.Update(stale)
+	got := out.(model)
+	if got.index != 0 || got.total != 0 || got.curID != "" {
+		t.Fatalf("stale genMsg mutated progress: index=%d total=%d id=%q", got.index, got.total, got.curID)
+	}
+	if cmd != nil {
+		t.Fatal("stale genMsg re-issued a listener (cmd != nil); the stale listener must be retired")
+	}
+}
+
+// TestGenGuard_CurrentHandled confirms a current-generation message is unwrapped and
+// handled exactly like the bare message, and re-issues its listener (non-Done
+// progress keeps the progCh listener alive).
+func TestGenGuard_CurrentHandled(t *testing.T) {
+	m := newModel()
+	m.runGen = 2
+	m.phase = phaseRun
+
+	cur := genMsg{gen: 2, msg: progMsg(engine.Progress{Index: 3, Total: 9, ID: "A5", Status: "running"})}
+	out, cmd := m.Update(cur)
+	got := out.(model)
+	if got.index != 3 || got.total != 9 || got.curID != "A5" {
+		t.Fatalf("current genMsg not handled: index=%d total=%d id=%q", got.index, got.total, got.curID)
+	}
+	if !got.running {
+		t.Fatal("current running progress did not set running=true")
+	}
+	if cmd == nil {
+		t.Fatal("non-Done progress did not re-issue listenProg (cmd == nil)")
+	}
+}
+
+// TestGenGuard_DoneRetiresListener confirms a current-generation Done event does NOT
+// re-issue listenProg: Done is the last progress event for a run, and re-issuing
+// would leave a stale-generation receiver parked on the reused progCh that steals
+// the next in-session run's events.
+func TestGenGuard_DoneRetiresListener(t *testing.T) {
+	m := newModel()
+	m.runGen = 1
+	m.phase = phaseRun
+
+	done := genMsg{gen: 1, msg: progMsg(engine.Progress{Done: true})}
+	out, cmd := m.Update(done)
+	got := out.(model)
+	if !got.haveSummary {
+		t.Fatal("Done did not set haveSummary")
+	}
+	if cmd != nil {
+		t.Fatal("progMsg(Done) re-issued listenProg (cmd != nil); it must retire the listener")
 	}
 }
 

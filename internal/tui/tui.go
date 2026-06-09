@@ -63,6 +63,20 @@ type logMsg string
 
 type doneMsg struct{ err error }
 
+// genMsg tags a streamed run message (logMsg/doneMsg/connMsg/statMsg/progMsg) with
+// the run generation that produced it. Every in-session re-run path
+// (summaryGoHome's dashStale re-audit, launchApplyTweaks, startSteps, startRevert)
+// funnels into launchEngine WITHOUT going through goBack, so the prior run's
+// listeners stay parked on the (reused) channels. launchEngine bumps model.runGen
+// per run and each listener closure captures the generation it was issued under;
+// Update drops any genMsg whose gen != m.runGen and does NOT re-issue that stale
+// listener, so a previous run's parked receivers (or a late message from a
+// goBack-cancelled run) cannot interleave with or corrupt the current run.
+type genMsg struct {
+	gen int
+	msg tea.Msg
+}
+
 // updateCheckMsg carries the result of the one-shot self-update check spawned by
 // Init(). It holds ONLY value types (no *Release / no maps) so the model stays
 // value-copyable when stashed: found reports whether DetectLatest found a NEWER
@@ -141,6 +155,16 @@ type model struct {
 	// reference/func types → value-copy safe across the per-Update model copy.
 	engineCancel context.CancelFunc
 	abort        chan struct{}
+
+	// runGen is the current run generation. launchEngine bumps it for every run;
+	// each streaming listener (listen/listenConn/listenStats/listenProg) captures
+	// the generation it was issued under and tags its messages (genMsg). Update
+	// drops genMsg whose gen != runGen and does NOT re-issue that listener, so a
+	// previous in-session run's parked listeners (the re-run paths funnel through
+	// launchEngine without goBack, reusing the same channels) and any late message
+	// from a goBack-cancelled run cannot interleave with the current run. Plain int
+	// — value-copy safe under the per-Update model copy.
+	runGen int
 
 	// live monitor: own sshx connection sampled on the bubbletea loop.
 	sample     monitor.Sample

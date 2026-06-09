@@ -17,6 +17,21 @@ import (
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Streamed run messages (logMsg/doneMsg/connMsg/statMsg/progMsg) arrive wrapped
+	// in a genMsg tagged with the run generation that produced them. Drop — and do
+	// NOT re-issue the listener for — any message from a stale generation: a prior
+	// in-session run's listeners stay parked on the (reused) channels because the
+	// re-run paths funnel through launchEngine without goBack, and a goBack-cancelled
+	// run can still emit a late message. Both must not corrupt the current run. A
+	// current-generation message is unwrapped and handled by the type switch below;
+	// its handler re-issues the listener via m.listen()/etc., which re-captures the
+	// (unchanged) current generation.
+	if gm, ok := msg.(genMsg); ok {
+		if gm.gen != m.runGen {
+			return m, nil
+		}
+		msg = gm.msg
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		// The resize poll (resizeTickMsg) delivers this every ~0.5s even when the
@@ -458,7 +473,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.phase == phaseForm {
 			return m, nil
 		}
-		// Engine signaled key auth is active — start the live sampler.
+		// Engine signaled key auth is active — start the live sampler. Tear down any
+		// sampler from a PRIOR in-session run first: the re-run paths (summaryGoHome
+		// dashStale re-audit, launchApplyTweaks, startSteps, startRevert) funnel into
+		// launchEngine WITHOUT going through goBack, so without this the previous run's
+		// sampler goroutine + its dedicated SSH connection would leak until process exit
+		// on every reconnect. stopSampler is nil-safe + idempotent (first run is a no-op).
+		m.stopSampler()
 		m.statsCh = make(chan monitor.Sample, 4)
 		ctx, cancel := context.WithCancel(context.Background())
 		m.stopSample = cancel
@@ -520,18 +541,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.finished && m.phase == phaseRun {
 				m = m.advanceFromRun()
 			}
-		} else {
-			m.index = p.Index
-			m.total = p.Total
-			m.curID = p.ID
-			m.curTitle = p.Title
-			m.running = p.Status == "running"
-			// During an audit, the per-tweak progress drives the connecting-state
-			// counter/spinner shown on the Dashboard once it opens.
-			if m.command == "audit" {
-				m.dashAuditRunning = true
-				m.dashAuditTotal = p.Total
-			}
+			// Done is the LAST progress event for this run — do NOT re-issue
+			// listenProg. Re-issuing would leave a listener parked on the (reused)
+			// progCh; on the next in-session run (which reuses the same channel)
+			// that stale-generation receiver would steal an event and drop it, so
+			// the new run's progress could stall. The fresh run issues its own
+			// listenProg from launchEngine under the bumped generation.
+			return m, nil
+		}
+		m.index = p.Index
+		m.total = p.Total
+		m.curID = p.ID
+		m.curTitle = p.Title
+		m.running = p.Status == "running"
+		// During an audit, the per-tweak progress drives the connecting-state
+		// counter/spinner shown on the Dashboard once it opens.
+		if m.command == "audit" {
+			m.dashAuditRunning = true
+			m.dashAuditTotal = p.Total
 		}
 		return m, m.listenProg()
 
@@ -914,6 +941,15 @@ func (m model) launchEngine(cfg *config.Config) (tea.Model, tea.Cmd) {
 	m.phase = phaseRun
 	m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
 
+	// Bump the run generation so the listeners issued below are tagged with a fresh
+	// generation. Any listener still parked from a PRIOR in-session run (the re-run
+	// paths reach here without goBack, reusing the same channels) tagged its messages
+	// with the OLD generation; Update now drops those and retires the stale listener,
+	// so N in-session runs no longer leave N concurrent receivers splitting events off
+	// one channel. goBack swaps in fresh channels for its abort path; this guards the
+	// no-goBack re-run path that reuses them.
+	m.runGen++
+
 	// Reset per-run completion/progress state (BUG 1) so a SECOND run never inherits
 	// the prior run's finished/summary flags.
 	m = m.resetRunState()
@@ -1003,28 +1039,33 @@ func (m model) localizeValidateErr(err error) string {
 }
 
 // listen blocks on the next log line or completion (re-issued after each line).
+// The closure captures the channels AND the run generation as locals so a listener
+// issued for a previous run keeps talking to that run's channels and tags every
+// message with its own generation; Update drops + retires it once m.runGen moves on.
 func (m model) listen() tea.Cmd {
+	gen, logs, done := m.runGen, m.logs, m.done
 	return func() tea.Msg {
 		select {
-		case l := <-m.logs:
-			return logMsg(l)
-		case e := <-m.done:
-			return doneMsg{e}
+		case l := <-logs:
+			return genMsg{gen, logMsg(l)}
+		case e := <-done:
+			return genMsg{gen, doneMsg{e}}
 		}
 	}
 }
 
 // listenConn blocks on the engine's one-shot connection notification.
 func (m model) listenConn() tea.Cmd {
+	gen, connCh := m.runGen, m.connCh
 	return func() tea.Msg {
-		return connMsg(<-m.connCh)
+		return genMsg{gen, connMsg(<-connCh)}
 	}
 }
 
 // listenStats blocks on the next monitor Sample (re-issued after each), mirroring
 // listen() for logs. Guards a nil channel (sampler not started yet).
 func (m model) listenStats() tea.Cmd {
-	ch := m.statsCh
+	gen, ch := m.runGen, m.statsCh
 	if ch == nil {
 		return nil
 	}
@@ -1033,14 +1074,14 @@ func (m model) listenStats() tea.Cmd {
 		if !ok {
 			return nil // sampler stopped & closed the channel — end this listener
 		}
-		return statMsg(s)
+		return genMsg{gen, statMsg(s)}
 	}
 }
 
 // listenProg blocks on the next engine Progress event (re-issued after each),
 // mirroring listen() for logs. Guards a nil channel.
 func (m model) listenProg() tea.Cmd {
-	ch := m.progCh
+	gen, ch := m.runGen, m.progCh
 	if ch == nil {
 		return nil
 	}
@@ -1049,7 +1090,7 @@ func (m model) listenProg() tea.Cmd {
 		if !ok {
 			return nil
 		}
-		return progMsg(p)
+		return genMsg{gen, progMsg(p)}
 	}
 }
 
