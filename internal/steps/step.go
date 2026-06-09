@@ -87,6 +87,17 @@ func putFile(path, content, mode string) string {
 	return fmt.Sprintf("echo '%s' | base64 -d > '%s'\nchmod %s '%s'\n", b64, path, mode, path)
 }
 
+// pipeToBash returns a shell fragment that runs script by piping its base64-decoded
+// body straight into a fresh `bash` — landing NO file on disk. This avoids the
+// symlink/TOCTOU window of writing a root-executed script to a predictable path
+// (e.g. /tmp/...). The base64 keeps the body stdin-safe inside the outer
+// stdin-piped controller script, and `echo ... | bash` provides bash its OWN
+// stdin, so it consumes nothing from the controller's stdin (no §A1 contention).
+func pipeToBash(script string) string {
+	b64 := base64.StdEncoding.EncodeToString([]byte(script))
+	return fmt.Sprintf("echo '%s' | base64 -d | bash\n", b64)
+}
+
 // appendLineIfMissing returns a fragment that appends line to file only if an
 // exact line match is absent (idempotent edit of a shared/non-owned file). The
 // line is delivered via base64 so it needs no shell quoting.

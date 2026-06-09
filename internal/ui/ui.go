@@ -151,6 +151,14 @@ func isBenignNoise(line string) bool {
 // as server output, distinct from the decorated STEP/OK/FAIL lines — but never
 // swallowed. This is the sink the client's OnOutput is wired to in the engine.
 func (l *Logger) Stream(stream, line string) {
+	// SECURITY: the line is arbitrary output from the remote box (potentially
+	// hostile). Strip every ANSI escape / CSI / C0 control sequence BEFORE it
+	// reaches the operator's terminal or the log file, so a malicious box cannot
+	// spoof log lines, move the cursor, or trigger terminal-emulator exploits.
+	// Sanitize the remote line FIRST, then add morgward's own colorization — so
+	// our colors survive (they are appended after the strip), but nothing the box
+	// emitted does. The raw log file also stores the sanitized text.
+	line = SanitizeStreamLine(line)
 	if l.color {
 		// Dim the whole server-output line (real stderr that is not benign OS noise
 		// is alarming red) so it reads as remote chatter, distinct from the decorated
@@ -210,4 +218,64 @@ func stripANSI(s string) string {
 		s = strings.ReplaceAll(s, c, "")
 	}
 	return s
+}
+
+// SanitizeStreamLine cleans one chunk of streamed remote output (which may
+// contain several "\n"-separated lines) so untrusted server output can never
+// spoof log lines, drive the cursor, or break a box frame:
+//   - carriage returns are collapsed: apt/dpkg redraw a progress line by emitting
+//     "...30%\r...60%\r...100%" — keep only the LAST \r-segment of each line, which
+//     is what a terminal would have shown after the redraws settled.
+//   - tabs expand to a single space.
+//   - ALL ANSI escape / CSI sequences and other C0 control chars are stripped.
+//
+// It is a pure function (no state) so it is unit-testable. The TUI's
+// sanitizeStreamLine delegates here so both the CLI print path and the TUI pane
+// share one hardened implementation.
+func SanitizeStreamLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		// Collapse \r redraws: keep the segment after the final \r.
+		if idx := strings.LastIndex(ln, "\r"); idx >= 0 {
+			ln = ln[idx+1:]
+		}
+		lines[i] = StripControlAndANSI(ln)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// StripControlAndANSI removes ANSI escape sequences (ESC[…] CSI and ESC-prefixed
+// two-byte sequences) and other C0 control characters, expanding tabs to a space.
+// Newlines are NOT seen here (SanitizeStreamLine splits on them first).
+func StripControlAndANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		if r == 0x1b { // ESC: skip the whole escape sequence
+			i++
+			if i >= len(rs) {
+				break
+			}
+			if rs[i] == '[' { // CSI: ESC '[' params... final-byte in 0x40..0x7e
+				i++
+				for i < len(rs) && (rs[i] < 0x40 || rs[i] > 0x7e) {
+					i++
+				}
+				// loop's i++ skips the final byte
+			}
+			// other ESC x two-byte sequence: the i++ above already consumed x
+			continue
+		}
+		if r == '\t' {
+			b.WriteByte(' ')
+			continue
+		}
+		if r < 0x20 || r == 0x7f { // other C0 controls (incl. stray \r) — drop
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

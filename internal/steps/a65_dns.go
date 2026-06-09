@@ -174,15 +174,13 @@ func (A65DNS) Run(ctx *Context) (Status, string, error) {
 		return StatusSkip, "systemd-resolved not active (different resolver)", nil
 	}
 
-	// Deliver the calibration script as a file (base64, stdin-safe) and execute
-	// it. Doing the measure→pick→write→verify→rollback entirely on the box keeps
-	// the Go side thin and the result a single parseable line.
-	const scriptPath = "/tmp/morgward-dns-calibrate.sh"
-	deliver := putFile(scriptPath, dnsCalibrateScript, "0755") +
-		"bash " + scriptPath + "\n" +
-		"rm -f " + scriptPath + "\n"
-
-	r := ctx.Cli.Sudo(deliver)
+	// Execute the calibration script by piping its base64-decoded body straight
+	// into bash — landing NO file on disk. A fixed /tmp path would be a
+	// symlink/TOCTOU target for a local unprivileged user on the box (the script
+	// runs as root via Sudo). Doing the measure→pick→write→verify→rollback
+	// entirely on the box keeps the Go side thin and the result a single
+	// parseable line. The script takes no args, so no temp file is needed.
+	r := ctx.Cli.Sudo(pipeToBash(dnsCalibrateScript))
 	out := r.Stdout
 	if r.RC != 0 && out == "" {
 		return StatusFail, "DNS calibration failed: " + firstLine(r.Stderr), nil

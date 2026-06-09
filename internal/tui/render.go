@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/UberMorgott/morgward/internal/ui"
 )
 
 // sanitizeStreamLine cleans one chunk of streamed output (which may contain
@@ -20,54 +22,11 @@ import (
 //
 // It is a pure function (no model state) so it is unit-testable; wrapping to the
 // content width happens afterwards in wrapped().
-func sanitizeStreamLine(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, ln := range lines {
-		// Collapse \r redraws: keep the segment after the final \r.
-		if idx := strings.LastIndex(ln, "\r"); idx >= 0 {
-			ln = ln[idx+1:]
-		}
-		ln = stripControlAndANSI(ln)
-		lines[i] = ln
-	}
-	return strings.Join(lines, "\n")
-}
-
-// stripControlAndANSI removes ANSI escape sequences (ESC[…] CSI and ESC-prefixed
-// two-byte sequences) and other C0 control characters, expanding tabs to a space.
-// Newlines are NOT seen here (sanitizeStreamLine splits on them first).
-func stripControlAndANSI(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	rs := []rune(s)
-	for i := 0; i < len(rs); i++ {
-		r := rs[i]
-		if r == 0x1b { // ESC: skip the whole escape sequence
-			i++
-			if i >= len(rs) {
-				break
-			}
-			if rs[i] == '[' { // CSI: ESC '[' params... final-byte in 0x40..0x7e
-				i++
-				for i < len(rs) && (rs[i] < 0x40 || rs[i] > 0x7e) {
-					i++
-				}
-				// loop's i++ skips the final byte
-			}
-			// other ESC x two-byte sequence: the i++ above already consumed x
-			continue
-		}
-		if r == '\t' {
-			b.WriteByte(' ')
-			continue
-		}
-		if r < 0x20 || r == 0x7f { // other C0 controls (incl. stray \r) — drop
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
+//
+// The implementation lives in internal/ui (ui.SanitizeStreamLine) so the CLI
+// print path and the log file share one hardened stripper with the TUI pane;
+// this thin wrapper keeps the package-local name the TUI already uses.
+func sanitizeStreamLine(s string) string { return ui.SanitizeStreamLine(s) }
 
 // wrapped soft-wraps the accumulated (already-sanitized) log text to the viewport
 // width so long lines (e.g. SSH error messages or server output) hard-wrap inside
