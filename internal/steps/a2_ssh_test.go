@@ -105,6 +105,19 @@ func TestCryptoBlockVersionGate(t *testing.T) {
 	if c := mk(false, false); strings.Contains(c, "mlkem768x25519-sha256") || strings.Contains(c, "PerSourcePenalties") {
 		t.Errorf("unknown version must fall back to conservative 24.04 set, not 26.04:\n%s", c)
 	}
+
+	// RequiredRSASize (OpenSSH 9.1+) must be present on confirmed 24.04/26.04
+	// (both ship >= 9.1), and ABSENT on the both-false fallback so the config
+	// validates on an off-target <24.04 sshd (e.g. 22.04 jammy / 8.9p1).
+	if c := mk(false, true); !strings.Contains(c, "RequiredRSASize 3072") {
+		t.Errorf("26.04 must emit RequiredRSASize:\n%s", c)
+	}
+	if c := mk(true, false); !strings.Contains(c, "RequiredRSASize 3072") {
+		t.Errorf("24.04 must emit RequiredRSASize:\n%s", c)
+	}
+	if c := mk(false, false); strings.Contains(c, "RequiredRSASize") {
+		t.Errorf("both-false fallback must OMIT RequiredRSASize (9.1+) for jammy/8.9 compat:\n%s", c)
+	}
 }
 
 // TestA2SSHBuild99NoLockdown guards the security invariant: the full-run A2SSH

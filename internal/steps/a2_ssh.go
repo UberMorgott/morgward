@@ -433,8 +433,16 @@ MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@op
 HostKeyAlgorithms sk-ssh-ed25519-cert-v01@openssh.com,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,sk-ssh-ed25519@openssh.com,ssh-ed25519,rsa-sha2-512,rsa-sha2-256
 PubkeyAcceptedAlgorithms sk-ssh-ed25519-cert-v01@openssh.com,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,sk-ssh-ed25519@openssh.com,ssh-ed25519,rsa-sha2-512,rsa-sha2-256
 CASignatureAlgorithms sk-ssh-ed25519@openssh.com,ssh-ed25519,rsa-sha2-512,rsa-sha2-256
-RequiredRSASize 3072
-LogLevel VERBOSE
+`)
+	// RequiredRSASize: OpenSSH >= 9.1 only. 24.04 noble (9.6p1) and 26.04 (10.x)
+	// ship it; off-target <24.04 boxes (e.g. 22.04 jammy / 8.9p1) do NOT and
+	// `sshd -t` rejects an unknown option, aborting A2. F20: gate on a CONFIRMED
+	// 24.04 OR 26.04 — a glitched os-release probe (both false) conservatively
+	// omits it so the fallback config validates on the oldest realistic sshd.
+	if ctx.Facts.Is2404 || ctx.Facts.Is2604 {
+		b.WriteString("RequiredRSASize 3072\n")
+	}
+	b.WriteString(`LogLevel VERBOSE
 DisableForwarding yes
 AllowAgentForwarding no
 X11Forwarding no

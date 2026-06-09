@@ -135,7 +135,13 @@ path → check the other.
   *confirmed* `Is2604`; a glitched os-release probe (both `Is2404`/`Is2604` false)
   falls back to the 24.04 set (valid on 26.04 too) rather than emitting mlkem KEX that
   `syntaxGate`'s `sshd -t` would reject — a transient detection miss degrades safely
-  instead of aborting an otherwise-valid run.
+  instead of aborting an otherwise-valid run. **`RequiredRSASize 3072` (OpenSSH 9.1+)**
+  is gated the same way — emitted only on `Is2404 || Is2604` (both ship >= 9.1). The
+  both-false fallback now targets the OLDEST realistic sshd (22.04 jammy / 8.9p1, which
+  lacks `RequiredRSASize`) so pointing morgward at an off-target <24.04 box no longer
+  aborts A2 with `sshd -t`: Bad configuration option: RequiredRSASize. Everything else
+  in `cryptoBlock` is <= OpenSSH 8.5 (incl. `sntrup761`, `PubkeyAcceptedAlgorithms`,
+  `sk-*`), valid on 8.9. Confirmed-24.04/26.04 output stays byte-identical.
 
 - **A2-danger precondition guard (F04):** before writing the `AllowGroups sshusers` +
   `PermitRootLogin no` lockdown drop-in, `A2Danger.Run` calls `assertAdminLoginable` —
