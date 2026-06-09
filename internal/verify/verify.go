@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/ui"
 )
@@ -77,8 +78,45 @@ func equals(want string) func(string) bool {
 	return func(out string) bool { return strings.TrimSpace(out) == want }
 }
 
+// firewallChecks returns the two firewall verification rows ("Firewall order" +
+// "SSH port open") appropriate to how A1 actually applied, keyed off the detected
+// firewall manager:
+//   - managed iptables (greenfield, or brownfield iptables/none): the original
+//     raw-iptables asserts (-P INPUT DROP + --dport ACCEPT), both Lockout — A1 wrote
+//     that ruleset, so a missing rule IS a lockout. Byte-identical to before.
+//   - ufw: A1 only added `ufw allow` rules; assert ufw is active (informational) and
+//     SSH is allowed in ufw (Lockout — a genuinely SSH-closed ufw is a lockout). Both
+//     PASS on a correctly-configured ufw box.
+//   - firewalld / nftables: A1 deferred entirely (operator owns the firewall), so we
+//     have nothing to assert — both rows SKIP-with-reason and never Abort.
+func firewallChecks(facts *detect.Facts, port int) []Check {
+	if facts != nil && !facts.ManagesIPTables() {
+		switch facts.FirewallMgr {
+		case "ufw":
+			return []Check{
+				{Name: "Firewall (ufw) active", Cmd: "LANG=C ufw status 2>/dev/null | grep -i '^Status:'", Want: contains("active"), Lockout: false},
+				{Name: "SSH port allowed (ufw)", Cmd: fmt.Sprintf("LANG=C ufw status 2>/dev/null | grep -E '(^|[^0-9])%d/tcp'", port), Want: contains(fmt.Sprintf("%d/tcp", port)), Lockout: true},
+			}
+		case "firewalld", "nftables":
+			reason := facts.FirewallMgr + " manages the firewall — A1 deferred"
+			skip := func(string) (string, bool) { return reason, true }
+			return []Check{
+				{Name: "Firewall order", Cmd: "true", Want: func(string) bool { return true }, Lockout: false, NA: skip},
+				{Name: "SSH port open", Cmd: "true", Want: func(string) bool { return true }, Lockout: false, NA: skip},
+			}
+		}
+	}
+	// Managed iptables (greenfield + iptables/none): unchanged, byte-identical.
+	return []Check{
+		{Name: "Firewall order", Cmd: "iptables -S | grep -- '-P INPUT DROP'", Want: contains("drop"), Lockout: true},
+		{Name: "SSH port open", Cmd: fmt.Sprintf("iptables -S | grep -- '--dport %d'", port), Want: contains("accept"), Lockout: true},
+	}
+}
+
 // Run executes the matrix and prints an aligned result table (one row per check).
-func Run(c *sshx.Client, log *ui.Logger, port int) Result {
+// facts may be nil (defensive); a nil facts is treated as managed iptables so the
+// matrix degrades to its original byte-identical behavior.
+func Run(c *sshx.Client, log *ui.Logger, port int, facts *detect.Facts) Result {
 	// Root-login policy is INFORMATIONAL, not a lockout assert. The default path
 	// (A2 / A2-safe) hardens SSH crypto only and leaves the image's access policy
 	// untouched — root login stays at the image default (prohibit-password) and
@@ -88,11 +126,12 @@ func Run(c *sshx.Client, log *ui.Logger, port int) Result {
 	// it matches the image default, WARN otherwise) but never abort the run on it —
 	// a tighter or looser policy is not a lockout.
 	rootCheck := "prohibit-password"
+	fw := firewallChecks(facts, port)
 	checks := []Check{
 		{Name: "SSH syntax", Cmd: "sshd -t && echo ok", Want: equals("ok"), Lockout: true},
 		{Name: "SSH effective policy", Cmd: "sshd -T | grep -i permitrootlogin", Want: contains(rootCheck), Lockout: false},
-		{Name: "Firewall order", Cmd: "iptables -S | grep -- '-P INPUT DROP'", Want: contains("drop"), Lockout: true},
-		{Name: "SSH port open", Cmd: fmt.Sprintf("iptables -S | grep -- '--dport %d'", port), Want: contains("accept"), Lockout: true},
+		fw[0],
+		fw[1],
 		{Name: "Rollback disarmed", Cmd: "systemctl list-timers --all | grep -c fw-rollback || true", Want: equals("0"), Lockout: false},
 		{Name: "fail2ban", Cmd: "fail2ban-client status sshd >/dev/null 2>&1 && echo ok", Want: equals("ok"), Lockout: false},
 		{Name: "BBR", Cmd: "sysctl -n net.ipv4.tcp_congestion_control", Want: equals("bbr"), Lockout: false},

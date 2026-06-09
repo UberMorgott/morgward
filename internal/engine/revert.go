@@ -114,6 +114,25 @@ func RunRevert(ctx context.Context, cfg *config.Config, log *ui.Logger, ids []st
 			continue
 		}
 
+		// A1's revert is firewall-manager-aware: the static flush below only undoes
+		// the iptables ruleset morgward actually WROTE (greenfield, or brownfield
+		// iptables/none). On a box whose firewall A1 left to its own manager, flushing
+		// raw iptables would degrade a firewall morgward never touched — and a revert
+		// must only OPEN access, never close it. So for ufw (A1 added only additive
+		// `ufw allow` rules — keeping them can't lock anyone out) and firewalld/nftables
+		// (A1 changed nothing), the A1 revert is a deliberate NO-OP, reported as SKIP.
+		if id == "A1" && !s.ctx.Facts.ManagesIPTables() {
+			reason := fmt.Sprintf("A1 left the firewall to %s — nothing to revert (reverts only open access)", s.ctx.Facts.FirewallMgr)
+			s.log.Skip("%s — %s", id, reason)
+			c.skip++
+			c.skips = append(c.skips, SkipReason{ID: id, Reason: reason})
+			c.results = append(c.results, StepResult{
+				ID: id, Title: title, Status: steps.StatusSkip, Detail: reason,
+			})
+			emit(id, title, i, steps.StatusSkip.String())
+			continue
+		}
+
 		emit(id, title, i, "running")
 		s.log.Step(id, title)
 		r := s.cli.Sudo(revertScript[id])

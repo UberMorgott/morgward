@@ -17,18 +17,38 @@ func (A8Upgrade) Title() string { return "Full upgrade + reboot (boot_id verifie
 func (a A8Upgrade) Run(ctx *Context) (Status, string, error) {
 	port := ctx.Cfg.Port
 
-	// PRE-GATE: timer disarmed, persisted rules exist and open the SSH port.
-	gate := fmt.Sprintf(`systemctl stop fw-rollback.timer 2>/dev/null || true
-systemctl reset-failed 'fw-rollback.*' 2>/dev/null || true
-V4=$(wc -l < /etc/iptables/rules.v4 2>/dev/null || echo 0)
+	// PRE-GATE: always disarm any armed fw-rollback timer (it would fire mid-reboot
+	// and flush the firewall regardless of who manages it). The persisted-ruleset
+	// assertion that follows is FIREWALL-MANAGER-AWARE: it only applies where
+	// morgward owns the iptables ruleset (greenfield, or brownfield iptables/none —
+	// A1 wrote /etc/iptables/rules.v4). On a ufw/firewalld/nftables brownfield box
+	// that file legitimately does not exist (A1 added `ufw allow` rules or deferred
+	// entirely), so asserting it would falsely abort the whole run.
+	ctx.Cli.Sudo("systemctl stop fw-rollback.timer 2>/dev/null || true; systemctl reset-failed 'fw-rollback.*' 2>/dev/null || true")
+
+	if ctx.Facts.ManagesIPTables() {
+		gate := fmt.Sprintf(`V4=$(wc -l < /etc/iptables/rules.v4 2>/dev/null || echo 0)
 V6=$(wc -l < /etc/iptables/rules.v6 2>/dev/null || echo 0)
 DP=$(grep -c -- "--dport %d" /etc/iptables/rules.v4 2>/dev/null || echo 0)
 printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
-	g := ctx.Cli.Sudo(gate)
-	if !strings.Contains(g.Stdout, "dport=") || strings.Contains(g.Stdout, "dport=0") || strings.Contains(g.Stdout, "v4=0") {
-		return StatusFail, "pre-reboot gate failed: " + firstLine(g.Stdout), fmt.Errorf("firewall not safely persisted before reboot")
+		g := ctx.Cli.Sudo(gate)
+		if !strings.Contains(g.Stdout, "dport=") || strings.Contains(g.Stdout, "dport=0") || strings.Contains(g.Stdout, "v4=0") {
+			return StatusFail, "pre-reboot gate failed: " + firstLine(g.Stdout), fmt.Errorf("firewall not safely persisted before reboot")
+		}
+		ctx.Log.Detail("pre-reboot gate: %s", firstLine(g.Stdout))
+	} else if ctx.Facts.FirewallMgr == "ufw" {
+		// ufw-managed: it persists its own rules across reboot. A reasonable
+		// substitute gate is "ufw reports active" — if it is, SSH survives the reboot
+		// (A1 added the `ufw allow` for it). Don't overbuild beyond that.
+		if ctx.Cli.Sudo("LANG=C ufw status 2>/dev/null | grep -qi '^Status: active' && echo ok").Out() != "ok" {
+			return StatusFail, "pre-reboot gate failed: ufw not active (SSH may not survive reboot)", fmt.Errorf("ufw not active before reboot")
+		}
+		ctx.Log.Detail("pre-reboot gate: ufw active (firewall persisted by ufw)")
+	} else {
+		// firewalld / nftables — the operator owns the firewall and its persistence;
+		// morgward changed nothing, so there is no morgward state to gate on.
+		ctx.Log.Detail("pre-reboot gate skipped: %s manages the firewall (operator-owned persistence)", ctx.Facts.FirewallMgr)
 	}
-	ctx.Log.Detail("pre-reboot gate: %s", firstLine(g.Stdout))
 
 	// Full upgrade.
 	//
@@ -113,12 +133,22 @@ exit $__rc`)
 	ctx.State.BootID = newID
 	ctx.State.Save()
 
-	// Post-reboot health + firewall re-check.
+	// Post-reboot health + firewall re-check. The iptables assertion (INPUT DROP +
+	// SSH dport reloaded) is only meaningful where morgward owns the ruleset; on a
+	// ufw/firewalld/nftables box the operator's manager restores its own rules, so
+	// asserting raw iptables would falsely abort. Match the pre-gate's branching.
 	health := ctx.Cli.Run("systemctl is-system-running").Out()
-	fwOK := ctx.Cli.Sudo(fmt.Sprintf(`iptables -S | grep -q -- "--dport %d" && iptables -S | grep -q -- "-P INPUT DROP" && echo ok`, port)).Out()
-	if fwOK != "ok" {
-		return StatusFail, "firewall not loaded after reboot (boot default-ACCEPT?)", fmt.Errorf("post-reboot firewall missing")
+	if ctx.Facts.ManagesIPTables() {
+		fwOK := ctx.Cli.Sudo(fmt.Sprintf(`iptables -S | grep -q -- "--dport %d" && iptables -S | grep -q -- "-P INPUT DROP" && echo ok`, port)).Out()
+		if fwOK != "ok" {
+			return StatusFail, "firewall not loaded after reboot (boot default-ACCEPT?)", fmt.Errorf("post-reboot firewall missing")
+		}
+	} else if ctx.Facts.FirewallMgr == "ufw" {
+		if ctx.Cli.Sudo("LANG=C ufw status 2>/dev/null | grep -qi '^Status: active' && echo ok").Out() != "ok" {
+			return StatusFail, "ufw not active after reboot (firewall not loaded?)", fmt.Errorf("post-reboot ufw inactive")
+		}
 	}
+	// firewalld/nftables: operator-owned, nothing for morgward to assert.
 
 	// BROWNFIELD service restore — bring back exactly the containers/units our
 	// reboot bounced (running-but-not-auto-started). We `docker start` the SAME

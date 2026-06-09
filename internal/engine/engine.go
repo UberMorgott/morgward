@@ -430,7 +430,7 @@ func Run(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error
 		s.log.Warn("after snapshot incomplete: %v", serr)
 	}
 
-	res := verify.Run(s.cli, s.log, cfg.Port)
+	res := verify.Run(s.cli, s.log, cfg.Port, s.ctx.Facts)
 	s.log.Banner("SUMMARY")
 	s.log.Info("verify: %d passed, %d failed%s", res.Passed, res.Failed, unmeasuredSuffix(res.Unknown))
 	sum := Summary{
@@ -507,7 +507,7 @@ func VerifyOnly(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks
 	if err != nil {
 		return err
 	}
-	res := verify.Run(s.cli, s.log, cfg.Port)
+	res := verify.Run(s.cli, s.log, cfg.Port, s.ctx.Facts)
 	s.log.Banner("SUMMARY")
 	s.log.Info("verify: %d passed, %d failed%s", res.Passed, res.Failed, unmeasuredSuffix(res.Unknown))
 	tw := tweaks.Run(s.cli, s.log, s.ctx.Facts, cfg)

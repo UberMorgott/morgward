@@ -88,29 +88,44 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 		port = 22
 	}
 
-	ps := []Probe{
-		// --- A1 firewall ---
-		{ID: "a1.input_drop", Step: "A1", Name: "INPUT policy DROP",
-			Cmd: "iptables -S INPUT 2>/dev/null | grep -m1 '^-P INPUT'", Want: has("DROP")},
-		{ID: "a1.ssh_accept", Step: "A1", Name: "SSH port accepted",
-			Cmd: fmt.Sprintf("iptables -S INPUT 2>/dev/null | grep -- '--dport %d' | grep -m1 ACCEPT", port), Want: has("ACCEPT")},
-		{ID: "a1.rules_v4", Step: "A1", Name: "rules.v4 persisted",
-			Cmd: fileExists("/etc/iptables/rules.v4"), Want: eq("1")},
-		{ID: "a1.persistent", Step: "A1", Name: "iptables-persistent installed",
-			Cmd: pkgInstalled("iptables-persistent"), Want: eq("1")},
+	// A1's iptables-specific probes (INPUT DROP, SSH accept, rules.v4, the
+	// iptables-persistent package) only describe a box whose firewall morgward
+	// OWNS — greenfield, or brownfield iptables/none. On a ufw/firewalld/nftables
+	// box A1 added `ufw allow` rules or deferred entirely, so none of these files /
+	// raw rules exist and asserting them would read as a misleading "not applied".
+	// They lead the registry only when facts.ManagesIPTables() so a manager-owned
+	// box's audit stays honest. Greenfield + iptables/none: emitted FIRST exactly as
+	// before (byte-identical order — the §V/matrix groups by Step in slice order).
+	managesIPT := facts.ManagesIPTables()
 
-		// --- A2 ssh ---
-		{ID: "a2.conf00", Step: "A2", Name: "00-hardening.conf",
-			Cmd: fileExists("/etc/ssh/sshd_config.d/00-hardening.conf"), Want: eq("1")},
-		{ID: "a2.conf99", Step: "A2", Name: "99-hardening.conf",
-			Cmd: fileExists("/etc/ssh/sshd_config.d/99-hardening.conf"), Want: eq("1")},
-		{ID: "a2.allowgroups", Step: "A2", Name: "AllowGroups sshusers",
-			Cmd: "sshd -T 2>/dev/null | grep -i '^allowgroups'", Want: has("sshusers"), Informational: true},
-		{ID: "a2.ecdsa_absent", Step: "A2", Name: "ECDSA host key removed",
-			Cmd: "test -e /etc/ssh/ssh_host_ecdsa_key && echo present || echo absent", Want: eq("absent")},
-		{ID: "a2.ssh_active", Step: "A2", Name: "ssh service active",
-			Cmd: "systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null", Want: has("active")},
+	var ps []Probe
+	if managesIPT {
+		ps = append(ps,
+			// --- A1 firewall ---
+			Probe{ID: "a1.input_drop", Step: "A1", Name: "INPUT policy DROP",
+				Cmd: "iptables -S INPUT 2>/dev/null | grep -m1 '^-P INPUT'", Want: has("DROP")},
+			Probe{ID: "a1.ssh_accept", Step: "A1", Name: "SSH port accepted",
+				Cmd: fmt.Sprintf("iptables -S INPUT 2>/dev/null | grep -- '--dport %d' | grep -m1 ACCEPT", port), Want: has("ACCEPT")},
+			Probe{ID: "a1.rules_v4", Step: "A1", Name: "rules.v4 persisted",
+				Cmd: fileExists("/etc/iptables/rules.v4"), Want: eq("1")},
+			Probe{ID: "a1.persistent", Step: "A1", Name: "iptables-persistent installed",
+				Cmd: pkgInstalled("iptables-persistent"), Want: eq("1")},
+		)
 	}
+
+	ps = append(ps,
+		// --- A2 ssh ---
+		Probe{ID: "a2.conf00", Step: "A2", Name: "00-hardening.conf",
+			Cmd: fileExists("/etc/ssh/sshd_config.d/00-hardening.conf"), Want: eq("1")},
+		Probe{ID: "a2.conf99", Step: "A2", Name: "99-hardening.conf",
+			Cmd: fileExists("/etc/ssh/sshd_config.d/99-hardening.conf"), Want: eq("1")},
+		Probe{ID: "a2.allowgroups", Step: "A2", Name: "AllowGroups sshusers",
+			Cmd: "sshd -T 2>/dev/null | grep -i '^allowgroups'", Want: has("sshusers"), Informational: true},
+		Probe{ID: "a2.ecdsa_absent", Step: "A2", Name: "ECDSA host key removed",
+			Cmd: "test -e /etc/ssh/ssh_host_ecdsa_key && echo present || echo absent", Want: eq("absent")},
+		Probe{ID: "a2.ssh_active", Step: "A2", Name: "ssh service active",
+			Cmd: "systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null", Want: has("active")},
+	)
 
 	// PermitRootLogin + PasswordAuthentication are informational: the default path
 	// leaves the image access policy untouched, so an unset state is expected — only
@@ -217,11 +232,22 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: fileExists("/usr/local/sbin/ssh-login-notify.sh"), Want: eq("1")},
 		Probe{ID: "a10.pam", Step: "A10", Name: "pam.d/sshd notify line",
 			Cmd: "grep -q ssh-login-notify /etc/pam.d/sshd && echo 1 || echo 0", Want: eq("1")},
-		Probe{ID: "a10.log_rule", Step: "A10", Name: "inbound LOG rule",
-			Cmd: "iptables -S INPUT 2>/dev/null | grep -q 'ipt-drop-in' && echo 1 || echo 0", Want: eq("1")},
 	)
 
-	if facts.HasIPv6 {
+	// A10's inbound-drop LOG-rule probe is only meaningful where morgward owns the
+	// iptables ruleset (see managesIPT above): A10 appends that raw rule only there,
+	// and skips it on a ufw/firewalld/nftables box. Gated so the audit doesn't show a
+	// rule we deliberately never wrote as "not applied". Greenfield + iptables/none:
+	// emitted in its original A10-block position (byte-identical).
+	if managesIPT {
+		ps = append(ps, Probe{ID: "a10.log_rule", Step: "A10", Name: "inbound LOG rule",
+			Cmd: "iptables -S INPUT 2>/dev/null | grep -q 'ipt-drop-in' && echo 1 || echo 0", Want: eq("1")})
+	}
+
+	// a1.rules_v6 trails the registry (its original position) on an IPv6 box — same
+	// managesIPT gate as the head A1 probes (A1 wrote rules.v6 only when it owns the
+	// ruleset). Greenfield IPv6 box: appended last, exactly as before.
+	if managesIPT && facts.HasIPv6 {
 		ps = append(ps, Probe{ID: "a1.rules_v6", Step: "A1", Name: "rules.v6 persisted",
 			Cmd: fileExists("/etc/iptables/rules.v6"), Want: eq("1")})
 	}

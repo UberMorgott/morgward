@@ -66,6 +66,34 @@ type Facts struct {
 	HardenMarkers   []string // which markers were found
 }
 
+// ManagesIPTables reports whether morgward itself owns the box's raw iptables
+// INPUT ruleset — i.e. A1 wrote (or will write) the INPUT-DROP + persisted
+// rules.v4 build. True on a greenfield box (fresh deterministic build) and on a
+// brownfield box whose firewall manager is plain "iptables" or "none" (the
+// coexistRuleset path). FALSE when an external manager owns the firewall: "ufw"
+// (A1 only adds additive `ufw allow` rules) or "firewalld"/"nftables" (A1 defers
+// entirely and changes nothing). Downstream consumers (A8 reboot gates, the §V
+// matrix, the A1 revert, A10's drop-log) use this so they only assert/flush
+// iptables state that morgward actually owns. CONSERVATIVE: morgward owns the
+// ruleset UNLESS an external manager is explicitly detected. Greenfield is always
+// managed; otherwise only the three external managers ("ufw"/"firewalld"/"nftables")
+// opt out. An empty/unknown FirewallMgr therefore reads as managed — matching both
+// classifyFirewallMgr (which already collapses an ambiguous box to "iptables") and
+// the CLAUDE.md rule "when FirewallMgr unknown, treat as iptables", so a detection
+// miss degrades to the proven byte-identical round-1 iptables behavior, never to a
+// wrong defer.
+func (f *Facts) ManagesIPTables() bool {
+	if f.Greenfield {
+		return true
+	}
+	switch f.FirewallMgr {
+	case "ufw", "firewalld", "nftables":
+		return false
+	default: // "iptables", "none", "" (unknown) → morgward owns the ruleset
+		return true
+	}
+}
+
 // ListenService is one public listening socket: its protocol, port, the owning
 // process name (empty when ss could not attribute one), the owning PID, and a
 // universal Origin tag classified by PROVENANCE (the listener's cgroup + a docker

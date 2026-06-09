@@ -45,13 +45,22 @@ mkdir -p /etc/audit/rules.d
 		"grep -q ssh-login-notify /etc/pam.d/sshd || echo 'session optional pam_exec.so seteuid /usr/local/sbin/ssh-login-notify.sh' >> /etc/pam.d/sshd\n"
 
 	// A11.1 inbound-drop logging (last INPUT rule before DROP), idempotent via -C.
-	script += `iptables  -C INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt-drop-in: "  --log-level 4 2>/dev/null || iptables  -A INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt-drop-in: "  --log-level 4
+	// FIREWALL-MANAGER-AWARE: this appends a raw iptables INPUT rule and persists it
+	// via netfilter-persistent — both only valid where morgward owns the iptables
+	// ruleset (greenfield, or brownfield iptables/none). On a ufw/firewalld/nftables
+	// box this would impose a conflicting second firewall layer over the operator's
+	// manager, so the block is skipped there entirely. auditd + login-notify above
+	// are firewall-agnostic and always apply.
+	_ = port
+	if ctx.Facts.ManagesIPTables() {
+		script += `iptables  -C INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt-drop-in: "  --log-level 4 2>/dev/null || iptables  -A INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt-drop-in: "  --log-level 4
 ip6tables -C INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt6-drop-in: " --log-level 4 2>/dev/null || ip6tables -A INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt6-drop-in: " --log-level 4
 `
-
-	// Re-save firewall (A11.1 changed the ruleset) and re-open SSH port marker.
-	_ = port
-	script += "netfilter-persistent save >/dev/null 2>&1\n"
+		// Re-save firewall (A11.1 changed the ruleset).
+		script += "netfilter-persistent save >/dev/null 2>&1\n"
+	} else {
+		ctx.Log.Detail("inbound-drop LOG rule skipped: %s manages the firewall (no second layer)", ctx.Facts.FirewallMgr)
+	}
 
 	if r := ctx.Cli.Sudo(script); r.RC != 0 {
 		ctx.Log.Warn("detection setup rc=%d (verifying)", r.RC)
