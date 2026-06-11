@@ -64,6 +64,44 @@ func TestClassifyPass(t *testing.T) {
 	}
 }
 
+// TestPolicyKnown asserts the SSH-effective-policy matcher PASSes on any valid
+// effective PermitRootLogin value (which varies by Ubuntu image — 24.04 ships
+// prohibit-password or yes, 26.04 ships yes, lockdown sets no) and rejects only
+// garbage or unreadable output (the real anomaly).
+func TestPolicyKnown(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"permitrootlogin yes", true},                  // 26.04 default
+		{"permitrootlogin prohibit-password", true},    // 24.04 default
+		{"permitrootlogin no", true},                   // lockdown
+		{"permitrootlogin without-password", true},     //
+		{"permitrootlogin forced-commands-only", true}, //
+		{"PermitRootLogin Yes", true},                  // case-insensitive
+		{"permitrootlogin banana", false},              // garbage
+		{"", false},                                    // unreadable
+		{"permitrootlogin", false},                     // no value field
+	}
+	for _, c := range cases {
+		if got := policyKnown(c.in); got != c.want {
+			t.Errorf("policyKnown(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// TestClassifySSHPolicyPass proves a real classify() of the actual SSH-effective-policy
+// row Want passes on a valid policy value and WARNs (non-lockout) on empty output.
+func TestClassifySSHPolicyPass(t *testing.T) {
+	ch := Check{Name: "SSH effective policy", Want: policyKnown, Lockout: false}
+	if got := classify(ch, sshx.Result{Stdout: "permitrootlogin yes\n", RC: 0}); got.Status != StatusPass {
+		t.Fatalf("valid policy → %v, want StatusPass", got.Status)
+	}
+	if got := classify(ch, sshx.Result{Stdout: "", RC: 1}); got.Status != StatusWarn {
+		t.Fatalf("unreadable policy → %v, want StatusWarn", got.Status)
+	}
+}
+
 // TestClassifyNASkip asserts the NA precondition path still yields StatusSkip with its
 // reason, and is not shadowed by the transport-error branch on a clean result.
 func TestClassifyNASkip(t *testing.T) {

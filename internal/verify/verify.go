@@ -78,6 +78,25 @@ func equals(want string) func(string) bool {
 	return func(out string) bool { return strings.TrimSpace(out) == want }
 }
 
+// policyKnown reports whether `sshd -T | grep permitrootlogin` output names a
+// valid effective PermitRootLogin value. The default run leaves the policy at the
+// image default, which DIFFERS across Ubuntu images (24.04 ships prohibit-password
+// or yes; 26.04 ships yes) while the opt-in lockdown sets no — all legitimate. So
+// the SSH-effective-policy row PASSes on any recognized value and only WARNs when
+// sshd -T emits no readable policy (a real anomaly), never on a version-specific
+// default.
+func policyKnown(out string) bool {
+	fields := strings.Fields(strings.ToLower(out))
+	if len(fields) < 2 || fields[0] != "permitrootlogin" {
+		return false
+	}
+	switch fields[1] {
+	case "yes", "no", "prohibit-password", "without-password", "forced-commands-only":
+		return true
+	}
+	return false
+}
+
 // firewallChecks returns the two firewall verification rows ("Firewall order" +
 // "SSH port open") appropriate to how A1 actually applied, keyed off the detected
 // firewall manager:
@@ -117,19 +136,18 @@ func firewallChecks(facts *detect.Facts, port int) []Check {
 // facts may be nil (defensive); a nil facts is treated as managed iptables so the
 // matrix degrades to its original byte-identical behavior.
 func Run(c *sshx.Client, log *ui.Logger, port int, facts *detect.Facts) Result {
-	// Root-login policy is INFORMATIONAL, not a lockout assert. The default path
+	// Root-login policy is OBSERVATIONAL, not a lockout assert. The default path
 	// (A2 / A2-safe) hardens SSH crypto only and leaves the image's access policy
-	// untouched — root login stays at the image default (prohibit-password) and
-	// PasswordAuthentication is left to the image, so neither is something we force.
-	// Only the opt-in lockdown (A2-danger) sets PermitRootLogin no +
-	// PasswordAuthentication no. We therefore report the observed policy (PASS when
-	// it matches the image default, WARN otherwise) but never abort the run on it —
-	// a tighter or looser policy is not a lockout.
-	rootCheck := "prohibit-password"
+	// untouched, so the effective PermitRootLogin is whatever the image shipped —
+	// and that DIFFERS across Ubuntu versions (24.04 ships prohibit-password or yes;
+	// 26.04 ships yes) while the opt-in lockdown (A2-danger) sets no. All are
+	// legitimate, so the row PASSes on ANY valid policy value and never asserts a
+	// specific one. It WARNs only when sshd -T emits no readable policy (a real
+	// anomaly — broken/empty config), and never aborts the run.
 	fw := firewallChecks(facts, port)
 	checks := []Check{
 		{Name: "SSH syntax", Cmd: "sshd -t && echo ok", Want: equals("ok"), Lockout: true},
-		{Name: "SSH effective policy", Cmd: "sshd -T | grep -i permitrootlogin", Want: contains(rootCheck), Lockout: false},
+		{Name: "SSH effective policy", Cmd: "sshd -T | grep -i permitrootlogin", Want: policyKnown, Lockout: false},
 		fw[0],
 		fw[1],
 		{Name: "Rollback disarmed", Cmd: "systemctl list-timers --all | grep -c fw-rollback || true", Want: equals("0"), Lockout: false},
