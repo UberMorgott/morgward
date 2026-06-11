@@ -23,6 +23,25 @@ func TestStatsLinesRendersBothPings(t *testing.T) {
 	}
 }
 
+// A benign StatusSkip with a reason must render as "не требуется: <detail>", not the
+// bare "(SKIP)" that reads as "not applied".
+func TestStatsLinesSkipShowsReason(t *testing.T) {
+	s := Summary{
+		Before: &stats.Snapshot{},
+		After:  &stats.Snapshot{},
+		Results: []StepResult{
+			{ID: "A2.5", Title: "Cloud-init neutralization", Status: steps.StatusSkip, Detail: "cloud-init not installed"},
+		},
+	}
+	joined := strings.Join(s.statsLines(), "\n")
+	if !strings.Contains(joined, "не требуется: cloud-init not installed") {
+		t.Fatalf("skip row missing 'не требуется: <detail>':\n%s", joined)
+	}
+	if strings.Contains(joined, "(SKIP)") {
+		t.Fatalf("skip row still renders the misleading (SKIP):\n%s", joined)
+	}
+}
+
 func TestSummaryAppliedCount(t *testing.T) {
 	s := Summary{Results: []StepResult{
 		{ID: "A1", Status: steps.StatusOK},

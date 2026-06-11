@@ -204,11 +204,25 @@ func (m model) summaryStatLines(innerW int) []string {
 // "<glyph> [ID] <localized title>". The slice index equals the fix's index in
 // Results, so fixAtClick can recover each row's Y deterministically.
 func (m model) fixListLines() []string {
+	innerW := innerWidth(m.boxWidth())
 	out := make([]string, 0, len(m.summary.Results))
 	for _, r := range m.summary.Results {
-		out = append(out, "  "+fixGlyph(r.Status)+" "+m.fixRowText(r))
+		out = append(out, truncDisplay(m.fixRow(r), innerW))
 	}
 	return out
+}
+
+// fixRow composes a single fix-list row: glyph + "[ID] title", with a dim inline
+// "· не требуется: <reason>" suffix for a benign StatusSkip so the neutral state and
+// its reason live on ONE screen line (fixListLines truncates it to inner width — a
+// wrap would desync every row's Y from its Results index). Shared with fixAtClick so
+// the click width matches what is drawn.
+func (m model) fixRow(r engine.StepResult) string {
+	row := "  " + fixGlyph(r.Status) + " " + m.fixRowText(r)
+	if r.Status == steps.StatusSkip && r.Detail != "" {
+		row += monDimStyle.Render("  · " + t(m.lang, kFixNotNeeded) + ": " + localSkipReason(m.lang, r.Detail))
+	}
+	return row
 }
 
 // fixRowText is the (unstyled-glyph) "[ID] title" portion of a fix row: the wiki
@@ -231,7 +245,9 @@ func fixGlyph(st steps.Status) string {
 	case steps.StatusFail:
 		return sumFailStyle.Render("✗")
 	case steps.StatusSkip:
-		return sumSkipStyle.Render("∅")
+		// Benign "not needed" state — neutral dim dash, not a yellow ∅ that reads as
+		// "not applied / incomplete". The reason is shown inline by fixListLines.
+		return monDimStyle.Render("—")
 	default:
 		return " "
 	}
@@ -508,7 +524,7 @@ func (m model) fixAtClick(x, y int) (string, bool) {
 	if fixIdx < 0 || fixIdx >= len(m.summary.Results) {
 		return "", false
 	}
-	row := "  " + fixGlyph(m.summary.Results[fixIdx].Status) + " " + m.fixRowText(m.summary.Results[fixIdx])
+	row := m.fixRow(m.summary.Results[fixIdx])
 	w := lipgloss.Width(truncDisplay(row, colW))
 	if x >= contentX0 && x < contentX0+w {
 		return m.summary.Results[fixIdx].ID, true

@@ -248,6 +248,9 @@ const (
 	kSumHomeButton // clickable home pill: "[ На главную ]" / "[ Home ]"
 	kSumColFixes   // left-column header: "ФИКСЫ" / "FIXES"
 	kSummaryHint2  // updated summary hint mentioning the home button + key row
+
+	// neutral "not needed" reason prefix on a benign StatusSkip fix row
+	kFixNotNeeded // "не требуется" / "not needed"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -428,6 +431,8 @@ var tr = map[Lang]map[stringKey]string{
 		kSumHomeButton: "[ На главную ]",
 		kSumColFixes:   "ФИКСЫ",
 		kSummaryHint2:  "enter/esc — на главную · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
+
+		kFixNotNeeded: "не требуется",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -605,6 +610,8 @@ var tr = map[Lang]map[stringKey]string{
 		kSumHomeButton: "[ Home ]",
 		kSumColFixes:   "FIXES",
 		kSummaryHint2:  "enter/esc — home · click a fix for details · ↑↓ — scroll · l — lang",
+
+		kFixNotNeeded: "not needed",
 	},
 }
 
@@ -680,6 +687,34 @@ func localStepTitle(lang Lang, id, fallback string) string {
 		return s
 	}
 	return fallback
+}
+
+// skipReasons maps the static (non-dynamic) English skip detail a step returns with
+// StatusSkip to a localized "why it wasn't needed" reason. Every StatusSkip in
+// internal/steps is benign (target absent / already satisfied), so this reads as a
+// neutral "не требуется" state, not a failure. Dynamic details (ufw-managed port
+// lists, "manages the firewall") carry their own data and are left as-is by
+// localSkipReason's fallback.
+var skipReasons = map[Lang]map[string]string{
+	langRU: {
+		"cloud-init not installed":                            "cloud-init отсутствует",
+		"cloud-init already disabled":                         "cloud-init уже отключён",
+		"systemd-resolved not active (different resolver)":    "systemd-resolved не активен (другой резолвер)",
+		"firewall already closed with SSH open and persisted": "файрвол уже закрыт, SSH открыт",
+	},
+	langEN: {}, // English uses the raw detail verbatim (already English); fallback returns it
+}
+
+// localSkipReason returns the localized "not needed" reason for a step's skip detail
+// in lang, falling back to the raw detail unchanged for dynamic reasons (and for EN,
+// where the detail is already English).
+func localSkipReason(lang Lang, detail string) string {
+	if m, ok := skipReasons[lang]; ok {
+		if s, ok := m[detail]; ok {
+			return s
+		}
+	}
+	return detail
 }
 
 // tweakNames maps a tweaks.Probe.ID to its localized display name. Missing IDs

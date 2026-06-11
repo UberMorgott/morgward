@@ -124,6 +124,14 @@ func (s Summary) statsLines() []string {
 	if len(s.Results) > 0 {
 		out = append(out, "ПРИМЕНЁННЫЕ ФИКСЫ:")
 		for _, r := range s.Results {
+			// A benign skip (target absent / already satisfied) is "не требуется", not
+			// a bare "(SKIP)" that reads as "not applied". Show the reason inline; the
+			// raw English detail is fine here (this file is RU-hardcoded and the engine
+			// must not import the tui localization layer).
+			if r.Status == steps.StatusSkip && r.Detail != "" {
+				out = append(out, fmt.Sprintf("  [%s] %s — не требуется: %s", r.ID, r.Title, r.Detail))
+				continue
+			}
 			out = append(out, fmt.Sprintf("  [%s] %s (%s)", r.ID, r.Title, statusWord(r.Status)))
 		}
 	}

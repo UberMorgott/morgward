@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/UberMorgott/morgward/internal/engine"
+	"github.com/UberMorgott/morgward/internal/steps"
 	"github.com/UberMorgott/morgward/internal/tweaks"
 	"github.com/UberMorgott/morgward/internal/wiki"
 )
@@ -86,6 +88,55 @@ func TestWikiBodyUsesTweakHeader(t *testing.T) {
 	body2 := m2.wikiBodyLines(innerW)
 	if strings.Contains(strings.Join(body2, "\n"), t2(m2.lang, kWikiNoDoc)) {
 		t.Fatalf("summary-path body fell back to no-doc")
+	}
+}
+
+// TestFixGlyphSkipNeutral asserts a benign skip renders the NEUTRAL dim dash, not the
+// old yellow ∅ that read as "not applied".
+func TestFixGlyphSkipNeutral(t *testing.T) {
+	g := fixGlyph(steps.StatusSkip)
+	if strings.Contains(g, "∅") {
+		t.Fatalf("skip glyph still contains the misleading ∅: %q", g)
+	}
+	if !strings.Contains(g, "—") {
+		t.Fatalf("skip glyph should be the neutral dash —, got %q", g)
+	}
+}
+
+// TestFixListSkipRow asserts a StatusSkip fix row shows the neutral RU "не требуется"
+// state with the localized reason inline, on EXACTLY one line per Result (so the row
+// Y stays aligned to the Results index for the hit-test).
+func TestFixListSkipRow(t *testing.T) {
+	m := formModel(100, 40)
+	m.summary = engine.Summary{Results: []engine.StepResult{
+		{ID: "A2.5", Title: "Cloud-init neutralization", Status: steps.StatusSkip, Detail: "cloud-init not installed"},
+		{ID: "A1", Title: "Firewall", Status: steps.StatusOK},
+	}}
+	lines := m.fixListLines()
+	if len(lines) != len(m.summary.Results) {
+		t.Fatalf("fixListLines len=%d want one per Result (%d)", len(lines), len(m.summary.Results))
+	}
+	skip := lines[0]
+	if !strings.Contains(skip, "не требуется") {
+		t.Fatalf("skip row missing neutral 'не требуется': %q", skip)
+	}
+	if !strings.Contains(skip, "cloud-init отсутствует") {
+		t.Fatalf("skip row missing localized reason: %q", skip)
+	}
+	if strings.Contains(skip, "∅") {
+		t.Fatalf("skip row still shows the misleading ∅: %q", skip)
+	}
+}
+
+// TestLocalSkipReason asserts the known static detail maps to Russian and an unknown
+// (dynamic) detail falls back to the raw string unchanged.
+func TestLocalSkipReason(t *testing.T) {
+	if got := localSkipReason(langRU, "cloud-init not installed"); got != "cloud-init отсутствует" {
+		t.Fatalf("localSkipReason(ru, known)=%q want 'cloud-init отсутствует'", got)
+	}
+	dyn := "ufw-managed: SSH :22 + all detected service ports already allowed in ufw"
+	if got := localSkipReason(langRU, dyn); got != dyn {
+		t.Fatalf("localSkipReason(ru, dynamic) should fall back verbatim, got %q", got)
 	}
 }
 
