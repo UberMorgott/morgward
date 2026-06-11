@@ -45,6 +45,7 @@ const (
 	phaseMatrix    // per-tweak audit table (the "анализ" action result)
 	phaseDashboard // post-connect server card + live tweak audit + apply/security buttons
 	phaseSecurity  // security + access menu: access-state card + SAFE actions + DANGER key-only lock
+	phaseTerminal  // 2a: interactive vt-emulator terminal over the embedded SSH shell
 )
 
 // titleKind is the window-title state. The actual localized title string is built
@@ -287,6 +288,29 @@ type model struct {
 	runStart time.Time
 	elapsed  time.Duration
 	spin     int
+
+	// Terminal screen (phaseTerminal, 2a). The non-copyable session (emulator,
+	// pipe, goroutines) lives behind a POINTER so the model stays value-copyable
+	// every Update (CLAUDE.md gotcha). nil when the terminal screen has never been
+	// opened or was closed. termReturn is the phase to return to on exit; termErr
+	// holds a dial/setup failure to render in place of the (never-constructed)
+	// session; termGen increments per open so a stale render-tick from a previous
+	// session is ignored.
+	term       *termSession
+	termClient *sshx.Client // the SSH transport dialed for the terminal; closed (stopping its 30s keepalive goroutine) on teardown — termSession.close() only ends the *ssh.Session, never the transport
+	termReturn phase
+	termErr    string
+	termGen    int
+	// termScroll is the scrollback offset into the terminal body (scrollback ++ live
+	// screen), clamped like the other *Scroll fields. 0 = top; the max offset is the
+	// bottom. Held at bottom by default (follow mode) and snapped back to bottom on any
+	// forwarded keystroke (standard terminal behavior). Plain int — value-copy safe.
+	termScroll int
+	// termFollow records follow mode (stuck to the newest output). When true, every
+	// repaint re-pins termScroll to the bottom so incoming output stays visible; a
+	// scroll-up gesture clears it to hold position, a forwarded keystroke re-arms it.
+	// Plain bool — value-copy safe.
+	termFollow bool
 }
 
 // newModel builds the initial TUI model.
@@ -434,6 +458,8 @@ func (m model) viewString() string {
 		return m.dashboardView()
 	case phaseSecurity:
 		return m.securityView()
+	case phaseTerminal:
+		return m.terminalView()
 	case phaseWiki:
 		return m.wikiView()
 	case phaseKey:

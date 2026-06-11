@@ -251,6 +251,14 @@ const (
 
 	// neutral "not needed" reason prefix on a benign StatusSkip fix row
 	kFixNotNeeded // "не требуется" / "not needed"
+
+	// --- terminal screen (phaseTerminal, 2a) ----------------------------------
+	kDashTermButton // dashboard action button: "Терминал ▸" / "Terminal ▸"
+	kTermTitle      // terminal box title suffix: "Терминал" / "Terminal"
+	kTermHint       // terminal control hint (Ctrl+Q to exit)
+	kTermBackHint   // "esc / ctrl+q — назад" shown on the error/ended notice
+	kTermDialFail   // dial/setup failure prefix
+	kTermEnded      // "Сессия завершена" / "Session ended"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -433,6 +441,13 @@ var tr = map[Lang]map[stringKey]string{
 		kSummaryHint2:  "enter/esc — на главную · клик по фиксу — описание · ↑↓ — прокрутка · l — язык",
 
 		kFixNotNeeded: "не требуется",
+
+		kDashTermButton: "Терминал ▸",
+		kTermTitle:      "Терминал",
+		kTermHint:       "SSH-терминал · колесо / shift+pgup — прокрутка · ctrl+q — выход · l — язык",
+		kTermBackHint:   "esc / ctrl+q — назад",
+		kTermDialFail:   "не удалось подключиться",
+		kTermEnded:      "Сессия завершена",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -612,6 +627,13 @@ var tr = map[Lang]map[stringKey]string{
 		kSummaryHint2:  "enter/esc — home · click a fix for details · ↑↓ — scroll · l — lang",
 
 		kFixNotNeeded: "not needed",
+
+		kDashTermButton: "Terminal ▸",
+		kTermTitle:      "Terminal",
+		kTermHint:       "SSH terminal · wheel / shift+pgup to scroll · ctrl+q to exit · l language",
+		kTermBackHint:   "esc / ctrl+q to go back",
+		kTermDialFail:   "could not connect",
+		kTermEnded:      "Session ended",
 	},
 }
 

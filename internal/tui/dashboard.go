@@ -128,6 +128,7 @@ func (m model) dashButtonNames() []string {
 	return []string{
 		t(m.lang, kDashApplyButton),
 		t(m.lang, kDashSecButton),
+		t(m.lang, kDashTermButton),
 	}
 }
 
@@ -546,6 +547,7 @@ const (
 	dashBtnNone dashButton = iota
 	dashBtnApply
 	dashBtnSecurity
+	dashBtnTerminal
 )
 
 // dashButtonAtClick maps a click at (x,y) to one of the two action buttons, using
@@ -564,6 +566,8 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 		return dashBtnApply
 	case 1:
 		return dashBtnSecurity
+	case 2:
+		return dashBtnTerminal
 	}
 	return dashBtnNone
 }
@@ -596,6 +600,10 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.phase = phaseSecurity
 		m.dashScroll = 0 // security menu reuses dashScroll; start at the top
 		return m, nil
+	case dashBtnTerminal:
+		// Open the interactive terminal (2a). It dials fresh with the form's
+		// connection params; Esc/Ctrl+Q returns here.
+		return m.openTerminal(phaseDashboard)
 	}
 	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's
 	// Probe.Step (matches wiki.Doc keys, e.g. "A2"); keep the specific tweak's

@@ -44,6 +44,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
 		m.vp.SetContent(m.wrapped())
 		m.vp.GotoBottom()
+		// Keep the live terminal's emulator + remote pty matched to the new content
+		// area so vim/top re-flow on a window resize.
+		if m.term != nil {
+			cols, rows := m.termContentSize()
+			m.term.resize(cols, rows)
+		}
 		return m, nil
 
 	case tea.MouseClickMsg:
@@ -207,10 +213,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			iw := innerWidth(m.boxWidth())
 			m.dashScroll = clampScroll(m.dashScroll+d, len(m.securityBodyLines(iw)), m.bodyViewH())
+		case phaseTerminal:
+			// Wheel scrolls LOCAL scrollback (not forwarded to the remote app). Disabled
+			// while on the alternate screen (vim/top own the screen) — see terminalScrollable.
+			// Mouse click/drag forwarding to the remote app is still DEFERRED for 2a.
+			if m.terminalScrollable() {
+				d := 0
+				if up {
+					d = -wheelStep
+				} else if down {
+					d = wheelStep
+				}
+				m.termScrollBy(d)
+			}
 		}
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// The Terminal screen (2a) is FULLY raw: every keypress must reach the remote
+		// shell (Ctrl+C=SIGINT, 'q'/'l' are literal input, Esc is needed by vim/less).
+		// Handle it FIRST so none of the global hotkeys (language toggle, q/ctrl+c quit)
+		// below intercept input meant for the shell. Only termExitKey leaves the screen.
+		if m.phase == phaseTerminal {
+			return m.terminalKey(msg)
+		}
 		// Language hotkey works in BOTH phases (form + run). Use 'l' to cycle ru<->en;
 		// ctrl+l also toggles. In the form phase 'l' is only intercepted when focus is
 		// NOT on a text input, so typing 'l' into a field still works.
@@ -304,6 +330,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// scroll the audit list. enter confirms the pending A8-reboot apply, esc
 			// cancels it; with no pending confirm, esc/b go back.
 			switch msg.String() {
+			case "t":
+				// Open the interactive terminal (2a). Disabled while an apply-confirm is
+				// armed so the keystroke can't slip past the modal.
+				if !m.dashApplyConfirm {
+					return m.openTerminal(phaseDashboard)
+				}
+				return m, nil
 			case "enter":
 				if m.dashApplyConfirm {
 					m.dashApplyConfirm = false
@@ -578,6 +611,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// maximize is noticed; the delivered WindowSizeMsg rebuilds the viewport in
 		// its own handler above. tea.RequestWindowSize is a func() Msg (a tea.Cmd).
 		return m, tea.Batch(tea.RequestWindowSize, resizeTick())
+
+	case termTickMsg:
+		// Terminal repaint heartbeat (2a). Drop a tick from a stale/closed session
+		// (gen mismatch) or when the terminal is no longer the active screen — that
+		// stops the ticker on leave with no busy loop. While open, just re-schedule:
+		// the View() re-renders the emulator each frame, and dirty() clears damage so
+		// an idle shell does not force needless work. (We always reschedule rather
+		// than gate the re-render on dirty(), because Bubble Tea repaints on every
+		// Update; the dirty check exists for callers that want to skip work, and we
+		// keep the tick cheap.)
+		if msg.gen != m.termGen || m.phase != phaseTerminal || m.term == nil {
+			return m, nil
+		}
+		// Follow mode: re-pin to the bottom each tick so newly-arrived output stays
+		// visible. When the user has scrolled up (termFollow=false) the offset is held.
+		m.termPinIfFollowing()
+		return m, termTick(m.termGen)
+
+	case tea.PasteMsg:
+		// Bracketed paste into the terminal screen → feed the pasted text to the
+		// remote shell verbatim. Other screens ignore paste here (the form's inputs
+		// receive their own paste via the focused-input fallthrough below).
+		if m.phase == phaseTerminal && m.term != nil {
+			m.term.write([]byte(msg.Content))
+		}
+		return m, nil
 	}
 
 	// pass other messages to the focused input during the form phase
@@ -669,6 +728,20 @@ func (m model) formConnectable() bool {
 // new run can be started (e.g. to fix credentials after a failed connection).
 func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.stopSampler()
+	// Defensively tear down a live terminal session (2a) if one is somehow still open
+	// when navigating home — cancel + reap its goroutines + close the pipe AND close the
+	// underlying SSH client (its keepalive goroutine + transport, which the session does
+	// not own) so nothing leaks across the long-lived TUI. Nil-safe. Normal exits go
+	// through closeTerminal already.
+	if m.term != nil {
+		m.term.close()
+		m.term = nil
+		m.termGen++
+	}
+	if m.termClient != nil {
+		m.termClient.Close()
+		m.termClient = nil
+	}
 	// Halt any in-flight engine run: cancel its context so it stops at the next step
 	// boundary (F03), and close abort so a hook send parked on a now-stale full
 	// channel unblocks and the engine goroutine reaches its deferred cleanup (F11).
