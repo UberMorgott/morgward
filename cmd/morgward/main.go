@@ -65,6 +65,7 @@ Commands:
   audit             read-only audit (server facts + tweak audit); changes nothing
   step <ID...>      run only the named steps, e.g. "step A4 A5"
   revert <ID...>    revert the named steps, e.g. "revert A2"
+  shell [host]      open an interactive PTY shell on the VPS (just SSH)
   tui               launch the interactive terminal UI (default with no args)
   update            self-update to the latest GitHub release (checksum-verified)
   version           print the program version and exit
@@ -93,6 +94,8 @@ Examples:
   morgward detect --host 1.2.3.4 --user root --password XXX
   morgward verify --host 1.2.3.4 --key ./id_ed25519_1-2-3-4
   morgward step A4 A5 --host 1.2.3.4 --key ./id_ed25519_1-2-3-4
+  morgward shell 1.2.3.4 --user root --password XXX
+  morgward shell --host 1.2.3.4 --user vpsadmin --key ./id_ed25519_1-2-3-4
   # non-interactive (no prompts): all flags supplied + --assume-yes
   morgward run --host 1.2.3.4 --user root --password XXX --assume-yes
 `
@@ -185,6 +188,30 @@ func main() {
 	}
 	if cfg.Host == "" {
 		cfg.Host = os.Getenv("VPS_HOST")
+	}
+
+	// The interactive PTY shell is just SSH — it skips the hardening config flow
+	// (full Validate / admin-user / banner / engine dispatch). Resolve its host
+	// (positional arg wins) and auth here, then hand off to runShell.
+	if cmd == "shell" {
+		if err := resolveShellHost(cfg, stepIDs); err != nil {
+			fmt.Fprintln(os.Stderr, "input error:", err)
+			os.Exit(2)
+		}
+		// Auth: --key wins; else password (--password / $VPS_PASSWORD / prompt).
+		if cfg.KeyPath == "" && cfg.Password == "" {
+			pw, err := promptPassword("SSH password")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "input error:", err)
+				os.Exit(2)
+			}
+			cfg.Password = pw
+		}
+		if err := runShell(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "\nshell:", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Interactive prompts when host/credentials are absent (the "open a window,
