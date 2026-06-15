@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -714,8 +715,87 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.upload {
 			_ = m.files.reload() // refresh so the uploaded file appears
 		}
-		m.files.err = msg.label // success notice (reload above may have set err; overwrite)
+		// 2c: an open-sync upload-back threads syncLocal (the local temp) + newMtime (the remote
+		// mtime re-stat'd after a successful upload). Re-stamp the opened record's baseline so the
+		// NEXT save doesn't false-conflict against the now-moved remote mtime. Guard nil map/entry.
+		if msg.syncLocal != "" {
+			if of := m.files.opened[msg.syncLocal]; of != nil {
+				of.remoteMtime = msg.newMtime
+			}
+		}
+		m.files.setErr(msg.label) // success notice (reload above may have set err; overwrite). setErr sanitizes the remote-derived label.
 		return m, nil
+
+	case fmOpenDoneMsg:
+		// An async open-download finished. Clear the in-flight flag; on error surface it. On
+		// success register the file, ensure the watcher + add the temp, launch the host editor,
+		// and surface a notice (binary files warn but open anyway). Guard a nil session.
+		if m.files == nil {
+			return m, nil
+		}
+		m.files.transferring = false
+		m.files.xferLabel = ""
+		if msg.err != nil {
+			m.files.setErr(t(m.lang, kFmOpenError) + ": " + msg.err.Error())
+			return m, nil
+		}
+		of := m.files.registerOpened(msg.remotePath, msg.localPath, msg.mtime)
+		// Ensure the watcher, add this temp, launch the editor.
+		var cmd tea.Cmd
+		if m.files.ensureWatcher() {
+			_ = m.files.watcher.Add(msg.localPath)
+			cmd = m.listenWatch()
+		}
+		if err := openLocalFileFn(msg.localPath); err != nil {
+			m.files.setErr(t(m.lang, kFmOpenError) + ": " + err.Error())
+		} else if isBinary(msg.data0) {
+			m.files.setErr(t(m.lang, kFmOpenedBinary) + " " + path.Base(of.remotePath))
+		} else {
+			m.files.setErr(t(m.lang, kFmOpened) + " " + path.Base(of.remotePath))
+		}
+		return m, cmd
+
+	case fmWatchEventMsg:
+		// A local save was observed. Re-issue the listener (it self-perpetuates) and schedule a
+		// debounced flush carrying the new seq; only the latest seq will actually upload.
+		if m.files == nil {
+			return m, m.listenWatch() // keep draining even if we ignore this one
+		}
+		of := m.files.opened[msg.localPath]
+		if of == nil {
+			return m, m.listenWatch()
+		}
+		seq := m.files.scheduleFlush(of)
+		return m, tea.Batch(
+			m.listenWatch(),
+			tea.Tick(fmSaveDebounce, func(time.Time) tea.Msg {
+				return fmWatchFlushMsg{localPath: msg.localPath, seq: seq}
+			}),
+		)
+
+	case fmWatchFlushMsg:
+		// The debounce window elapsed. Upload the temp back only if this is still the latest
+		// scheduled flush AND the file is dirty. If an sftp op is busy, reschedule (one at a
+		// time); otherwise mark transferring and dispatch the conflict-checked upload-back.
+		if m.files == nil {
+			return m, nil
+		}
+		of := m.files.opened[msg.localPath]
+		if of == nil || !m.files.isLatestFlush(of, msg.seq) || !of.dirty {
+			return m, nil // superseded by a newer save, or nothing to push
+		}
+		if m.files.transferring {
+			// An sftp op is busy; reschedule this flush shortly (one transfer at a time).
+			seq := m.files.scheduleFlush(of)
+			return m, tea.Tick(fmSaveDebounce, func(time.Time) tea.Msg {
+				return fmWatchFlushMsg{localPath: msg.localPath, seq: seq}
+			})
+		}
+		of.dirty = false
+		m.files.transferring = true
+		m.files.xferLabel = path.Base(of.remotePath)
+		label := t(m.lang, kFmSynced) + " " + path.Base(of.remotePath)
+		return m, m.uploadBackCmd(of.localPath, of.remotePath, label, of.remoteMtime, false)
 
 	case tea.PasteMsg:
 		// Bracketed paste into the terminal screen → feed the pasted text to the

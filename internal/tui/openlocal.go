@@ -41,3 +41,7 @@ func openLocalFile(path string) error {
 	name, args := osOpenArgs(path)
 	return exec.Command(name, args...).Start() // #nosec G204 -- fixed opener + discrete path arg
 }
+
+// openLocalFileFn is the indirection the open-done handler calls so tests can stub the OS
+// launch (which would otherwise spawn a real editor/cmd process). Production = openLocalFile.
+var openLocalFileFn = openLocalFile

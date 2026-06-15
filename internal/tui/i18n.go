@@ -298,6 +298,12 @@ const (
 	kFmUploadNoFile   // error: local file not found
 	kFmTransferring   // notice: "transferring …"
 
+	// FM local-open-and-sync (2c) notices.
+	kFmOpened       // notice prefix: "Opened locally:"
+	kFmOpenedBinary // notice prefix: "Opened binary file (edit at your own risk):"
+	kFmOpenError    // error: "Open failed"
+	kFmSynced       // notice prefix: "Synced back:"
+
 	// FM context menu (right-click / 'm').
 	kFmMenuTitle    // menu box title
 	kFmMenuHint     // menu key hint: "↑/↓ · enter · esc"
@@ -547,6 +553,11 @@ var tr = map[Lang]map[stringKey]string{
 		kFmUploadNoFile:   "локальный файл не найден",
 		kFmTransferring:   "передача",
 
+		kFmOpened:       "Открыто локально:",
+		kFmOpenedBinary: "Открыт бинарный файл (правка на свой риск):",
+		kFmOpenError:    "Ошибка открытия",
+		kFmSynced:       "Синхронизировано:",
+
 		kFmMenuTitle:    "Действия",
 		kFmMenuHint:     "↑/↓ — выбор · enter — выполнить · esc — закрыть",
 		kFmMenuNewDir:   "Создать папку",
@@ -790,6 +801,11 @@ var tr = map[Lang]map[stringKey]string{
 		kFmUploaded:       "uploaded:",
 		kFmUploadNoFile:   "local file not found",
 		kFmTransferring:   "transferring",
+
+		kFmOpened:       "Opened locally:",
+		kFmOpenedBinary: "Opened binary file (edit at your own risk):",
+		kFmOpenError:    "Open failed",
+		kFmSynced:       "Synced back:",
 
 		kFmMenuTitle:    "Actions",
 		kFmMenuHint:     "↑/↓ select · enter run · esc close",

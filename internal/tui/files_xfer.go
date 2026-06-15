@@ -18,6 +18,14 @@ type fmXferDoneMsg struct {
 	err    error
 	upload bool
 	label  string
+
+	// 2c open-sync re-stamp thread: an upload-back (uploadBackCmd) sets syncLocal to the LOCAL
+	// temp path of the opened file and newMtime to the remote mtime re-stat'd AFTER a successful
+	// upload. The success handler then re-stamps opened[syncLocal].remoteMtime = newMtime so the
+	// next save doesn't false-conflict against the now-stale baseline. The Download/Upload
+	// callers (downloadCmd/uploadCmd) leave these zero — they are ignored unless syncLocal != "".
+	syncLocal string
+	newMtime  int64
 }
 
 // downloadsDir is the stable host directory downloads land in (created on demand).

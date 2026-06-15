@@ -2,12 +2,18 @@ package tui
 
 import (
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/ui"
 )
+
+// fmSaveDebounce is the quiet-period after a local save before the upload-back fires, so a
+// burst of editor writes (write-truncate-write, swap-file dance) collapses to one upload.
+const fmSaveDebounce = 600 * time.Millisecond
 
 // fmOpenDoneMsg is posted when the async open-download finishes. On success Update launches
 // the editor + registers the watch; on error it surfaces inline.
@@ -103,3 +109,87 @@ func (m model) openDownloadCmd(remotePath, localPath, label string) tea.Cmd {
 		return fmOpenDoneMsg{remotePath: remotePath, localPath: localPath, mtime: mtime, data0: head}
 	}
 }
+
+// ensureWatcher lazily creates the session's fsnotify watcher + event channel and starts the
+// pump goroutine. The pump reads fsnotify events and forwards ONLY the local path of write/
+// create events on watchCh; it derefs NOTHING on *fileSession (captures the watcher + channel
+// as locals). On watcher Close the Events channel drains+closes → the pump closes watchCh so
+// listenWatch retires. Returns false if the watcher could not be created.
+func (f *fileSession) ensureWatcher() bool {
+	if f.watcher != nil {
+		return true
+	}
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return false
+	}
+	ch := make(chan string, 16)
+	f.watcher = w
+	f.watchCh = ch
+	go func() {
+		defer close(ch)
+		for ev := range w.Events {
+			// Editors save via write OR atomic rename-into-place; treat write/create as a save.
+			if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+				select {
+				case ch <- ev.Name:
+				default: // channel full → a later event still triggers a flush; drop is safe
+				}
+			}
+		}
+	}()
+	return true
+}
+
+// listenWatch blocks on the next watcher event (re-issued by Update after each). Nil channel
+// (no Open yet) or a closed channel (teardown) → nil, retiring the listener.
+func (m model) listenWatch() tea.Cmd {
+	ch := m.files.watchCh
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		local, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return fmWatchEventMsg{localPath: local}
+	}
+}
+
+// uploadBackCmd pushes the edited local temp back to its remote path, race-free (owns its sftp
+// client, captures locals). force skips the conflict re-check. Posts fmXferDoneMsg (reuses the
+// existing transfer-done handler — upload:false so it does NOT reload the listing, the file's
+// content changed not the directory). On a successful upload it re-stats the remote mtime and
+// returns it via syncLocal/newMtime so the handler re-stamps of.remoteMtime (next save won't
+// false-conflict against the now-stale baseline).
+func (m model) uploadBackCmd(localPath, remotePath, label string, expectMtime int64, force bool) tea.Cmd {
+	cli := m.files.cli
+	return func() tea.Msg {
+		sc, err := cli.SFTP()
+		if err != nil {
+			return fmXferDoneMsg{err: err, label: label}
+		}
+		defer func() { _ = sc.Close() }()
+		if !force {
+			if st, e := sc.Stat(remotePath); e == nil && st.ModTime().Unix() != expectMtime {
+				return fmXferDoneMsg{err: errRemoteChanged, label: label}
+			}
+		}
+		if err := sshx.UploadFile(sc, localPath, remotePath); err != nil {
+			return fmXferDoneMsg{err: err, upload: false, label: label}
+		}
+		var newMtime int64
+		if st, e := sc.Stat(remotePath); e == nil {
+			newMtime = st.ModTime().Unix()
+		}
+		return fmXferDoneMsg{upload: false, label: label, syncLocal: localPath, newMtime: newMtime}
+	}
+}
+
+// errRemoteChanged signals an upload-back conflict (remote mtime moved since download).
+var errRemoteChanged = sftpConflictErr("remote file changed since it was opened")
+
+type sftpConflictErr string
+
+func (e sftpConflictErr) Error() string { return string(e) }
