@@ -69,3 +69,30 @@ func TestOpenLocalDest(t *testing.T) {
 		t.Fatal("openLocalDest must be deterministic for the same remote path")
 	}
 }
+
+// A remote filename carrying cmd.exe / shell metacharacters must not survive into the local
+// temp path — they are stripped so the Windows opener (which routes through cmd.exe) can't be
+// injected even with an attacker-controlled remote name.
+func TestOpenLocalDest_StripsMetacharacters(t *testing.T) {
+	for _, meta := range []string{"&", "|", "^", "<", ">", "%", "\"", "(", ")", "`", "$", ";"} {
+		d := openLocalDest("/tmp/x" + meta + "calc.txt")
+		if strings.ContainsAny(filepath.Base(d), "&|^<>%\"()`$;") {
+			t.Fatalf("metacharacter %q leaked into local basename: %q", meta, filepath.Base(d))
+		}
+	}
+}
+
+func TestSafeBaseName(t *testing.T) {
+	if got := safeBaseName("a&b|c.txt"); got != "a_b_c.txt" {
+		t.Fatalf("safeBaseName metachar map: got %q", got)
+	}
+	if got := safeBaseName("good_File-1.2.conf"); got != "good_File-1.2.conf" {
+		t.Fatalf("safeBaseName must pass a safe name through unchanged: got %q", got)
+	}
+	if got := safeBaseName(""); got != "file" {
+		t.Fatalf("empty name must fall back to 'file': got %q", got)
+	}
+	if got := safeBaseName(".."); got != "file" {
+		t.Fatalf("'..' must fall back to 'file': got %q", got)
+	}
+}
