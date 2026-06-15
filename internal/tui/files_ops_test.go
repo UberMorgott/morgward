@@ -42,7 +42,7 @@ func TestParentPath(t *testing.T) {
 }
 
 func TestApplyListingClampsSel(t *testing.T) {
-	f := newFileSession(nil, "/")
+	f := newFileSession(nil, "/", langRU)
 	f.sel = 99
 	f.applyListing("total 0\n-rw-r--r-- 1 r r 5 2026-06-09 09:20 a\n")
 	if len(f.entry) != 1 || f.sel != 0 {
@@ -53,7 +53,7 @@ func TestApplyListingClampsSel(t *testing.T) {
 // Hidden-file filtering keeps the visible index space consistent: dotfiles are hidden by
 // default (".." always shown); sel and the visible slice agree.
 func TestVisibleEntriesHidesDotfiles(t *testing.T) {
-	f := newFileSession(nil, "/")
+	f := newFileSession(nil, "/", langRU)
 	f.applyListing("total 0\n" +
 		"drwxr-xr-x 2 r r 4096 2026-06-09 09:20 ..\n" +
 		"-rw-r--r-- 1 r r    5 2026-06-09 09:20 .hidden\n" +
@@ -71,7 +71,7 @@ func TestVisibleEntriesHidesDotfiles(t *testing.T) {
 // navigateTo does the pure path-math + sel/scroll reset (the reload is a separate step),
 // so the cwd mutation on entering a directory is unit-testable without SSH.
 func TestNavigateToDir(t *testing.T) {
-	f := newFileSession(nil, "/etc")
+	f := newFileSession(nil, "/etc", langRU)
 	f.sel = 4
 	f.scroll = 3
 	f.navigateTo("nginx")
@@ -88,7 +88,7 @@ func TestNavigateToDir(t *testing.T) {
 // (or any unreachable dir) never leaves cwd pointing at a non-existent directory with a
 // stale listing. A nil-cli session makes reload fail deterministically without SSH.
 func TestNavigateAndReloadRevertsOnFailure(t *testing.T) {
-	f := newFileSession(nil, "/etc") // nil cli → reload() always fails
+	f := newFileSession(nil, "/etc", langRU) // nil cli → reload() always fails
 	f.sel, f.scroll = 4, 3
 	f.navigateAndReload("/no/such/dir")
 	if f.cwd != "/etc" {
@@ -102,7 +102,7 @@ func TestNavigateAndReloadRevertsOnFailure(t *testing.T) {
 // moveSel clamps within the visible slice (dotfiles hidden), proving sel indexes the
 // visible space the view/hit-test use.
 func TestMoveSelClampsToVisible(t *testing.T) {
-	f := newFileSession(nil, "/")
+	f := newFileSession(nil, "/", langRU)
 	f.applyListing("total 0\n" +
 		"drwxr-xr-x 2 r r 4096 2026-06-09 09:20 ..\n" +
 		"-rw-r--r-- 1 r r    5 2026-06-09 09:20 .dot\n" +

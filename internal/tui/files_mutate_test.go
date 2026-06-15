@@ -69,7 +69,7 @@ func TestMutateCmdEscapesEmbeddedQuote(t *testing.T) {
 
 // Opening a prompt seeds it and suppresses listing keys; Esc cancels back to fpNone.
 func TestPromptOpenAndCancel(t *testing.T) {
-	f := newFileSession(nil, "/etc")
+	f := newFileSession(nil, "/etc", langRU)
 	f.openPrompt(fpRename, "seed name", "Rename to:")
 	if f.promptKind != fpRename {
 		t.Fatalf("openPrompt did not set kind: %d", f.promptKind)
@@ -92,7 +92,7 @@ func TestPromptOpenAndCancel(t *testing.T) {
 // selectedEntry returns the visible entry under sel (ok=false when out of range or ".."
 // for ops that must not act on the parent marker — selectedName guards ".." for mutating).
 func TestSelectedName(t *testing.T) {
-	f := newFileSession(nil, "/")
+	f := newFileSession(nil, "/", langRU)
 	f.applyListing("total 0\n" +
 		"drwxr-xr-x 2 r r 4096 2026-06-09 09:20 ..\n" +
 		"-rw-r--r-- 1 r r    5 2026-06-09 09:20 a\n")

@@ -77,7 +77,7 @@ set the console title (Windows-only).
 ### TUI — [`internal/tui/`](../internal/tui/) (Bubble Tea v2, `charm.land/*`)
 `tui.Run()` returns a `Result{DoUpdate, TargetVer}` so `main` can self-update after the
 alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWiki`,
-`phaseKey`, `phaseMatrix`, `phaseDashboard`, `phaseSecurity`.
+`phaseKey`, `phaseMatrix`, `phaseDashboard`, `phaseSecurity`, `phaseTerminal`.
 
 | File | Role |
 |------|------|
@@ -91,6 +91,8 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 | [`summary.go`](../internal/tui/summary.go) | `phaseSummary`: post-finish stats + clickable fix list |
 | [`matrix.go`](../internal/tui/matrix.go) | `phaseMatrix`: per-tweak audit ("анализ") table |
 | [`keyview.go`](../internal/tui/keyview.go) | `phaseKey`: generated PEM + clipboard "Copy key" button |
+| [`terminal.go`](../internal/tui/terminal.go) + `term*.go` | `phaseTerminal` **Terminal\|Files workspace** (`wsTab`): an interactive SSH shell (PTY emulator) — `openTerminal` dials ONE `*sshx.Client` shared by both tabs; `ctrl+1`/`ctrl+2` switch tabs, `ctrl+q` exits |
+| [`files_*.go`](../internal/tui/files_view.go) | **Files tab** (`wsFiles`): remote file manager over the shared client. `fileSession` (`filesession.go`) holds cwd/listing/selection/clipboard/prompt+menu state. **Listing + mutations are shell-exec** (`files_ops.go` `LC_ALL=C ls`, `files_mutate.go` mkdir/mv/rm/cp/chmod/chown/stat — every path `shQuote`'d); **byte transfer is sftp** (`files_xfer.go` async Download/Upload via `Client.SFTP()`, goroutine→`fmXferDoneMsg`). `files_view.go` renders, `files_key.go` routes keys, `files_menu.go` is the right-click/`m` context menu. Untrusted remote names are `ui.StripControlAndANSI`'d at parse |
 | [`render.go`](../internal/tui/render.go) | `sanitizeStreamLine` — thin delegate to `ui.SanitizeStreamLine` (one hardened stripper shared with CLI/log) |
 | [`monitor_footer.go`](../internal/tui/monitor_footer.go) | CPU/RAM/DISK footer row rendering |
 | [`i18n.go`](../internal/tui/i18n.go) | `Lang` (RU default / EN) + every localized string |

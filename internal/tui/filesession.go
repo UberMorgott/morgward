@@ -31,7 +31,11 @@ type fileClip struct {
 // transfer (files_xfer.go) opens + closes its OWN sftp client inside its goroutine, so there
 // is no shared sftp state to race on or to use-after-close across a teardown.
 type fileSession struct {
-	cli   *sshx.Client // shared transport (owned by the workspace, not by fileSession)
+	cli *sshx.Client // shared transport (owned by the workspace, not by fileSession)
+	// lang mirrors the model's active language so the session's own op error/notice
+	// fallbacks (produced in fileSession methods that have no model) are localized. Seeded
+	// in newFileSession and refreshed by model.toggleLang.
+	lang  Lang
 	cwd   string
 	entry []fileEntry // FULL current directory listing (unfiltered)
 	// showHidden controls whether dotfiles appear; when false they are filtered out of
@@ -156,15 +160,16 @@ func (f *fileSession) cancelPrompt() {
 }
 
 // newFileSession builds a Files session over the shared client, rooted at cwd (defaults to
-// "/root" when empty). The listing is loaded later by the caller (a navigate/refresh op).
-func newFileSession(cli *sshx.Client, cwd string) *fileSession {
+// "/root" when empty). lang seeds the session's own notice localization (kept in sync by
+// model.toggleLang). The listing is loaded later by the caller (a navigate/refresh op).
+func newFileSession(cli *sshx.Client, cwd string, lang Lang) *fileSession {
 	if cwd == "" {
 		cwd = "/root"
 	}
 	ti := textinput.New()
 	ti.SetValue(cwd)
 	ti.CharLimit = 4096 // PATH_MAX is 4096 on Linux
-	return &fileSession{cli: cli, cwd: cwd, addr: ti}
+	return &fileSession{cli: cli, cwd: cwd, addr: ti, lang: lang}
 }
 
 // close tears down the Files session. It owns no sftp client (transfers own theirs) and does

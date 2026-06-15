@@ -131,7 +131,7 @@ func (m model) ensureFiles() model {
 		return m // no live transport (dial failed) → no file session
 	}
 	if m.files == nil {
-		m.files = newFileSession(m.termClient, "")
+		m.files = newFileSession(m.termClient, "", m.lang)
 		// Load the initial listing once, on first entry, so the tab isn't empty. A blocking
 		// reload is fine here (single ls, ~tens of ms) — same synchronous-SSH precedent as
 		// openTerminal's blocking Dial. Errors are surfaced inline via f.err, not fatal.

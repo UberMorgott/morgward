@@ -3,7 +3,7 @@ package tui
 import "testing"
 
 func TestNewFileSession(t *testing.T) {
-	f := newFileSession(nil, "/etc")
+	f := newFileSession(nil, "/etc", langRU)
 	if f.cwd != "/etc" || f.sel != 0 || len(f.entry) != 0 {
 		t.Fatalf("bad init: %+v", f)
 	}
@@ -11,7 +11,7 @@ func TestNewFileSession(t *testing.T) {
 }
 
 func TestNewFileSessionDefaultCwd(t *testing.T) {
-	if f := newFileSession(nil, ""); f.cwd != "/root" {
+	if f := newFileSession(nil, "", langRU); f.cwd != "/root" {
 		t.Fatalf("empty cwd should default to /root, got %q", f.cwd)
 	}
 }

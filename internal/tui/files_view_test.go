@@ -10,7 +10,7 @@ func TestFilesBodyRendersEntries(t *testing.T) {
 	m.w, m.h = 100, 40
 	m.phase = phaseTerminal
 	m.wsTab = wsFiles
-	m.files = newFileSession(nil, "/etc")
+	m.files = newFileSession(nil, "/etc", langRU)
 	m.files.entry = []fileEntry{{name: "..", isDir: true}, {name: "hosts", size: 200}}
 	m.files.sel = 1
 	body := m.filesBody()
@@ -25,7 +25,7 @@ func TestFilesViewShowsCwd(t *testing.T) {
 	m.w, m.h = 100, 40
 	m.phase = phaseTerminal
 	m.wsTab = wsFiles
-	m.files = newFileSession(nil, "/etc/nginx")
+	m.files = newFileSession(nil, "/etc/nginx", langRU)
 	if !strings.Contains(m.filesView(), "/etc/nginx") {
 		t.Fatal("address bar must show cwd")
 	}
@@ -36,7 +36,7 @@ func TestFilesRowAtClick(t *testing.T) {
 	m.w, m.h = 100, 40
 	m.phase = phaseTerminal
 	m.wsTab = wsFiles
-	m.files = newFileSession(nil, "/")
+	m.files = newFileSession(nil, "/", langRU)
 	m.files.entry = make([]fileEntry, 5)
 
 	// A click on the FIRST listing row (filesListTopRow) maps to entry index 0.
@@ -64,7 +64,7 @@ func TestWSTabAtClick(t *testing.T) {
 	m.w, m.h = 100, 40
 	m.phase = phaseTerminal
 	m.wsTab = wsFiles
-	m.files = newFileSession(nil, "/")
+	m.files = newFileSession(nil, "/", langRU)
 
 	// The tab strip lives on switcherRow. A click on the Terminal pill resolves to
 	// wsTerminal; a click on the Files pill resolves to wsFiles.

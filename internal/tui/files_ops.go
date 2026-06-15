@@ -5,6 +5,16 @@ import (
 	"strings"
 )
 
+// Deferred FM features (intentionally NOT implemented in 2b — absent by design, not bugs):
+//   - multi-select (operations act on the single selected entry only)
+//   - search / filter (no in-listing find; only the '.' hidden-file toggle)
+//   - sort (entries render in the server's `ls` order)
+//   - symlink creation (no `ln`; existing symlinks are shown + followed on navigate)
+//   - archive / extract (no tar/zip create or unpack)
+//   - directory disk-usage (`du`) totals
+//   - in-TUI Open (local-edit-and-sync) — this is the separate 2c task; the menu's "Open"
+//     item is present-but-disabled until then.
+//
 // shQuote wraps s in single quotes for safe shell interpolation, replacing each embedded
 // single quote with the standard POSIX escape sequence: close-quote, a backslash-escaped
 // quote, then re-open (see the ReplaceAll below for the exact bytes). EVERY remote
@@ -107,8 +117,9 @@ func (f *fileSession) reload() error {
 	}
 	if f.cli == nil {
 		// Surface it in f.err too (consistent with the exit/transport branches below) so a
-		// caller guarding on f.err — e.g. navigateAndReload's revert — sees the failure.
-		f.err = "no connection"
+		// caller guarding on f.err — e.g. navigateAndReload's revert — sees the failure. The
+		// returned error is internal (not a render sink); f.err is the user-visible one.
+		f.err = t(f.lang, kFmErrNoConn)
 		return fmt.Errorf("no connection")
 	}
 	r := f.cli.Run(listCmd(f.cwd))

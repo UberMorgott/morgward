@@ -387,6 +387,11 @@ func (m *model) syncPlaceholders() {
 func (m *model) toggleLang() {
 	m.lang = m.lang.next()
 	m.syncPlaceholders()
+	// Keep the Files session's own notice localization in sync (its op methods have no
+	// model, so they read f.lang for their error/notice fallbacks).
+	if m.files != nil {
+		m.files.lang = m.lang
+	}
 }
 
 func (m model) Init() tea.Cmd {

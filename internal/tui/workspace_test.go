@@ -44,7 +44,7 @@ func TestCtrlQExitsFromFilesTab(t *testing.T) {
 func TestFilesStatePersistsAcrossSwitch(t *testing.T) {
 	m, _ := termModel(t, 100, 40)
 	defer m.term.close()
-	m.files = newFileSession(m.termClient, "/var/log")
+	m.files = newFileSession(m.termClient, "/var/log", langRU)
 	m.wsTab = wsFiles
 	n1, _ := m.Update(tea.KeyPressMsg{Code: '1', Mod: tea.ModCtrl})
 	m = n1.(model)

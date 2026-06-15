@@ -110,8 +110,11 @@ func (f *fileSession) hasEntry(name string) bool {
 // runMutation runs a single mutating command, surfacing a non-zero exit's stderr in f.err
 // and reloading on success. Centralizes the run/error/reload pattern so every op is uniform.
 func (f *fileSession) runMutation(cmd string) {
-	if f == nil || f.cli == nil {
-		f.setErr("no connection")
+	if f == nil {
+		return // nothing to surface an error on
+	}
+	if f.cli == nil {
+		f.err = t(f.lang, kFmErrNoConn)
 		return
 	}
 	r := f.cli.Run(cmd)
@@ -125,20 +128,13 @@ func (f *fileSession) runMutation(cmd string) {
 			msg = strings.TrimSpace(r.Stdout)
 		}
 		if msg == "" {
-			msg = "operation failed"
+			msg = t(f.lang, kFmErrOpFailed)
 		}
 		f.err = msg
 		return
 	}
 	f.err = ""
 	_ = f.reload()
-}
-
-// setErr is a nil-safe error setter (f may be nil on a dial-failed workspace).
-func (f *fileSession) setErr(s string) {
-	if f != nil {
-		f.err = s
-	}
 }
 
 // opNewDir creates a subdirectory `name` in cwd.
@@ -192,8 +188,11 @@ func (f *fileSession) clipBaseName() string {
 // opProperties runs stat on cwd/name and surfaces the result as a read-only NOTICE (reusing
 // f.err's inline surface — it is info, not an error). Single line, trimmed.
 func (f *fileSession) opProperties(name string) {
-	if f == nil || f.cli == nil {
-		f.setErr("no connection")
+	if f == nil {
+		return
+	}
+	if f.cli == nil {
+		f.err = t(f.lang, kFmErrNoConn)
 		return
 	}
 	r := f.cli.Run(statCmd(joinPath(f.cwd, name)))
@@ -204,7 +203,7 @@ func (f *fileSession) opProperties(name string) {
 	if r.RC != 0 {
 		msg := strings.TrimSpace(r.Stderr)
 		if msg == "" {
-			msg = "stat failed"
+			msg = t(f.lang, kFmErrStatFailed)
 		}
 		f.err = msg
 		return
@@ -219,8 +218,8 @@ func (f *fileSession) opProperties(name string) {
 func (f *fileSession) opCopyPath(name string) {
 	p := joinPath(f.cwd, name)
 	if err := clipboard.WriteAll(p); err != nil {
-		f.err = "clipboard: " + err.Error()
+		f.err = t(f.lang, kFmErrClipboard) + " " + err.Error()
 		return
 	}
-	f.err = "copied path: " + p
+	f.err = t(f.lang, kFmCopiedPath) + " " + p
 }

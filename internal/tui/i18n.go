@@ -315,6 +315,13 @@ const (
 	kFmMenuCopyPath // menu item: Copy path
 	kFmMenuDownload // menu item: Download
 	kFmMenuUpload   // menu item: Upload
+
+	// FM op error/notice fallbacks (produced inside fileSession methods).
+	kFmErrOpFailed   // generic op failure (no stderr)
+	kFmErrStatFailed // stat failure (no stderr)
+	kFmErrNoConn     // no live SSH connection
+	kFmErrClipboard  // host clipboard write failed (prefix)
+	kFmCopiedPath    // copy-path success notice (prefix)
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -556,6 +563,12 @@ var tr = map[Lang]map[stringKey]string{
 		kFmMenuCopyPath: "Копировать путь",
 		kFmMenuDownload: "Скачать",
 		kFmMenuUpload:   "Загрузить",
+
+		kFmErrOpFailed:   "операция не выполнена",
+		kFmErrStatFailed: "не удалось получить свойства",
+		kFmErrNoConn:     "нет соединения",
+		kFmErrClipboard:  "буфер обмена:",
+		kFmCopiedPath:    "путь скопирован:",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -794,6 +807,12 @@ var tr = map[Lang]map[stringKey]string{
 		kFmMenuCopyPath: "Copy path",
 		kFmMenuDownload: "Download",
 		kFmMenuUpload:   "Upload",
+
+		kFmErrOpFailed:   "operation failed",
+		kFmErrStatFailed: "stat failed",
+		kFmErrNoConn:     "no connection",
+		kFmErrClipboard:  "clipboard:",
+		kFmCopiedPath:    "copied path:",
 	},
 }
 

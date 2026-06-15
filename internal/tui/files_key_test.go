@@ -13,7 +13,7 @@ func filesKeyModel(entries []fileEntry) model {
 	m.w, m.h = 100, 40
 	m.phase = phaseTerminal
 	m.wsTab = wsFiles
-	m.files = newFileSession(nil, "/etc")
+	m.files = newFileSession(nil, "/etc", langRU)
 	m.files.entry = entries
 	return m
 }
