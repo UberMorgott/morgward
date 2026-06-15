@@ -101,7 +101,7 @@ func (f *fileSession) menuMove(delta int) {
 // (skipping disabled items), Enter picks the highlighted item, Esc dismisses.
 func (m model) filesMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	f := m.files
-	switch msg.String() {
+	switch physKey(msg) {
 	case "esc":
 		f.cancelMenu()
 		return m, nil

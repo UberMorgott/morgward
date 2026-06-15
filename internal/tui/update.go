@@ -291,11 +291,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.phase == phaseTerminal {
 			return m.workspaceKey(msg)
 		}
+		// s is the LAYOUT-INDEPENDENT command shortcut (physKey) used for every bare
+		// printable hotkey below so they fire on a non-English layout too. The form phase
+		// still routes the RAW msg to updateForm (its text inputs must receive native
+		// chars); only the command switches here key off s.
+		s := physKey(msg)
 		// Language hotkey works in BOTH phases (form + run). Use 'l' to cycle ru<->en;
 		// ctrl+l also toggles. In the form phase 'l' is only intercepted when focus is
 		// NOT on a text input, so typing 'l' into a field still works.
-		if msg.String() == "ctrl+l" ||
-			(msg.String() == "l" && !(m.phase == phaseForm && m.focus < nInputs)) {
+		if s == "ctrl+l" ||
+			(s == "l" && !(m.phase == phaseForm && m.focus < nInputs)) {
 			m.toggleLang()
 			return m, nil
 		}
@@ -303,7 +308,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		}
 		// ctrl+c / q quit on every post-form screen.
-		if s := msg.String(); s == "ctrl+c" || s == "q" {
+		if s == "ctrl+c" || s == "q" {
 			m.stopSampler()
 			return m, tea.Quit
 		}
@@ -313,7 +318,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// upgrade+reboot (A8), Esc/any other key cancels it (and does NOT navigate
 			// back — the confirm owns esc while armed). This mirrors dashApplyConfirm.
 			if m.wikiUpdateConfirm {
-				switch msg.String() {
+				switch s {
 				case "enter":
 					m.wikiUpdateConfirm = false
 					return m.startSteps([]string{"A8"})
@@ -325,7 +330,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Any "back" key returns to wherever the wiki was opened from (summary);
 			// ↑↓/k/j scroll the description when it overflows the middle region.
-			switch msg.String() {
+			switch s {
 			case "enter", "esc", "b":
 				m.phase = m.wikiReturn
 			case "a":
@@ -358,7 +363,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// On the summary, enter/esc/b go to the post-connect home (Dashboard when
 			// connected, else the form); ↑↓/k/j scroll the two-column body when it
 			// overflows the (button-reserved) middle region.
-			switch msg.String() {
+			switch s {
 			case "enter", "esc", "b":
 				return m.summaryGoHome()
 			case "up", "k":
@@ -370,7 +375,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case phaseMatrix:
 			// анализ audit table: "back" returns to the form/menu (stops the sampler);
 			// ↑↓/k/j scroll the table when it overflows the middle region.
-			switch msg.String() {
+			switch s {
 			case "enter", "esc", "b":
 				return m.goBack()
 			case "up", "k":
@@ -383,7 +388,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Dashboard: "back" returns to the form/menu (stops the sampler); ↑↓/k/j
 			// scroll the audit list. enter confirms the pending A8-reboot apply, esc
 			// cancels it; with no pending confirm, esc/b go back.
-			switch msg.String() {
+			switch s {
 			case "t":
 				// Open the interactive terminal (2a). Disabled while an apply-confirm is
 				// armed so the keystroke can't slip past the modal.
@@ -418,7 +423,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// esc cancels the confirm, or with no pending confirm returns to the
 			// Dashboard. ↑↓/k/j scroll if the body overflows.
 			if m.secDangerConfirm {
-				switch msg.String() {
+				switch s {
 				case "enter":
 					m.secDangerConfirm = false
 					return m.launchKeyOnlyDanger()
@@ -428,7 +433,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			switch msg.String() {
+			switch s {
 			case "1":
 				return m.securityAction(secBtnCreateAdmin)
 			case "2":
@@ -449,7 +454,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// (CHANGE 2) Enter STARTS the run with the prepared key, while Esc/b aborts
 			// back to the form; on the post-run/read-only key viewer, any "back" key
 			// returns to wherever the screen was opened from.
-			switch msg.String() {
+			switch s {
 			case "c":
 				m = m.copyKey()
 				return m, nil
@@ -472,7 +477,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// run/done phase
-		switch msg.String() {
+		switch s {
 		case "enter", "esc", "b":
 			// First advance from a FINISHED run opens the stats summary (the sampler
 			// keeps living so the monitor footer stays alive on the summary screen).
@@ -488,7 +493,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// a no-op here to avoid an accidental abort. The engine goroutine detaches
 			// and finishes on its own; goBack swaps in fresh channels and connMsg is
 			// phase-guarded so a late connect can't start a sampler on the form.
-			if msg.String() != "enter" {
+			if s != "enter" {
 				return m.goBack()
 			}
 		case "up", "k":

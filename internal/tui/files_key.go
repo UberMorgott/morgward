@@ -37,7 +37,9 @@ func (m model) filesKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // path (cwd = trimmed value, reload, blur), Esc cancels (restore cwd into the field, blur),
 // any other key edits the textinput.
 func (m model) filesAddrKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	// Control keys (enter/esc) match via physKey so they fire on any layout; every other
+	// key forwards RAW to the textinput so a non-Latin path can be typed (HARD INVARIANT).
+	switch physKey(msg) {
 	case "enter":
 		dest := trimSpaceField(m.files.addr.Value())
 		if dest != "" {
@@ -62,7 +64,7 @@ func (m model) filesAddrKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // filesListKey handles keys while the listing is focused (address bar not focused).
 func (m model) filesListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch physKey(msg) {
 	case "up", "k":
 		m.files.moveSel(-1)
 		m.files.keepSelVisible(m.filesListViewH())
@@ -109,7 +111,7 @@ func (m model) filesListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // copy/cut/paste/copy-path/properties act immediately. Unknown keys are swallowed.
 func (m model) filesOpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	f := m.files
-	switch msg.String() {
+	switch physKey(msg) {
 	case "n": // New folder
 		f.openPrompt(fpNewDir, "", t(m.lang, kFmPromptNewDir))
 		return m, nil
@@ -242,7 +244,11 @@ func (m model) filesActionClick(act fmAction) (tea.Model, tea.Cmd) {
 // other keys to the input.
 func (m model) filesPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	f := m.files
-	if msg.String() == "esc" {
+	// Control keys (esc/enter/y/Y) match via physKey so they fire on any layout; the text
+	// prompt's other keys forward RAW to the textinput (HARD INVARIANT — a non-Latin name
+	// must type verbatim).
+	pk := physKey(msg)
+	if pk == "esc" {
 		f.cancelPrompt()
 		return m, nil
 	}
@@ -250,8 +256,8 @@ func (m model) filesPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// A DESTRUCTIVE delete requires an EXPLICIT y/Y — a stray Enter (e.g. a mis-keyed
 		// 'd' followed by Enter) must NOT delete. The non-destructive paste-overwrite confirm
 		// also accepts Enter as yes. Any other key (incl 'n') cancels without acting.
-		yes := msg.String() == "y" || msg.String() == "Y"
-		if f.promptKind == fpConfirmPaste && msg.String() == "enter" {
+		yes := pk == "y" || pk == "Y"
+		if f.promptKind == fpConfirmPaste && pk == "enter" {
 			yes = true
 		}
 		var cmd tea.Cmd
@@ -261,7 +267,7 @@ func (m model) filesPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		f.cancelPrompt()
 		return m, cmd
 	}
-	if msg.String() == "enter" {
+	if pk == "enter" {
 		val := trimSpaceField(f.prompt.Value())
 		cmd := m.filesDispatchPrompt(val)
 		f.cancelPrompt()

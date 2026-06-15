@@ -146,11 +146,15 @@ func (m model) ensureFiles() model {
 // switching back to Terminal), the Terminal tab to terminalKey (so the shell still gets Tab
 // for completion). The terminal session keeps draining in the background regardless of tab.
 func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Workspace command keys (ctrl+q exit, ctrl+1/ctrl+2 tab switch, bare Tab) match via
+	// physKey so they fire on any host layout; the per-tab routing below forwards the RAW
+	// msg (terminalKey forwards native shell bytes; filesKey normalizes its own commands).
+	pk := physKey(msg)
 	// termExitKey (ctrl+q) closes the WHOLE workspace from EITHER tab — handled before any
 	// per-tab routing so the Files tab can't trap the user (the filesKey stub would
 	// otherwise swallow it). Esc is deliberately NOT a universal exit: the shell/vim needs
 	// it on the Terminal tab, and the FM reserves it on the Files tab.
-	if msg.String() == termExitKey {
+	if pk == termExitKey {
 		m = m.closeTerminal()
 		return m, nil
 	}
@@ -159,7 +163,7 @@ func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// (which ignores them, leaving the prompt intact) instead. ctrl+q above still exits.
 	fmPrompting := m.wsTab == wsFiles && m.files != nil && m.files.prompting()
 	if !fmPrompting {
-		switch msg.String() {
+		switch pk {
 		case wsSwitchTerminalKey:
 			m.wsTab = wsTerminal
 			return m, nil
@@ -179,7 +183,7 @@ func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// completion, so this gesture is only meaningful while Files is shown) — but NOT while
 		// a prompt is open (it would abandon the prompt); then the key falls through to
 		// filesKey, which leaves the prompt untouched.
-		if msg.String() == "tab" && !fmPrompting {
+		if pk == "tab" && !fmPrompting {
 			m.wsTab = wsTerminal
 			return m, nil
 		}
