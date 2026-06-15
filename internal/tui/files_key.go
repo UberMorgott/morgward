@@ -17,6 +17,11 @@ func (m model) filesKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.files == nil {
 		return m, nil
 	}
+	// The context menu takes ALL keys while open (checked FIRST, before the prompt/addr/
+	// listing gates, so listing keys are suppressed under the menu just like under a prompt).
+	if m.files.menuOpen {
+		return m.filesMenuKey(msg)
+	}
 	// A prompt/confirm takes ALL keys while open (listing keys suppressed), same gate as the
 	// address bar. Checked before addrFocus/listing so a half-typed name can't leak into nav.
 	if m.files.prompting() {
@@ -86,6 +91,11 @@ func (m model) filesListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.files.showHidden = !m.files.showHidden
 		m.files.clampSel()
 		m.files.keepSelVisible(m.filesListViewH())
+		return m, nil
+	case "m":
+		// Open the context menu for the selected entry (keyboard fallback for right-click).
+		// Anchor near the selected row; the v1 render is centered so the anchor is advisory.
+		m = m.openMenu(0, filesListTopRow+(m.files.sel-m.files.scroll))
 		return m, nil
 	default:
 		// Mutating-op shortcuts. None collide with the nav keys above (↑/↓/k/j, enter,

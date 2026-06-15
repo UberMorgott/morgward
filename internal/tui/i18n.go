@@ -297,6 +297,24 @@ const (
 	kFmUploaded       // notice prefix: "uploaded"
 	kFmUploadNoFile   // error: local file not found
 	kFmTransferring   // notice: "transferring …"
+
+	// FM context menu (right-click / 'm').
+	kFmMenuTitle    // menu box title
+	kFmMenuHint     // menu key hint: "↑/↓ · enter · esc"
+	kFmMenuNewDir   // menu item: New folder
+	kFmMenuNewFile  // menu item: New file
+	kFmMenuOpen     // menu item: Open (disabled until 2c)
+	kFmMenuRename   // menu item: Rename
+	kFmMenuDelete   // menu item: Delete
+	kFmMenuCopy     // menu item: Copy
+	kFmMenuCut      // menu item: Cut
+	kFmMenuPaste    // menu item: Paste
+	kFmMenuChmod    // menu item: chmod
+	kFmMenuChown    // menu item: chown
+	kFmMenuProps    // menu item: Properties
+	kFmMenuCopyPath // menu item: Copy path
+	kFmMenuDownload // menu item: Download
+	kFmMenuUpload   // menu item: Upload
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -521,6 +539,23 @@ var tr = map[Lang]map[stringKey]string{
 		kFmUploaded:       "загружено:",
 		kFmUploadNoFile:   "локальный файл не найден",
 		kFmTransferring:   "передача",
+
+		kFmMenuTitle:    "Действия",
+		kFmMenuHint:     "↑/↓ — выбор · enter — выполнить · esc — закрыть",
+		kFmMenuNewDir:   "Создать папку",
+		kFmMenuNewFile:  "Создать файл",
+		kFmMenuOpen:     "Открыть",
+		kFmMenuRename:   "Переименовать",
+		kFmMenuDelete:   "Удалить",
+		kFmMenuCopy:     "Копировать",
+		kFmMenuCut:      "Вырезать",
+		kFmMenuPaste:    "Вставить",
+		kFmMenuChmod:    "Права (chmod)",
+		kFmMenuChown:    "Владелец (chown)",
+		kFmMenuProps:    "Свойства",
+		kFmMenuCopyPath: "Копировать путь",
+		kFmMenuDownload: "Скачать",
+		kFmMenuUpload:   "Загрузить",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -742,6 +777,23 @@ var tr = map[Lang]map[stringKey]string{
 		kFmUploaded:       "uploaded:",
 		kFmUploadNoFile:   "local file not found",
 		kFmTransferring:   "transferring",
+
+		kFmMenuTitle:    "Actions",
+		kFmMenuHint:     "↑/↓ select · enter run · esc close",
+		kFmMenuNewDir:   "New folder",
+		kFmMenuNewFile:  "New file",
+		kFmMenuOpen:     "Open",
+		kFmMenuRename:   "Rename",
+		kFmMenuDelete:   "Delete",
+		kFmMenuCopy:     "Copy",
+		kFmMenuCut:      "Cut",
+		kFmMenuPaste:    "Paste",
+		kFmMenuChmod:    "Permissions (chmod)",
+		kFmMenuChown:    "Owner (chown)",
+		kFmMenuProps:    "Properties",
+		kFmMenuCopyPath: "Copy path",
+		kFmMenuDownload: "Download",
+		kFmMenuUpload:   "Upload",
 	},
 }
 

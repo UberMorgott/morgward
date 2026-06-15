@@ -67,6 +67,25 @@ type fileSession struct {
 	// the "transferring …" notice.
 	transferring bool
 	xferLabel    string
+
+	// Context-menu sub-state. menuOpen gates the key router (checked BEFORE prompt/addr/
+	// listing, same pattern). menuItems is built for the selected entry on open; menuSel is
+	// the highlighted item (always on an ENABLED item); menuRow/menuCol record the anchor
+	// where it was triggered (kept for a future cursor-anchored popup — v1 renders centered).
+	menuOpen         bool
+	menuItems        []fmMenuItem
+	menuSel          int
+	menuRow, menuCol int
+}
+
+// fmMenuItem is one context-menu row. key is the SAME single-char shortcut its keyboard
+// dispatch uses (e.g. "r" for Rename), so picking it synthesizes that keypress and routes
+// through the existing op handler — no duplicated op logic. A disabled item (e.g. Paste
+// with an empty clipboard, or a mutation on "..") is dimmed and unselectable.
+type fmMenuItem struct {
+	label   string
+	key     string
+	enabled bool
 }
 
 // fmPromptKind selects which mutating op the inline prompt/confirm is currently driving.

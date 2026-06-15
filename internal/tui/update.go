@@ -67,7 +67,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// with the render path (formRows/pillRanges/runView line order) so they cannot
 		// drift. The RU/EN switcher is handled first in both phases.
 		mc := msg.Mouse()
+		// RIGHT-click on a Files-tab listing row: select that row, then open the context menu
+		// anchored at the click. Handled BEFORE the left-only guard below (which drops every
+		// other non-left click). Suppressed while a prompt/transfer owns the input.
+		if mc.Button == tea.MouseRight && m.phase == phaseTerminal && m.wsTab == wsFiles &&
+			m.files != nil && !m.files.prompting() && !m.files.transferring {
+			if idx, ok := m.filesRowAtClick(mc.X, mc.Y); ok {
+				m.files.sel = idx
+			}
+			m = m.openMenu(mc.X, mc.Y)
+			return m, nil
+		}
 		if mc.Button != tea.MouseLeft {
+			return m, nil
+		}
+		// A LEFT-click while the FM context menu is open: dismiss it (the v1 menu is a
+		// centered modal, so any click outside it cancels; this also covers click-to-close).
+		if m.phase == phaseTerminal && m.wsTab == wsFiles && m.files != nil && m.files.menuOpen {
+			m.files.cancelMenu()
 			return m, nil
 		}
 		if lang, ok := m.langAtClick(mc.X, mc.Y); ok {

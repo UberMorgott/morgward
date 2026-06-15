@@ -55,6 +55,11 @@ const (
 // footer. The listing is windowed through renderScrollRegion (same scroll/scrollbar
 // pattern terminalView uses); the address bar and column header are fixed chrome above it.
 func (m model) filesView() string {
+	// The context menu is a centered modal overlay (returned early, like the dashboard's
+	// apply-confirm modal) so its compositing is geometry-bug-free.
+	if m.files != nil && m.files.menuOpen {
+		return m.filesMenuView()
+	}
 	bw := m.boxWidth()
 	innerW := innerWidth(bw)
 	b := lipgloss.RoundedBorder()
