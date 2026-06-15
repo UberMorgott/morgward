@@ -311,6 +311,18 @@ type model struct {
 	// scroll-up gesture clears it to hold position, a forwarded keystroke re-arms it.
 	// Plain bool — value-copy safe.
 	termFollow bool
+	// termBlinkOn / termBlinkTicks drive the cursor blink. The render tick increments
+	// termBlinkTicks; at the ~530ms boundary (termBlinkPeriod) termBlinkOn flips and the
+	// counter resets. termBlinkOn=true is the SOLID half (cursor drawn). A forwarded
+	// keystroke snaps it solid (true,0) for a standard terminal feel. Both plain values —
+	// copy-safe, so they stay on the value-type model (never a pointer/timer).
+	termBlinkOn    bool
+	termBlinkTicks int
+	// focused tracks host-terminal window focus via DEC ?1004 (tea.FocusMsg/BlurMsg).
+	// Real terminals stop blinking the cursor when unfocused; we draw a STEADY hollow
+	// cursor instead. Initialized true (apps launch focused; ?1004 only reports CHANGES).
+	// Plain bool — value-copy safe.
+	focused bool
 }
 
 // newModel builds the initial TUI model.
@@ -344,6 +356,7 @@ func newModel() model {
 		progCh:  make(chan engine.Progress, 256),
 		lang:    defaultLang,
 		titleK:  titleIdle,
+		focused: true, // apps launch focused; ?1004 reports CHANGES only
 	}
 	m.syncPlaceholders()
 	return m
@@ -424,6 +437,10 @@ func (m model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = m.windowTitle()
+	// Enable DEC ?1004 focus reporting so Update receives tea.FocusMsg/BlurMsg; the
+	// terminal cursor uses focus to decide blink vs. steady-hollow. Set every frame,
+	// same as the other per-View flags above.
+	v.ReportFocus = true
 	return v
 }
 

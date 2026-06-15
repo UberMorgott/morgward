@@ -33,6 +33,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg = gm.msg
 	}
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		// Host-terminal window gained focus (DEC ?1004) → resume cursor blinking.
+		m.focused = true
+		return m, nil
+	case tea.BlurMsg:
+		// Host-terminal window lost focus → draw a steady hollow cursor (no blink).
+		m.focused = false
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		// The resize poll (resizeTickMsg) delivers this every ~0.5s even when the
 		// size is unchanged; rebuilding the viewport each time would needlessly
@@ -623,6 +632,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// keep the tick cheap.)
 		if msg.gen != m.termGen || m.phase != phaseTerminal || m.term == nil {
 			return m, nil
+		}
+		// Advance the cursor blink: flip on/off at the ~530ms boundary and reset the
+		// counter. termTickInterval (25ms) divides termBlinkPeriod into ~21 ticks/flip.
+		m.termBlinkTicks++
+		if m.termBlinkTicks*int(termTickInterval) >= int(termBlinkPeriod) {
+			m.termBlinkOn = !m.termBlinkOn
+			m.termBlinkTicks = 0
 		}
 		// Follow mode: re-pin to the bottom each tick so newly-arrived output stays
 		// visible. When the user has scrolled up (termFollow=false) the offset is held.

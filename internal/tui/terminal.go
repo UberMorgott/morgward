@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/version"
 )
@@ -31,6 +33,11 @@ const termExitKey = "ctrl+q"
 // re-renders only when the emulator reports damage (see termSession.dirty), so an
 // idle shell does not busy-repaint.
 const termTickInterval = 25 * time.Millisecond
+
+// termBlinkPeriod is the cursor blink half-cycle (~530ms, the classic VT/xterm rate):
+// the cursor is solid for one period, hidden for the next. Driven by the render tick
+// (termBlinkPeriod / termTickInterval ≈ 21 ticks per flip).
+const termBlinkPeriod = 530 * time.Millisecond
 
 // termTickMsg is the terminal repaint heartbeat. It carries the session generation it
 // was scheduled under so a tick left over from a CLOSED session (a new one may have a
@@ -57,6 +64,9 @@ func (m model) openTerminal(from phase) (tea.Model, tea.Cmd) {
 	// bottom on the first render once the body length is known.
 	m.termScroll = 0
 	m.termFollow = true
+	// Cursor starts solid; the blink cycle advances on the render tick.
+	m.termBlinkOn = true
+	m.termBlinkTicks = 0
 
 	host := strings.TrimSpace(m.inputs[fHost].Value())
 	user := strings.TrimSpace(m.inputs[fUser].Value())
@@ -133,6 +143,10 @@ func (m model) terminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the response to it (standard terminal follow-on-input behavior).
 		m.termFollow = true
 		m.termPinIfFollowing()
+		// Snap the cursor SOLID immediately on a keystroke (standard terminal feel — the
+		// cursor doesn't blink-out mid-typing), restarting the blink cycle.
+		m.termBlinkOn = true
+		m.termBlinkTicks = 0
 	}
 	return m, nil
 }
@@ -242,8 +256,40 @@ func (m model) terminalView() string {
 	b := lipgloss.RoundedBorder()
 	_, rows := m.termContentSize()
 
-	body := m.terminalBody()
+	// For a LIVE session take ONE snapshot and use it for BOTH the body assembly and the
+	// cursor overlay, so the overlay maps the cursor against exactly the rows it splices
+	// (no TOCTOU vs the concurrent drain). The error/"session ended" notices are static
+	// (no cursor), so they skip the snapshot via terminalBody().
+	var body []string
+	if m.termLive() {
+		snap := m.term.cursorSnapshot()
+		body = liveBodyFromSnapshot(snap)
+		off := clampScroll(m.termScroll, len(body), rows)
+		// Overlay the blinking reverse-video cursor block (row count is unchanged, so `off`
+		// computed above still holds). No-op when inactive/hidden/scrolled-off.
+		body = m.applyCursorOverlay(body, snap)
+		return m.renderTerminalFrame(bw, innerW, b, body, rows, off)
+	}
+	body = m.terminalBody()
 	off := clampScroll(m.termScroll, len(body), rows)
+	return m.renderTerminalFrame(bw, innerW, b, body, rows, off)
+}
+
+// termLive reports whether the session is connected and running (not a dial error, not
+// nil, not finished) — the only state that has a remote cursor to draw.
+func (m model) termLive() bool {
+	if m.termErr != "" || m.term == nil {
+		return false
+	}
+	done, _ := m.term.finished()
+	return !done
+}
+
+// renderTerminalFrame draws the framed terminal chrome (titled top, switcher, the
+// windowed scroll region, hint, bottom border, monitor footer) around an already-
+// assembled (and possibly cursor-overlaid) body. Shared by the live and notice paths so
+// the chrome is identical.
+func (m model) renderTerminalFrame(bw, innerW int, b lipgloss.Border, body []string, rows, off int) string {
 
 	var sb strings.Builder
 	title := " " + version.Name + " · " + t(m.lang, kTermTitle) + " "
@@ -310,15 +356,136 @@ func (m model) terminalBody() []string {
 			helpStyle.Render(t(m.lang, kTermBackHint)),
 		}
 	}
-	// Alt-screen: the app owns the whole screen; scrollback does not apply.
-	if m.term.altScreen() {
-		return m.term.screenLines()
+	// Live content: build from a single consistent snapshot so the body and any cursor
+	// overlay share one source of truth.
+	return liveBodyFromSnapshot(m.term.cursorSnapshot())
+}
+
+// liveBodyFromSnapshot assembles the live terminal body from a consistent snapshot: on
+// the alternate screen the app owns the whole screen (scrollback is frozen/irrelevant)
+// so the body is screen-only; on the normal screen it is scrollback (oldest→newest)
+// followed by the live screen. Pure (no locked reads) — the caller passes ONE snapshot
+// so the cursor overlay can map against exactly these rows.
+func liveBodyFromSnapshot(snap termSnapshot) []string {
+	if snap.alt {
+		return snap.screen
 	}
-	// Normal screen: scrollback (oldest→newest) then the live screen below it.
-	sbLines := m.term.scrollbackLines()
-	screen := m.term.screenLines()
-	body := make([]string, 0, len(sbLines)+len(screen))
-	body = append(body, sbLines...)
-	body = append(body, screen...)
+	body := make([]string, 0, len(snap.scrollback)+len(snap.screen))
+	body = append(body, snap.scrollback...)
+	body = append(body, snap.screen...)
 	return body
+}
+
+// --- Cursor overlay -----------------------------------------------------------
+//
+// A blinking reverse-video BLOCK cursor drawn at the remote shell's cursor position.
+// The overlay is spliced into the body slice (before renderScrollRegion windows it) so
+// the cursor scrolls with the content and respects the scrollbar geometry for free.
+
+// cursorBodyRow maps the emulator cursor row `y` to an index into the assembled body
+// slice: on the NORMAL screen the body is scrollback ++ screen, so the live screen row
+// y sits at scrollbackLen+y; on the ALT screen the body is screen-only, so it is just y.
+func cursorBodyRow(scrollbackLen, y int, alt bool) int {
+	if alt {
+		return y
+	}
+	return scrollbackLen + y
+}
+
+// spliceCursorBlock overlays a reverse-video block at VISUAL column `col` of an
+// ANSI-styled row, reversing the grapheme `cell` whose display width is `cellWidth`
+// (a single space when empty). It is ANSI-aware: ansi.Cut slices by display column (not
+// byte/rune offset), so the splice lands correctly even when the row contains SGR
+// escapes. CRITICAL: the right segment is cut at col+cellWidth, NOT col+1 — a double-
+// width glyph (CJK/emoji) occupies two cells, and cutting at col+1 would land MID-glyph,
+// where ansi.Cut rounds outward and re-emits the whole glyph (duplicating it and growing
+// the row's width). cellWidth<1 clamps to 1 (a blank/zero-width cell shows a 1-cell
+// space block). A col at/past the row width clamps — the block is appended after the
+// content (cursor at end-of-line). The result has the same visual width as the input
+// (reverse video is zero-width chrome) and never duplicates the cursor glyph.
+func spliceCursorBlock(row string, col int, cell string, cellWidth int, focused bool) string {
+	if cell == "" {
+		cell = " "
+	}
+	if cellWidth < 1 {
+		cellWidth = 1
+	}
+	// Focused → a solid REVERSE-video block (the active cursor). Unfocused → an UNDERLINE
+	// span, which reads as a hollow/outline "the window isn't focused" cursor in virtually
+	// every terminal and is steady (the caller draws it every frame when unfocused). Chosen
+	// over a true box-drawing hollow cell because underline composes cleanly with the cell's
+	// existing SGR via one open/close pair — no width change, no glyph substitution.
+	on, off := "\x1b[7m", "\x1b[27m"
+	if !focused {
+		on, off = "\x1b[4m", "\x1b[24m"
+	}
+	w := ansi.StringWidth(row)
+	if col >= w {
+		// At/over the end of the printable content → append the block (end-of-line cursor).
+		// NOTE: if the row is already innerW-wide, the appended cell makes it innerW+1 and
+		// truncDisplay later drops the last cell, so a last-column cursor can visually
+		// vanish. Cosmetic, width-safe (no corruption) — accepted as a known minor.
+		return row + on + cell + off
+	}
+	// left = columns [0,col); right = columns [col+cellWidth, end) so the block spans the
+	// FULL (possibly 2-wide) cursor cell. ansi.Cut is display-aware and preserves the SGR
+	// state of each segment, so styling around the cursor survives.
+	left := ansi.Cut(row, 0, col)
+	right := ansi.Cut(row, col+cellWidth, w)
+	return left + on + cell + off + right
+}
+
+// terminalCursorActive reports whether the cursor overlay should be drawn this frame:
+// a live (not errored / nil / finished) session, the remote wants a visible cursor
+// (?25 on), AND — on the normal screen — we are pinned to the live bottom (termFollow).
+// The cursor belongs to the live prompt, so it is suppressed while the user reads
+// scrollback. On the alt screen follow does not apply (the app owns the screen), so only
+// visibility gates it.
+//
+// BLINK is focus-aware: when the host window is FOCUSED the cursor is gated on the blink
+// half (drawn only while termBlinkOn) so it blinks; when UNFOCUSED the blink gate is
+// skipped so the cursor is STEADY (real terminals stop blinking when unfocused — the
+// drawn-vs-hidden choice is the only blink mechanism, so unfocused = always drawn).
+func (m model) terminalCursorActive() bool {
+	if m.termErr != "" || m.term == nil {
+		return false
+	}
+	if done, _ := m.term.finished(); done {
+		return false
+	}
+	if !m.term.cursorShown() {
+		return false
+	}
+	if m.focused && !m.termBlinkOn {
+		return false // focused: hide on the blink-off half (so it blinks)
+	}
+	if m.term.altScreen() {
+		return true
+	}
+	return m.termFollow
+}
+
+// applyCursorOverlay returns body with the reverse-video cursor block spliced into the
+// row under the emulator cursor, mapping the cursor against the SAME snapshot used to
+// build body (so the row index can't drift from a concurrent drain — the TOCTOU the
+// separate-reads version had). A no-op (returns body unchanged) when the model gating
+// (terminalCursorActive) forbids it, the snapshot's cursor is hidden, or the cursor maps
+// outside body. body is copied before mutation so the un-overlaid slice (scroll math) is
+// untouched.
+func (m model) applyCursorOverlay(body []string, snap termSnapshot) []string {
+	if !m.terminalCursorActive() || !snap.cursorVisible {
+		return body
+	}
+	scrollbackLen := 0
+	if !snap.alt {
+		scrollbackLen = snap.scrollbackLen
+	}
+	row := cursorBodyRow(scrollbackLen, snap.cursorY, snap.alt)
+	if row < 0 || row >= len(body) {
+		return body
+	}
+	out := make([]string, len(body))
+	copy(out, body)
+	out[row] = spliceCursorBlock(out[row], snap.cursorX, snap.cursorCell, snap.cursorWidth, m.focused)
+	return out
 }
