@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	"github.com/fsnotify/fsnotify"
@@ -100,6 +101,12 @@ type fileSession struct {
 	watcher  *fsnotify.Watcher
 	watchCh  chan string
 	watchSeq int // monotonic debounce sequence; a flush acts only if it is still the latest
+
+	// Double-click tracking for the listing (main-loop-only; set/read in update.go's
+	// MouseClickMsg Files branch). A LEFT click on the SAME row within the double-click
+	// window activates the entry (dir → navigate, file → open), same as Enter.
+	lastClickRow int
+	lastClickAt  time.Time
 }
 
 // openedFile tracks one remote file opened in the local editor. remoteMtime is the remote

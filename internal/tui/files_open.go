@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -185,6 +186,25 @@ func (m model) uploadBackCmd(localPath, remotePath, label string, expectMtime in
 		}
 		return fmXferDoneMsg{upload: false, label: label, syncLocal: localPath, newMtime: newMtime}
 	}
+}
+
+// filesForcePush re-uploads an already-open file's local temp, overriding the conflict guard.
+// No-op if the file isn't open or a transfer is in flight. Used to resolve a remote-changed
+// conflict surfaced on a prior save (the "P" op / force-push).
+func (m model) filesForcePush(name string) (tea.Model, tea.Cmd) {
+	f := m.files
+	if f.transferring {
+		return m, nil
+	}
+	remote := joinPath(f.cwd, name)
+	of := f.opened[openLocalDest(remote)]
+	if of == nil {
+		return m, nil
+	}
+	f.transferring = true
+	f.xferLabel = path.Base(of.remotePath)
+	label := t(m.lang, kFmSynced) + " " + path.Base(of.remotePath)
+	return m, m.uploadBackCmd(of.localPath, of.remotePath, label, of.remoteMtime, true)
 }
 
 // errRemoteChanged signals an upload-back conflict (remote mtime moved since download).

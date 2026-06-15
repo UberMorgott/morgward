@@ -123,7 +123,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.filesActionClick(act)
 				}
 				if idx, ok := m.filesRowAtClick(mc.X, mc.Y); ok {
+					// Double-click (same row within the window) activates the entry: a directory
+					// navigates, a regular file opens locally — same as Enter (filesActivateSelected
+					// covers both). time.Now() is fine here (live TUI program, not a workflow script).
+					now := time.Now()
+					dbl := idx == m.files.sel && idx == m.files.lastClickRow &&
+						now.Sub(m.files.lastClickAt) < 400*time.Millisecond
 					m.files.sel = idx
+					m.files.lastClickRow = idx
+					m.files.lastClickAt = now
+					if dbl {
+						return m.filesActivateSelected()
+					}
 				}
 			}
 			return m, nil
@@ -707,6 +718,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.files.transferring = false
 		m.files.xferLabel = ""
 		if msg.err != nil {
+			// 2c: an open-sync upload-back conflict (remote mtime moved since the file was opened)
+			// is a localized, actionable notice ("press P to overwrite"), not a raw English error.
+			var conflict sftpConflictErr
+			if errors.As(msg.err, &conflict) {
+				m.files.setErr(t(m.lang, kFmConflict))
+				return m, nil
+			}
 			// The sftp error embeds the remote path (untrusted); sanitize at the sink. label is
 			// already from a sanitized name, but routing the whole string is harmless + uniform.
 			m.files.setErr(msg.label + ": " + msg.err.Error())

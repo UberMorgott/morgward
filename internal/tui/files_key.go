@@ -166,6 +166,16 @@ func (m model) filesOpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.filesOpenDownloadPrompt()
 	case "u": // Upload a local file into cwd — free key, no collision
 		return m.filesOpenUploadPrompt()
+	case "O": // Open the selected file locally (download → editor → sync back)
+		if e, ok := f.selectedEntry(); ok && !e.isDir && e.name != ".." {
+			return m.filesOpenLocal(e.name)
+		}
+		return m, nil
+	case "P": // Force-push the selected opened file back, overriding a remote-changed conflict
+		if e, ok := f.selectedEntry(); ok && !e.isDir {
+			return m.filesForcePush(e.name)
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -215,7 +225,7 @@ func (m model) filesPaste() (tea.Model, tea.Cmd) {
 
 // filesActionClick dispatches an action-bar pill click to the same op the keyboard
 // shortcut runs. New opens the new-folder prompt; Rename/Delete act on the selected entry;
-// Open/Download/Upload are byte-transfer ops that land in a later task (no-op for now).
+// Open opens the selected regular file locally; Download/Upload run the byte-transfer ops.
 func (m model) filesActionClick(act fmAction) (tea.Model, tea.Cmd) {
 	f := m.files
 	switch act {
@@ -234,7 +244,9 @@ func (m model) filesActionClick(act fmAction) (tea.Model, tea.Cmd) {
 	case fmActUpload:
 		return m.filesOpenUploadPrompt()
 	case fmActOpen:
-		// In-TUI file open is a later task. No-op.
+		if e, ok := f.selectedEntry(); ok && !e.isDir && e.name != ".." {
+			return m.filesOpenLocal(e.name)
+		}
 	}
 	return m, nil
 }
@@ -326,7 +338,7 @@ func (m model) filesDispatchPrompt(val string) tea.Cmd {
 }
 
 // filesActivateSelected acts on the selected entry: descending into a directory (incl
-// "..") sets cwd and reloads; a file is a no-op for now (Open lands in a later task).
+// "..") sets cwd and reloads; a regular file opens locally (download → editor → sync back).
 func (m model) filesActivateSelected() (tea.Model, tea.Cmd) {
 	vis := m.files.visibleEntries()
 	if m.files.sel < 0 || m.files.sel >= len(vis) {
@@ -334,7 +346,7 @@ func (m model) filesActivateSelected() (tea.Model, tea.Cmd) {
 	}
 	e := vis[m.files.sel]
 	if !e.isDir {
-		return m, nil // Open is a later task
+		return m.filesOpenLocal(e.name) // 2c: open in the local editor + sync back
 	}
 	// Resolve the destination (".." → parent, else join) and navigate with revert-on-fail.
 	dest := joinPath(m.files.cwd, e.name)

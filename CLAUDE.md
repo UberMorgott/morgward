@@ -141,6 +141,25 @@ path → check the other.
   `audit` and `captureAudit` repopulates the dash fields with post-apply state (stale
   connect-time checkmarks fixed).
 
+- **FM local-open-and-sync (2c).** "Open" a remote file (Enter / double-click / menu Open
+  row / the Open action / the `O` op) is an async sftp-download to `openTempDir()`
+  (`os.TempDir()/morgward-open`, dest = `openLocalDest` = `crc32(remotePath)-basename` so
+  same-named files in different remote dirs never collide) → `openLocalFileFn` (build-tagged
+  `osOpenArgs` in `openlocal_{windows,darwin,unix}.go`, ARGS **never a shell string** — the
+  remote name can't be reinterpreted). A single **lazy** `*fsnotify.Watcher` lives on the
+  pointer `*fileSession`; its pump goroutine forwards local paths on `watchCh` and **derefs
+  NOTHING** on `*fileSession` (value-copy + sshx-concurrency invariants). All debounce
+  (`fmSaveDebounce` 600ms) + conflict-check + upload-back happen on the **MAIN LOOP**
+  (`update.go` `fmOpenDoneMsg`/`fmWatchEventMsg`/`fmWatchFlushMsg`); the upload-back goroutine
+  owns its OWN sftp client. Conflict = remote mtime moved since download → `errRemoteChanged`
+  (`sftpConflictErr`), surfaced as the localized `kFmConflict` notice (special-cased via
+  `errors.As` in the `fmXferDoneMsg` error branch, NOT the raw English) → press **`P`**
+  (`filesForcePush`) to overwrite. `of.remoteMtime` is **re-stamped** after each successful
+  sync (threaded via `fmXferDoneMsg.syncLocal`/`newMtime`, NOT matched by label) so the next
+  save doesn't false-conflict. `fileSession.close()` closes the watcher (ends the pump → it
+  `close()`s `watchCh` so `listenWatch` retires) and removes the temps. Tests stub the OS
+  opener via the `openLocalFileFn` seam so they never spawn a real editor.
+
 - **Stream sanitization lives in `internal/ui` (v0.7.4).** `ui.SanitizeStreamLine` /
   `ui.StripControlAndANSI` strip ANSI escapes + C0 control chars (CR-redraw collapses to
   last segment, tabs→space, newlines preserved) from untrusted remote output. Both the

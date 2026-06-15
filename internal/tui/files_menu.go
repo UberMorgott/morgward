@@ -12,8 +12,8 @@ import (
 // the existing op dispatch (filesOpKey) — no op logic is duplicated here. Enable/disable
 // rules: mutations (rename/delete/copy/cut/chmod/chown/properties/copy-path/download) need a
 // real selected entry that is NOT the ".." parent marker; New folder/file and Upload are
-// always available; Paste needs a non-empty clipboard; Download needs a regular file; Open
-// is a placeholder (disabled until the 2c in-TUI open task).
+// always available; Paste needs a non-empty clipboard; Download and Open both need a regular
+// file (Open downloads it to a host temp and launches the local editor + sync-back).
 func (m model) buildMenuItems() []fmMenuItem {
 	f := m.files
 	_, haveSel := f.selectedName() // ok=false on ".." or out-of-range
@@ -23,7 +23,7 @@ func (m model) buildMenuItems() []fmMenuItem {
 	return []fmMenuItem{
 		{label: t(m.lang, kFmMenuNewDir), key: "n", enabled: true},
 		{label: t(m.lang, kFmMenuNewFile), key: "N", enabled: true},
-		{label: t(m.lang, kFmMenuOpen), key: "O", enabled: false}, // 2c later
+		{label: t(m.lang, kFmMenuOpen), key: "O", enabled: isRegularFile},
 		{label: t(m.lang, kFmMenuRename), key: "r", enabled: haveSel},
 		{label: t(m.lang, kFmMenuDelete), key: "d", enabled: haveSel},
 		{label: t(m.lang, kFmMenuCopy), key: "c", enabled: haveSel},

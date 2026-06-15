@@ -303,6 +303,7 @@ const (
 	kFmOpenedBinary // notice prefix: "Opened binary file (edit at your own risk):"
 	kFmOpenError    // error: "Open failed"
 	kFmSynced       // notice prefix: "Synced back:"
+	kFmConflict     // error: remote changed since open — press P to overwrite
 
 	// FM context menu (right-click / 'm').
 	kFmMenuTitle    // menu box title
@@ -557,6 +558,7 @@ var tr = map[Lang]map[stringKey]string{
 		kFmOpenedBinary: "Открыт бинарный файл (правка на свой риск):",
 		kFmOpenError:    "Ошибка открытия",
 		kFmSynced:       "Синхронизировано:",
+		kFmConflict:     "Удалённый файл изменился — нажмите P для перезаписи",
 
 		kFmMenuTitle:    "Действия",
 		kFmMenuHint:     "↑/↓ — выбор · enter — выполнить · esc — закрыть",
@@ -806,6 +808,7 @@ var tr = map[Lang]map[stringKey]string{
 		kFmOpenedBinary: "Opened binary file (edit at your own risk):",
 		kFmOpenError:    "Open failed",
 		kFmSynced:       "Synced back:",
+		kFmConflict:     "Remote changed — press P to overwrite",
 
 		kFmMenuTitle:    "Actions",
 		kFmMenuHint:     "↑/↓ select · enter run · esc close",
