@@ -132,6 +132,10 @@ func (m model) ensureFiles() model {
 	}
 	if m.files == nil {
 		m.files = newFileSession(m.termClient, "")
+		// Load the initial listing once, on first entry, so the tab isn't empty. A blocking
+		// reload is fine here (single ls, ~tens of ms) — same synchronous-SSH precedent as
+		// openTerminal's blocking Dial. Errors are surfaced inline via f.err, not fatal.
+		_ = m.files.reload()
 	}
 	return m
 }
@@ -174,14 +178,6 @@ func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.filesKey(msg)
 	}
 	return m.terminalKey(msg)
-}
-
-// filesKey handles a keypress while the Files tab is shown. STUB for now — the real file
-// manager key bindings (navigate, open, copy/cut/paste, delete, refresh) land in a later
-// task; ctrl+1/ctrl+2 tab switching and a bare Tab (back to Terminal) are handled by the
-// caller (workspaceKey), so for the moment unhandled keys are simply swallowed.
-func (m model) filesKey(_ tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	return m, nil
 }
 
 // terminalKey handles a keypress while the terminal screen is focused. termExitKey

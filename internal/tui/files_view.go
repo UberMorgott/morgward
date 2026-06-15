@@ -70,7 +70,13 @@ func (m model) filesView() string {
 	sb.WriteString(m.filesTabStripLine(b, innerW))
 	sb.WriteByte('\n')
 
-	// Address bar (cwd) and column header — fixed chrome above the listing.
+	// Address bar (cwd) and column header — fixed chrome above the listing. Size the
+	// editable input to the content area minus the "◂ " prefix so its cursor view fits the
+	// frame (contentLine still truncates as a backstop). SetWidth is deterministic +
+	// idempotent, so doing it at render time keeps the geometry self-consistent.
+	if m.files != nil {
+		m.files.addr.SetWidth(maxi(innerW-2, 8))
+	}
 	sb.WriteString(contentLine(b, m.filesAddressText(), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(contentLine(b, helpStyle.Render(m.filesColHeader(innerW)), innerW))
@@ -103,11 +109,19 @@ func (m model) filesScrollOff() int {
 	return m.files.scroll
 }
 
-// filesAddressText is the address-bar content: a dim "◂ " prefix + the current cwd.
-// Plain text for this task (the editable input + Enter-navigate lands in the ops task).
+// filesAddressText is the address-bar content: a dim "◂ " prefix + the cwd. When the
+// address bar is FOCUSED it shows the editable textinput's view (cursor + typed path);
+// otherwise it shows the current cwd as static accent text. Enter navigates, Esc cancels
+// (see filesKey).
 func (m model) filesAddressText() string {
+	if m.files == nil {
+		return helpStyle.Render("◂ ") + focusStyle.Render("/")
+	}
+	if m.files.addrFocus {
+		return helpStyle.Render("◂ ") + m.files.addr.View()
+	}
 	cwd := "/"
-	if m.files != nil && m.files.cwd != "" {
+	if m.files.cwd != "" {
 		cwd = m.files.cwd
 	}
 	return helpStyle.Render("◂ ") + focusStyle.Render(cwd)
@@ -134,13 +148,17 @@ func (m model) fileNameColW(innerW int) int {
 // row per fileEntry, columns Name / Size / Perms / Modified, the selected row banded with
 // fileSelStyle. An empty listing yields a single dim placeholder. Nil-safe.
 func (m model) filesBody() []string {
-	innerW := innerWidth(m.boxWidth())
-	nameW := m.fileNameColW(innerW)
-	if m.files == nil || len(m.files.entry) == 0 {
+	if m.files == nil {
 		return []string{helpStyle.Render(t(m.lang, kFmEmpty))}
 	}
-	lines := make([]string, len(m.files.entry))
-	for i, e := range m.files.entry {
+	innerW := innerWidth(m.boxWidth())
+	nameW := m.fileNameColW(innerW)
+	vis := m.files.visibleEntries()
+	if len(vis) == 0 {
+		return []string{helpStyle.Render(t(m.lang, kFmEmpty))}
+	}
+	lines := make([]string, len(vis))
+	for i, e := range vis {
 		lines[i] = m.fileRow(e, i == m.files.sel, nameW)
 	}
 	return lines
@@ -269,7 +287,11 @@ func (m model) wsTabAtClick(x, y int) (wsTab, bool) {
 // geometry filesBody/renderScrollRegion draw (same fixed top + offset as
 // dashAuditRowAtClick).
 func (m model) filesRowAtClick(_, y int) (int, bool) {
-	if m.files == nil || len(m.files.entry) == 0 {
+	if m.files == nil {
+		return 0, false
+	}
+	vis := m.files.visibleEntries()
+	if len(vis) == 0 {
 		return 0, false
 	}
 	viewH := m.filesListViewH()
@@ -280,7 +302,7 @@ func (m model) filesRowAtClick(_, y int) (int, bool) {
 		return 0, false
 	}
 	idx := off + rowInRegion
-	if idx < 0 || idx >= len(m.files.entry) {
+	if idx < 0 || idx >= len(vis) {
 		return 0, false
 	}
 	return idx, true
