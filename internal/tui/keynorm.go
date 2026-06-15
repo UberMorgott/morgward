@@ -45,8 +45,16 @@ func physKey(msg tea.KeyPressMsg) string {
 	k := msg.Key()
 	bc := k.BaseCode
 	if bc <= 0 || bc >= 0x80 || !unicode.IsPrint(bc) {
-		// BaseCode unusable (non-Kitty Linux/macOS, or a non-printable code) → best effort:
-		// return String() unchanged, exactly today's behavior.
+		// BaseCode unusable (legacy conhost reports BaseCode=0, or a non-printable code).
+		// Best-effort recovery: if Key.Code carries an ASCII printable char, prefer it
+		// over a non-ASCII String() so a single-letter hotkey can still match (some
+		// drivers keep Code as the logical key while Text is the layout-translated rune).
+		// Only when Code is non-ASCII too do we return the raw String() as today.
+		// NOTE: full layout-independence needs a VT/Kitty-capable console — legacy conhost
+		// cannot supply the physical key, so a non-Latin layout there is unrecoverable.
+		if asciiPrintableRune(k.Code) {
+			return string(k.Code)
+		}
 		return s
 	}
 	// Letters: apply shift (physical shift / caps) to upper-case so shift+N → "N".
@@ -88,4 +96,9 @@ func isASCIIShortcut(s string) bool {
 		}
 	}
 	return true
+}
+
+// asciiPrintableRune reports whether r is an ASCII printable char (0x20..0x7e).
+func asciiPrintableRune(r rune) bool {
+	return r >= 0x20 && r < 0x7f
 }

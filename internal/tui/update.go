@@ -817,10 +817,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		// Bracketed paste into the terminal screen → feed the pasted text to the
-		// remote shell verbatim. Other screens ignore paste here (the form's inputs
-		// receive their own paste via the focused-input fallthrough below).
+		// remote shell verbatim.
 		if m.phase == phaseTerminal && m.term != nil {
 			m.term.write([]byte(msg.Content))
+			return m, nil
+		}
+		// On the form, forward the paste to the focused text input (host/address
+		// field) and apply the SAME sanitize the keypress path uses, so a Ctrl+V
+		// paste lands in the field instead of being swallowed. Other phases (no
+		// text input) ignore paste.
+		if m.phase == phaseForm && m.focus < nInputs {
+			var cmd tea.Cmd
+			m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
+			// Filter out junk (e.g. multiline paste) so a bad Host/Port can't reach the engine.
+			if clean := sanitizeField(m.focus, m.inputs[m.focus].Value()); clean != m.inputs[m.focus].Value() {
+				m.inputs[m.focus].SetValue(clean)
+			}
+			return m, cmd
 		}
 		return m, nil
 	}

@@ -40,8 +40,12 @@ func TestPhysKey_DirectCases(t *testing.T) {
 		// Caps/ShiftedCode signal (no ModShift) still upper-cases a letter.
 		{"shiftedcode upper", tea.KeyPressMsg{Text: "Т", Code: 'т', BaseCode: 'n', ShiftedCode: 'N'}, "N"},
 
-		// Fallback: BaseCode == 0 (non-Kitty Linux/macOS) → return String() unchanged.
+		// Fallback: BaseCode == 0 (non-Kitty Linux/macOS) AND non-ASCII Text/Code →
+		// unrecoverable, return String() unchanged.
 		{"basecode zero fallback", tea.KeyPressMsg{Text: "т", Code: 'т', BaseCode: 0}, "т"},
+		// Legacy conhost (BaseCode=0): String() is the non-ASCII Text "ё" (forces the
+		// fallback path), but Key.Code is the ASCII rune 'n' → recover the hotkey from Code.
+		{"basecode zero code ascii", tea.KeyPressMsg{Text: "ё", Code: 'n', BaseCode: 0}, "n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

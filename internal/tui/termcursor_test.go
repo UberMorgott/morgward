@@ -436,14 +436,20 @@ func TestFocusedBlinkStillGates(t *testing.T) {
 	}
 }
 
-// TestViewReportsFocus proves View() enables terminal focus reporting (?1004) so the
-// runtime delivers Focus/Blur messages.
+// TestViewReportsFocus proves View() enables terminal focus reporting (?1004) ONLY on
+// the embedded-terminal phase (which consumes m.focused for the cursor) and leaves it
+// off elsewhere, so ?1004 can't break mouse handling on legacy consoles.
 func TestViewReportsFocus(t *testing.T) {
 	m := newModel()
 	m.w, m.h = 80, 24
-	v := m.View()
-	if !v.ReportFocus {
-		t.Fatal("View().ReportFocus must be true so focus/blur is reported")
+	// Non-terminal phase (form): focus reporting must be OFF.
+	if v := m.View(); v.ReportFocus {
+		t.Fatal("View().ReportFocus must be false off the terminal phase (?1004 breaks mouse on legacy consoles)")
+	}
+	// Terminal phase: focus reporting must be ON so the cursor gets Focus/Blur.
+	m.phase = phaseTerminal
+	if v := m.View(); !v.ReportFocus {
+		t.Fatal("View().ReportFocus must be true on phaseTerminal so focus/blur is reported")
 	}
 }
 

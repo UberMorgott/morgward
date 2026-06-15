@@ -450,9 +450,11 @@ func (m model) View() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = m.windowTitle()
 	// Enable DEC ?1004 focus reporting so Update receives tea.FocusMsg/BlurMsg; the
-	// terminal cursor uses focus to decide blink vs. steady-hollow. Set every frame,
-	// same as the other per-View flags above.
-	v.ReportFocus = true
+	// terminal cursor uses focus to decide blink vs. steady-hollow. ONLY the embedded
+	// terminal (phaseTerminal) consumes m.focused, so request ?1004 only there —
+	// leaving it on app-wide is the prime suspect for breaking mouse clicks/wheel on
+	// legacy consoles. Other phases leave it false (the runtime stops emitting ?1004).
+	v.ReportFocus = m.phase == phaseTerminal
 	return v
 }
 
