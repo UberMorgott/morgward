@@ -87,10 +87,12 @@ func (m model) filesView() string {
 	off := clampScroll(m.filesScrollOff(), len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
 
-	// Action bar (pills) + hint + bottom border.
+	// Action bar (pills) + status/prompt line + bottom border. The status line shows (in
+	// priority order): an open prompt/confirm, else the last op notice/error (f.err), else
+	// the ops shortcut hint.
 	sb.WriteString(contentLine(b, m.filesActionBar(), innerW))
 	sb.WriteByte('\n')
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kFmHint)), innerW))
+	sb.WriteString(contentLine(b, m.filesStatusLine(innerW), innerW))
 	sb.WriteByte('\n')
 	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
 	sb.WriteByte('\n')
@@ -184,16 +186,35 @@ func (m model) fileRow(e fileEntry, selected bool, nameW int) string {
 	return row
 }
 
-// filesActionBar renders the bottom action-pill row (dim pills). Click/operation wiring
-// lands in the next (ops) task; this only draws them so the layout is settled.
+// filesActionBar renders the bottom action-pill row (dim pills). Clicks resolve to ops via
+// filesActionAtClick (same labels + start col).
 func (m model) filesActionBar() string {
 	return " " + strings.Join(m.filesActionLabels(), " ")
 }
 
-// filesActionLabels is the ordered action-bar pill labels — the SINGLE source for both the
-// render path (filesActionBar) and a later hit-test, so their geometry cannot diverge.
-func (m model) filesActionLabels() []string {
-	names := []string{
+// filesStatusLine is the line below the action bar: an open text prompt (label + input),
+// an open confirm (label + y/n hint), the last op notice/error (f.err), or the ops shortcut
+// hint when idle. Priority: prompt > confirm > notice > hint.
+func (m model) filesStatusLine(innerW int) string {
+	f := m.files
+	if f != nil && f.prompting() {
+		if f.isConfirm() {
+			return tipStyle.Render(f.promptMsg) + "  " + helpStyle.Render(t(m.lang, kFmConfirmYesNo))
+		}
+		f.prompt.SetWidth(maxi(innerW-lipgloss.Width(f.promptMsg)-2, 8))
+		return tipStyle.Render(f.promptMsg) + " " + f.prompt.View()
+	}
+	if f != nil && f.err != "" {
+		return tipStyle.Render(truncDisplay(f.err, innerW))
+	}
+	return helpStyle.Render(t(m.lang, kFmOpsHint))
+}
+
+// filesActionNames is the ordered RAW action-bar pill labels (unstyled) — the SINGLE source
+// for both the render path (filesActionLabels) and the click hit-test (filesActionAtClick),
+// so their x-geometry cannot diverge.
+func (m model) filesActionNames() []string {
+	return []string{
 		t(m.lang, kFmActNew),
 		t(m.lang, kFmActOpen),
 		t(m.lang, kFmActDownload),
@@ -201,11 +222,62 @@ func (m model) filesActionLabels() []string {
 		t(m.lang, kFmActRename),
 		t(m.lang, kFmActDelete),
 	}
+}
+
+// filesActionLabels renders the raw names into dim pills for the action bar.
+func (m model) filesActionLabels() []string {
+	names := m.filesActionNames()
 	pills := make([]string, len(names))
 	for i, n := range names {
 		pills[i] = pillStyle.Render(n)
 	}
 	return pills
+}
+
+// fmAction enumerates the action-bar pills resolved by filesActionAtClick.
+type fmAction int
+
+const (
+	fmActNone fmAction = iota
+	fmActNew
+	fmActOpen
+	fmActDownload
+	fmActUpload
+	fmActRename
+	fmActDelete
+)
+
+// filesActionStartCol is the absolute X where the first action pill begins: 2 (left border +
+// the leading space filesActionBar prepends). Matches the contentLine content origin.
+const filesActionStartCol = 2
+
+// filesActionRowY is the FIXED screen Y of the action-bar row: it follows the 4 fixed header
+// rows + the listing region (filesListTopRow + viewH). Pinned chrome (does not scroll).
+func (m model) filesActionRowY() int {
+	return filesListTopRow + m.filesListViewH()
+}
+
+// filesActionAtClick maps a click at (x,y) to an action pill (pillRanges over the same raw
+// labels + start col the action bar rendered), or fmActNone on a miss.
+func (m model) filesActionAtClick(x, y int) fmAction {
+	if m.wsTab != wsFiles || y != m.filesActionRowY() {
+		return fmActNone
+	}
+	switch pillIndexAt(m.filesActionNames(), filesActionStartCol, x) {
+	case 0:
+		return fmActNew
+	case 1:
+		return fmActOpen
+	case 2:
+		return fmActDownload
+	case 3:
+		return fmActUpload
+	case 4:
+		return fmActRename
+	case 5:
+		return fmActDelete
+	}
+	return fmActNone
 }
 
 // --- tab strip ----------------------------------------------------------------

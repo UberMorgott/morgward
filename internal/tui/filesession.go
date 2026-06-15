@@ -50,6 +50,81 @@ type fileSession struct {
 	// safely rides on the pointer-held session.
 	addr      textinput.Model
 	addrFocus bool
+
+	// Prompt sub-state for the mutating ops that need a value (new name, rename, chmod mode,
+	// chown spec) or a yes/no (delete, overwrite-on-paste). While promptKind != fpNone every
+	// keystroke routes to the prompt handler (listing keys suppressed) — same gate as
+	// addrFocus. prompt is the inline input; promptMsg is the localized label; promptArg
+	// carries the target name (e.g. the entry being renamed/deleted) into the confirm.
+	promptKind fmPromptKind
+	prompt     textinput.Model
+	promptMsg  string
+	promptArg  string
+}
+
+// fmPromptKind selects which mutating op the inline prompt/confirm is currently driving.
+type fmPromptKind int
+
+const (
+	fpNone          fmPromptKind = iota // no prompt active
+	fpNewDir                            // text: new folder name
+	fpNewFile                           // text: new file name
+	fpRename                            // text: new name (seeded to the old)
+	fpChmod                             // text: octal/symbolic mode
+	fpChown                             // text: user[:group]
+	fpConfirmDelete                     // yes/no: delete promptArg
+	fpConfirmPaste                      // yes/no: overwrite an existing name on paste
+)
+
+// prompting reports whether an inline prompt/confirm is currently open (gates the key
+// router + the view's prompt line). Nil-safe.
+func (f *fileSession) prompting() bool {
+	return f != nil && f.promptKind != fpNone
+}
+
+// isConfirm reports whether the active prompt is a yes/no confirm (vs a text-entry prompt).
+func (f *fileSession) isConfirm() bool {
+	return f.promptKind == fpConfirmDelete || f.promptKind == fpConfirmPaste
+}
+
+// openPrompt opens a TEXT prompt of the given kind, seeding the input to seed (e.g. the
+// current name for a rename), focusing it, and recording the localized label. promptArg is
+// set to seed (the rename case wants the OLD name as the dispatch target); ops that need a
+// distinct target (chmod/chown act on the SELECTED entry, not on the typed value) set
+// promptArg explicitly after this call.
+func (f *fileSession) openPrompt(kind fmPromptKind, seed, msg string) {
+	f.promptKind = kind
+	f.promptMsg = msg
+	f.promptArg = seed
+	ti := textinput.New()
+	ti.SetValue(seed)
+	ti.CharLimit = 4096
+	ti.Focus()
+	ti.CursorEnd()
+	f.prompt = ti
+}
+
+// openPromptFor opens a text prompt (empty input) whose dispatch target is `arg` — for
+// chmod/chown, which act on the selected entry while the typed value is the mode/spec.
+func (f *fileSession) openPromptFor(kind fmPromptKind, arg, msg string) {
+	f.openPrompt(kind, "", msg)
+	f.promptArg = arg
+}
+
+// openConfirm opens a yes/no confirm of the given kind (no text input), with the target
+// name stashed in promptArg and the localized prompt in promptMsg.
+func (f *fileSession) openConfirm(kind fmPromptKind, arg, msg string) {
+	f.promptKind = kind
+	f.promptMsg = msg
+	f.promptArg = arg
+}
+
+// cancelPrompt closes any open prompt/confirm and blurs the input.
+func (f *fileSession) cancelPrompt() {
+	f.promptKind = fpNone
+	f.promptMsg = ""
+	f.promptArg = ""
+	f.prompt.Blur()
 }
 
 // newFileSession builds a Files session over the shared client, rooted at cwd (defaults to

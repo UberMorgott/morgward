@@ -18,6 +18,123 @@ func filesKeyModel(entries []fileEntry) model {
 	return m
 }
 
+// 'r' opens a rename prompt seeded with the selected name; the listing keys are suppressed
+// while it's open (a typed 'j' edits the input, doesn't move the selection).
+func TestFilesKeyRenamePromptSuppressesListing(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "old.conf"}})
+	m.files.sel = 1
+	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'r'})
+	m = n.(model)
+	if m.files.promptKind != fpRename || m.files.prompt.Value() != "old.conf" {
+		t.Fatalf("'r' must open a rename prompt seeded with the name: kind=%d val=%q", m.files.promptKind, m.files.prompt.Value())
+	}
+	// A 'j' now edits the prompt (listing suppressed): sel stays put, input grows.
+	selBefore := m.files.sel
+	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = n.(model)
+	if m.files.sel != selBefore {
+		t.Fatal("listing key must be suppressed while prompting")
+	}
+	// Esc cancels back to no prompt.
+	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = n.(model)
+	if m.files.prompting() {
+		t.Fatal("Esc must close the prompt")
+	}
+}
+
+// 'd' opens a delete CONFIRM (not an immediate delete); 'n' (no) closes it WITHOUT acting.
+func TestFilesKeyDeleteConfirmNoCancels(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "victim"}})
+	m.files.sel = 1
+	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'd'})
+	m = n.(model)
+	if m.files.promptKind != fpConfirmDelete || m.files.promptArg != "victim" {
+		t.Fatalf("'d' must open a delete confirm for the selected entry: kind=%d arg=%q", m.files.promptKind, m.files.promptArg)
+	}
+	if !m.files.isConfirm() {
+		t.Fatal("delete prompt must be a yes/no confirm")
+	}
+	// 'n' = no → confirm closes, nothing deleted (nil cli would have set err on a real op).
+	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	m = n.(model)
+	if m.files.prompting() {
+		t.Fatal("'n' must close the confirm")
+	}
+	if m.files.err != "" {
+		t.Fatalf("'n' must not run the delete op (no err expected), got %q", m.files.err)
+	}
+}
+
+// A bare Enter must NOT confirm a DESTRUCTIVE delete — only an explicit y/Y. A stray Enter
+// after a mis-keyed 'd' cancels the confirm without deleting.
+func TestFilesKeyDeleteRequiresExplicitY(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "victim"}})
+	m.files.sel = 1
+	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'd'})
+	m = n.(model)
+	if m.files.promptKind != fpConfirmDelete {
+		t.Fatalf("'d' must open a delete confirm: kind=%d", m.files.promptKind)
+	}
+	// A bare Enter must cancel (NOT run the delete) — nil cli would have set f.err if it ran.
+	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = n.(model)
+	if m.files.prompting() {
+		t.Fatal("Enter must close the delete confirm")
+	}
+	if m.files.err != "" {
+		t.Fatalf("bare Enter must NOT run the delete op, got err=%q", m.files.err)
+	}
+}
+
+// Tab pressed mid-prompt must NOT flip tabs and abandon the prompt; the prompt stays open
+// and the tab is unchanged.
+func TestFilesTabMidPromptKeepsPrompt(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "old"}})
+	m.files.sel = 1
+	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'r'}) // open rename prompt
+	m = n.(model)
+	if !m.files.prompting() {
+		t.Fatal("precondition: rename prompt should be open")
+	}
+	// Route through workspaceKey (the real entry point that intercepts Tab) with a bare Tab.
+	n, _ = m.workspaceKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = n.(model)
+	if m.wsTab != wsFiles {
+		t.Fatal("Tab mid-prompt must NOT switch to the Terminal tab")
+	}
+	if !m.files.prompting() {
+		t.Fatal("Tab mid-prompt must leave the prompt open")
+	}
+}
+
+// '..' is never a mutation target: 'r'/'d' on the parent marker are no-ops.
+func TestFilesKeyMutationRejectsParentMarker(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}})
+	m.files.sel = 0 // ".."
+	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'r'})
+	m = n.(model)
+	if m.files.prompting() {
+		t.Fatal("rename on '..' must be a no-op")
+	}
+	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'd'})
+	m = n.(model)
+	if m.files.prompting() {
+		t.Fatal("delete on '..' must be a no-op")
+	}
+}
+
+// Copy sets the clipboard (no SSH); a later Paste uses it.
+func TestFilesKeyCopySetsClip(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "src"}})
+	m.files.sel = 1
+	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'c'})
+	m = n.(model)
+	if m.files.clip.path != "/etc/src" || m.files.clip.cut {
+		t.Fatalf("copy clip = %+v want /etc/src cut=false", m.files.clip)
+	}
+}
+
 // ↓/↑ move the selection within the visible slice (clamped).
 func TestFilesKeyMovesSelection(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}, {name: "b"}})

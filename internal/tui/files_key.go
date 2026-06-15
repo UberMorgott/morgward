@@ -17,6 +17,11 @@ func (m model) filesKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.files == nil {
 		return m, nil
 	}
+	// A prompt/confirm takes ALL keys while open (listing keys suppressed), same gate as the
+	// address bar. Checked before addrFocus/listing so a half-typed name can't leak into nav.
+	if m.files.prompting() {
+		return m.filesPromptKey(msg)
+	}
 	if m.files.addrFocus {
 		return m.filesAddrKey(msg)
 	}
@@ -82,8 +87,175 @@ func (m model) filesListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.files.clampSel()
 		m.files.keepSelVisible(m.filesListViewH())
 		return m, nil
+	default:
+		// Mutating-op shortcuts. None collide with the nav keys above (↑/↓/k/j, enter,
+		// backspace, ':'/'/', '.') nor the workspace keys consumed upstream (ctrl+1/2/q, tab).
+		return m.filesOpKey(msg)
+	}
+}
+
+// filesOpKey dispatches the mutating-op keyboard shortcuts (only reached when not prompting
+// and not address-focused). Ops needing a value open a text prompt; delete opens a confirm;
+// copy/cut/paste/copy-path/properties act immediately. Unknown keys are swallowed.
+func (m model) filesOpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	f := m.files
+	switch msg.String() {
+	case "n": // New folder
+		f.openPrompt(fpNewDir, "", t(m.lang, kFmPromptNewDir))
+		return m, nil
+	case "N": // New file
+		f.openPrompt(fpNewFile, "", t(m.lang, kFmPromptNewFile))
+		return m, nil
+	case "r": // Rename (seed with the current name)
+		if name, ok := f.selectedName(); ok {
+			f.openPrompt(fpRename, name, t(m.lang, kFmPromptRename))
+		}
+		return m, nil
+	case "d", "delete": // Delete (yes/no confirm)
+		if name, ok := f.selectedName(); ok {
+			f.openConfirm(fpConfirmDelete, name, t(m.lang, kFmConfirmDelete)+" "+name+"?")
+		}
+		return m, nil
+	case "c": // Copy
+		if name, ok := f.selectedName(); ok {
+			f.clip = fileClip{path: joinPath(f.cwd, name), cut: false}
+			f.err = t(m.lang, kFmCopied) + " " + name
+		}
+		return m, nil
+	case "x": // Cut
+		if name, ok := f.selectedName(); ok {
+			f.clip = fileClip{path: joinPath(f.cwd, name), cut: true}
+			f.err = t(m.lang, kFmCut) + " " + name
+		}
+		return m, nil
+	case "v": // Paste (overwrite gated behind a confirm)
+		return m.filesPaste()
+	case "g": // chmod
+		if name, ok := f.selectedName(); ok {
+			f.openPromptFor(fpChmod, name, t(m.lang, kFmPromptChmod))
+		}
+		return m, nil
+	case "o": // chown
+		if name, ok := f.selectedName(); ok {
+			f.openPromptFor(fpChown, name, t(m.lang, kFmPromptChown))
+		}
+		return m, nil
+	case "p": // Properties (stat)
+		if name, ok := f.selectedName(); ok {
+			f.opProperties(name)
+		}
+		return m, nil
+	case "y": // Copy path to host clipboard
+		if name, ok := f.selectedName(); ok {
+			f.opCopyPath(name)
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+// filesPaste pastes the clipboard into cwd; when a same-named entry already exists it opens
+// an overwrite confirm instead of clobbering silently. No-op on an empty clipboard.
+func (m model) filesPaste() (tea.Model, tea.Cmd) {
+	f := m.files
+	if f.clip.path == "" {
+		return m, nil
+	}
+	if f.hasEntry(f.clipBaseName()) {
+		f.openConfirm(fpConfirmPaste, f.clipBaseName(), t(m.lang, kFmConfirmOverwrite)+" "+f.clipBaseName()+"?")
+		return m, nil
+	}
+	f.opPaste()
+	return m, nil
+}
+
+// filesActionClick dispatches an action-bar pill click to the same op the keyboard
+// shortcut runs. New opens the new-folder prompt; Rename/Delete act on the selected entry;
+// Open/Download/Upload are byte-transfer ops that land in a later task (no-op for now).
+func (m model) filesActionClick(act fmAction) (tea.Model, tea.Cmd) {
+	f := m.files
+	switch act {
+	case fmActNew:
+		f.openPrompt(fpNewDir, "", t(m.lang, kFmPromptNewDir))
+	case fmActRename:
+		if name, ok := f.selectedName(); ok {
+			f.openPrompt(fpRename, name, t(m.lang, kFmPromptRename))
+		}
+	case fmActDelete:
+		if name, ok := f.selectedName(); ok {
+			f.openConfirm(fpConfirmDelete, name, t(m.lang, kFmConfirmDelete)+" "+name+"?")
+		}
+	case fmActOpen, fmActDownload, fmActUpload:
+		// Byte-transfer ops — later task. No-op.
+	}
+	return m, nil
+}
+
+// filesPromptKey routes keys while a prompt/confirm is open: Esc cancels; a confirm reads
+// y/Enter (yes) vs anything else (no); a text prompt reads Enter (dispatch) and forwards
+// other keys to the input.
+func (m model) filesPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	f := m.files
+	if msg.String() == "esc" {
+		f.cancelPrompt()
+		return m, nil
+	}
+	if f.isConfirm() {
+		// A DESTRUCTIVE delete requires an EXPLICIT y/Y — a stray Enter (e.g. a mis-keyed
+		// 'd' followed by Enter) must NOT delete. The non-destructive paste-overwrite confirm
+		// also accepts Enter as yes. Any other key (incl 'n') cancels without acting.
+		yes := msg.String() == "y" || msg.String() == "Y"
+		if f.promptKind == fpConfirmPaste && msg.String() == "enter" {
+			yes = true
+		}
+		if yes {
+			m.filesDispatchPrompt("")
+		}
+		f.cancelPrompt()
+		return m, nil
+	}
+	if msg.String() == "enter" {
+		val := trimSpaceField(f.prompt.Value())
+		m.filesDispatchPrompt(val)
+		f.cancelPrompt()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	f.prompt, cmd = f.prompt.Update(msg)
+	return m, cmd
+}
+
+// filesDispatchPrompt runs the op for the active promptKind with the entered value (text
+// prompts) or the stashed promptArg (confirms). Called with the prompt still open; the
+// caller closes it afterward. An empty text value is a no-op (nothing to create/rename to).
+func (m model) filesDispatchPrompt(val string) {
+	f := m.files
+	switch f.promptKind {
+	case fpNewDir:
+		if val != "" {
+			f.opNewDir(val)
+		}
+	case fpNewFile:
+		if val != "" {
+			f.opNewFile(val)
+		}
+	case fpRename:
+		if val != "" && val != f.promptArg {
+			f.opRename(f.promptArg, val)
+		}
+	case fpChmod:
+		if val != "" {
+			f.opChmod(f.promptArg, val)
+		}
+	case fpChown:
+		if val != "" {
+			f.opChown(f.promptArg, val)
+		}
+	case fpConfirmDelete:
+		f.opDelete(f.promptArg)
+	case fpConfirmPaste:
+		f.opPaste()
+	}
 }
 
 // filesActivateSelected acts on the selected entry: descending into a directory (incl

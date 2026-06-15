@@ -154,24 +154,32 @@ func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.closeTerminal()
 		return m, nil
 	}
-	switch msg.String() {
-	case wsSwitchTerminalKey:
-		m.wsTab = wsTerminal
-		return m, nil
-	case wsSwitchFilesKey:
-		// Only switch to Files if a session actually exists after ensureFiles — when the
-		// dial failed (nil termClient) ensureFiles creates nothing, so stay on Terminal
-		// rather than flip to a Files tab that can't work.
-		m = m.ensureFiles()
-		if m.files != nil {
-			m.wsTab = wsFiles
+	// While an FM prompt/confirm is open, the tab-switch keys (ctrl+1/ctrl+2/bare-Tab) must
+	// NOT silently flip tabs and abandon the half-entered prompt — route them into filesKey
+	// (which ignores them, leaving the prompt intact) instead. ctrl+q above still exits.
+	fmPrompting := m.wsTab == wsFiles && m.files != nil && m.files.prompting()
+	if !fmPrompting {
+		switch msg.String() {
+		case wsSwitchTerminalKey:
+			m.wsTab = wsTerminal
+			return m, nil
+		case wsSwitchFilesKey:
+			// Only switch to Files if a session actually exists after ensureFiles — when the
+			// dial failed (nil termClient) ensureFiles creates nothing, so stay on Terminal
+			// rather than flip to a Files tab that can't work.
+			m = m.ensureFiles()
+			if m.files != nil {
+				m.wsTab = wsFiles
+			}
+			return m, nil
 		}
-		return m, nil
 	}
 	if m.wsTab == wsFiles {
 		// A bare Tab on the Files tab returns to the Terminal tab (the shell wants Tab for
-		// completion, so this gesture is only meaningful while Files is shown).
-		if msg.String() == "tab" {
+		// completion, so this gesture is only meaningful while Files is shown) — but NOT while
+		// a prompt is open (it would abandon the prompt); then the key falls through to
+		// filesKey, which leaves the prompt untouched.
+		if msg.String() == "tab" && !fmPrompting {
 			m.wsTab = wsTerminal
 			return m, nil
 		}

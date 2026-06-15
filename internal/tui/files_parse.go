@@ -3,6 +3,8 @@ package tui
 import (
 	"strconv"
 	"strings"
+
+	"github.com/UberMorgott/morgward/internal/ui"
 )
 
 // fileEntry is one row of a remote directory listing, parsed from the stdout of
@@ -58,6 +60,12 @@ func parseListing(out string) []fileEntry {
 				e.target = name[i+len(" -> "):]
 			}
 		}
+		// Remote filenames are UNTRUSTED: a name/target may carry ANSI escapes or C0
+		// control bytes. Sanitize at the SOURCE (project invariant — all untrusted remote
+		// output passes ui.StripControlAndANSI before any render sink), which neutralizes
+		// both the listing render AND every later notice/op that splices a stored name.
+		e.name = ui.StripControlAndANSI(e.name)
+		e.target = ui.StripControlAndANSI(e.target)
 		entries = append(entries, e)
 	}
 	return entries

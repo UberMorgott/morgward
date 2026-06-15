@@ -100,7 +100,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// On the Files tab, a click on a listing row selects that entry (operations
 			// land in a later task). Index space is the VISIBLE slice (filesRowAtClick),
 			// matching sel + the view.
-			if m.wsTab == wsFiles && m.files != nil {
+			if m.wsTab == wsFiles && m.files != nil && !m.files.prompting() {
+				if act := m.filesActionAtClick(mc.X, mc.Y); act != fmActNone {
+					return m.filesActionClick(act)
+				}
 				if idx, ok := m.filesRowAtClick(mc.X, mc.Y); ok {
 					m.files.sel = idx
 				}

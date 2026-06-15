@@ -1,6 +1,32 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// Remote filenames are untrusted: an embedded ANSI escape / control byte must be STRIPPED
+// from the parsed name (and symlink target) at the source, so it can never reach a render
+// sink (the listing, or a notice that splices the name).
+func TestParseListingSanitizesName(t *testing.T) {
+	out := "-rw-r--r-- 1 r r 5 2026-06-09 09:20 \x1b[31mevil\x1b[0m\n"
+	got := parseListing(out)
+	if len(got) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(got))
+	}
+	if strings.ContainsRune(got[0].name, 0x1b) {
+		t.Fatalf("name still contains an ESC byte: %q", got[0].name)
+	}
+	if got[0].name != "evil" {
+		t.Fatalf("name = %q want %q (escapes stripped)", got[0].name, "evil")
+	}
+	// A symlink target with an escape is sanitized too.
+	out2 := "lrwxrwxrwx 1 r r 7 2026-06-09 09:20 link -> \x1b[31m/etc/x\n"
+	g2 := parseListing(out2)
+	if len(g2) != 1 || strings.ContainsRune(g2[0].target, 0x1b) {
+		t.Fatalf("target not sanitized: %+v", g2)
+	}
+}
 
 func TestParseListing(t *testing.T) {
 	out := "total 12\n" +

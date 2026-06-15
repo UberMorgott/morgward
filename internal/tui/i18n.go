@@ -276,6 +276,19 @@ const (
 	kFmActUpload   // action pill: "Загрузить" / "Upload"
 	kFmActRename   // action pill: "Переименовать" / "Rename"
 	kFmActDelete   // action pill: "Удалить" / "Delete"
+
+	// FM mutating-op prompts / confirms / notices (2b ops).
+	kFmPromptNewDir     // prompt: new folder name
+	kFmPromptNewFile    // prompt: new file name
+	kFmPromptRename     // prompt: new name
+	kFmPromptChmod      // prompt: chmod mode
+	kFmPromptChown      // prompt: chown spec (user[:group])
+	kFmConfirmDelete    // confirm prefix: "Delete"
+	kFmConfirmOverwrite // confirm prefix: "Overwrite"
+	kFmConfirmYesNo     // confirm key hint: "y — yes · any other — no"
+	kFmCopied           // notice prefix: "Copied"
+	kFmCut              // notice prefix: "Cut"
+	kFmOpsHint          // ops shortcut hint line
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -474,13 +487,25 @@ var tr = map[Lang]map[stringKey]string{
 		kFmColPerms:    "Права",
 		kFmColMTime:    "Изменён",
 		kFmEmpty:       "(пусто)",
-		kFmHint:        "файлы · ↑/↓ выбор · ctrl+1/ctrl+2 вкладки · ctrl+q — выход · l — язык",
+		kFmHint:        "файлы · ↑/↓ выбор · enter — открыть · ctrl+1/ctrl+2 вкладки · ctrl+q выход",
 		kFmActNew:      "Создать ▾",
 		kFmActOpen:     "Открыть",
 		kFmActDownload: "Скачать",
 		kFmActUpload:   "Загрузить",
 		kFmActRename:   "Переименовать",
 		kFmActDelete:   "Удалить",
+
+		kFmPromptNewDir:     "Имя новой папки:",
+		kFmPromptNewFile:    "Имя нового файла:",
+		kFmPromptRename:     "Новое имя:",
+		kFmPromptChmod:      "Права (chmod), напр. 644:",
+		kFmPromptChown:      "Владелец (chown), напр. root:root:",
+		kFmConfirmDelete:    "Удалить",
+		kFmConfirmOverwrite: "Перезаписать",
+		kFmConfirmYesNo:     "y — да · любая другая — нет · esc — отмена",
+		kFmCopied:           "Скопировано:",
+		kFmCut:              "Вырезано:",
+		kFmOpsHint:          "n папка · N файл · r имя · d удалить · c копир · x вырез · v встав · g права · o влад · p инфо · y путь",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -676,13 +701,25 @@ var tr = map[Lang]map[stringKey]string{
 		kFmColPerms:    "Perms",
 		kFmColMTime:    "Modified",
 		kFmEmpty:       "(empty)",
-		kFmHint:        "files · ↑/↓ select · ctrl+1/ctrl+2 tabs · ctrl+q to exit · l language",
+		kFmHint:        "files · ↑/↓ select · enter open · ctrl+1/ctrl+2 tabs · ctrl+q exit",
 		kFmActNew:      "New ▾",
 		kFmActOpen:     "Open",
 		kFmActDownload: "Download",
 		kFmActUpload:   "Upload",
 		kFmActRename:   "Rename",
 		kFmActDelete:   "Delete",
+
+		kFmPromptNewDir:     "New folder name:",
+		kFmPromptNewFile:    "New file name:",
+		kFmPromptRename:     "New name:",
+		kFmPromptChmod:      "Mode (chmod), e.g. 644:",
+		kFmPromptChown:      "Owner (chown), e.g. root:root:",
+		kFmConfirmDelete:    "Delete",
+		kFmConfirmOverwrite: "Overwrite",
+		kFmConfirmYesNo:     "y — yes · any other — no · esc — cancel",
+		kFmCopied:           "Copied:",
+		kFmCut:              "Cut:",
+		kFmOpsHint:          "n dir · N file · r name · d del · c copy · x cut · v paste · g perms · o own · p info · y path",
 	},
 }
 
