@@ -124,7 +124,7 @@ func (f *fileSession) reload() error {
 	}
 	r := f.cli.Run(listCmd(f.cwd))
 	if r.Err != nil {
-		f.err = r.Err.Error()
+		f.setErr(r.Err.Error())
 		return r.Err
 	}
 	if r.RC != 0 {
@@ -134,7 +134,7 @@ func (f *fileSession) reload() error {
 		if msg == "" {
 			msg = fmt.Sprintf("ls exited %d", r.RC)
 		}
-		f.err = msg
+		f.setErr(msg) // ls stderr echoes the dir name — sanitize at the sink
 		return nil
 	}
 	f.err = ""

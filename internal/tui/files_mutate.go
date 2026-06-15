@@ -119,7 +119,7 @@ func (f *fileSession) runMutation(cmd string) {
 	}
 	r := f.cli.Run(cmd)
 	if r.Err != nil {
-		f.err = r.Err.Error()
+		f.setErr(r.Err.Error())
 		return
 	}
 	if r.RC != 0 {
@@ -130,7 +130,7 @@ func (f *fileSession) runMutation(cmd string) {
 		if msg == "" {
 			msg = t(f.lang, kFmErrOpFailed)
 		}
-		f.err = msg
+		f.setErr(msg) // remote stderr echoes the filename — sanitize at the sink
 		return
 	}
 	f.err = ""
@@ -197,7 +197,7 @@ func (f *fileSession) opProperties(name string) {
 	}
 	r := f.cli.Run(statCmd(joinPath(f.cwd, name)))
 	if r.Err != nil {
-		f.err = r.Err.Error()
+		f.setErr(r.Err.Error())
 		return
 	}
 	if r.RC != 0 {
@@ -205,7 +205,7 @@ func (f *fileSession) opProperties(name string) {
 		if msg == "" {
 			msg = t(f.lang, kFmErrStatFailed)
 		}
-		f.err = msg
+		f.setErr(msg) // remote stderr echoes the filename — sanitize at the sink
 		return
 	}
 	// stat stdout is untrusted remote output — strip ANSI/control bytes before it reaches

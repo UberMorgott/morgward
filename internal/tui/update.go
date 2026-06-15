@@ -701,7 +701,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.files.transferring = false
 		m.files.xferLabel = ""
 		if msg.err != nil {
-			m.files.err = msg.label + ": " + msg.err.Error()
+			// The sftp error embeds the remote path (untrusted); sanitize at the sink. label is
+			// already from a sanitized name, but routing the whole string is harmless + uniform.
+			m.files.setErr(msg.label + ": " + msg.err.Error())
 			return m, nil
 		}
 		if msg.upload {

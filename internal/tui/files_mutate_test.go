@@ -1,6 +1,27 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// setErr strips control/ANSI bytes from a remote-derived error before it lands in f.err
+// (the status-line render sink) — remote stderr echoes attacker-controllable filenames.
+func TestSetErrStripsControl(t *testing.T) {
+	f := newFileSession(nil, "/", langRU)
+	f.setErr("\x1b[31mrm: cannot remove 'x'\x1b[0m")
+	if strings.ContainsRune(f.err, 0x1b) {
+		t.Fatalf("setErr left an ESC byte: %q", f.err)
+	}
+	if f.err != "rm: cannot remove 'x'" {
+		t.Fatalf("setErr = %q want %q", f.err, "rm: cannot remove 'x'")
+	}
+	// A bare control byte (no CSI) is also stripped.
+	f.setErr("\x1b[31mevil")
+	if f.err != "evil" {
+		t.Fatalf("setErr = %q want %q", f.err, "evil")
+	}
+}
 
 func TestMkdirCmd(t *testing.T) {
 	if got := mkdirCmd("/etc/nginx", "new dir"); got != `mkdir -p -- '/etc/nginx/new dir'` {

@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
+	"github.com/UberMorgott/morgward/internal/ui"
 )
 
 // wsTab selects which tab of the terminal workspace is shown. The terminal session and
@@ -65,10 +66,13 @@ type fileSession struct {
 	promptMsg  string
 	promptArg  string
 
-	// transferring is true while an ASYNC sftp Download/Upload is in flight. The sftp client
-	// is NOT concurrency-safe, so a second transfer trigger is ignored until the in-flight
-	// one posts its fmXferDoneMsg (which clears this). xferLabel is the entry name shown in
-	// the "transferring …" notice.
+	// transferring is true while an ASYNC sftp Download/Upload is in flight. A SECOND transfer
+	// is gated out (one sftp transfer at a time) until the in-flight one posts its
+	// fmXferDoneMsg (which clears this). Navigation (reload→cli.Run) and synchronous mutations
+	// are deliberately NOT blocked during a transfer and may safely OVERLAP it: each opens its
+	// OWN ssh channel (Run = a fresh session, the transfer = its own sftp channel) on the
+	// concurrency-safe underlying *ssh.Client, so they don't share state and can't race.
+	// xferLabel is the entry name shown in the "transferring …" notice.
 	transferring bool
 	xferLabel    string
 
@@ -180,3 +184,11 @@ func newFileSession(cli *sshx.Client, cwd string, lang Lang) *fileSession {
 func (f *fileSession) close() {
 	_ = f // nothing to release; transfers own + close their own sftp client
 }
+
+// setErr stores an inline error/notice, stripping untrusted remote control/ANSI bytes
+// before it reaches the status-line render sink. Remote stderr/error text routinely echoes
+// the (attacker-controllable) remote filename — e.g. "rm: cannot remove '<name>'" — so every
+// error sink must funnel through here (the project invariant: all untrusted remote output
+// passes ui.StripControlAndANSI before any render). f.err is rendered via truncDisplay,
+// which does NOT itself strip control bytes, so the sanitization must happen here.
+func (f *fileSession) setErr(s string) { f.err = ui.StripControlAndANSI(s) }
