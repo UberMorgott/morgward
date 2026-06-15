@@ -197,6 +197,9 @@ func (m model) filesActionBar() string {
 // hint when idle. Priority: prompt > confirm > notice > hint.
 func (m model) filesStatusLine(innerW int) string {
 	f := m.files
+	if f != nil && f.transferring {
+		return tipStyle.Render("⟳ " + t(m.lang, kFmTransferring) + " " + f.xferLabel + "…")
+	}
 	if f != nil && f.prompting() {
 		if f.isConfirm() {
 			return tipStyle.Render(f.promptMsg) + "  " + helpStyle.Render(t(m.lang, kFmConfirmYesNo))

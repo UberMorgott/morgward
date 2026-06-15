@@ -673,6 +673,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termPinIfFollowing()
 		return m, termTick(m.termGen)
 
+	case fmXferDoneMsg:
+		// An async FM Download/Upload finished. Clear the in-flight flag (so a new transfer
+		// can start), then surface the outcome: an error → f.err; success → the notice. An
+		// upload reloads the listing so the new remote file appears. Guard a nil session
+		// (the workspace could have been torn down mid-transfer).
+		if m.files == nil {
+			return m, nil
+		}
+		m.files.transferring = false
+		m.files.xferLabel = ""
+		if msg.err != nil {
+			m.files.err = msg.label + ": " + msg.err.Error()
+			return m, nil
+		}
+		if msg.upload {
+			_ = m.files.reload() // refresh so the uploaded file appears
+		}
+		m.files.err = msg.label // success notice (reload above may have set err; overwrite)
+		return m, nil
+
 	case tea.PasteMsg:
 		// Bracketed paste into the terminal screen → feed the pasted text to the
 		// remote shell verbatim. Other screens ignore paste here (the form's inputs

@@ -289,6 +289,14 @@ const (
 	kFmCopied           // notice prefix: "Copied"
 	kFmCut              // notice prefix: "Cut"
 	kFmOpsHint          // ops shortcut hint line
+
+	// FM byte-transfer (download/upload) prompts + notices.
+	kFmPromptDownload // prompt: local destination path
+	kFmPromptUpload   // prompt: local source path
+	kFmDownloaded     // notice prefix: "downloaded"
+	kFmUploaded       // notice prefix: "uploaded"
+	kFmUploadNoFile   // error: local file not found
+	kFmTransferring   // notice: "transferring …"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -505,7 +513,14 @@ var tr = map[Lang]map[stringKey]string{
 		kFmConfirmYesNo:     "y — да · любая другая — нет · esc — отмена",
 		kFmCopied:           "Скопировано:",
 		kFmCut:              "Вырезано:",
-		kFmOpsHint:          "n папка · N файл · r имя · d удалить · c копир · x вырез · v встав · g права · o влад · p инфо · y путь",
+		kFmOpsHint:          "n папка · N файл · r имя · d удал · c копир · x вырез · v встав · g права · o влад · p инфо · y путь · w скач · u загр",
+
+		kFmPromptDownload: "Скачать в (локальный путь):",
+		kFmPromptUpload:   "Загрузить файл (локальный путь):",
+		kFmDownloaded:     "скачано:",
+		kFmUploaded:       "загружено:",
+		kFmUploadNoFile:   "локальный файл не найден",
+		kFmTransferring:   "передача",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -719,7 +734,14 @@ var tr = map[Lang]map[stringKey]string{
 		kFmConfirmYesNo:     "y — yes · any other — no · esc — cancel",
 		kFmCopied:           "Copied:",
 		kFmCut:              "Cut:",
-		kFmOpsHint:          "n dir · N file · r name · d del · c copy · x cut · v paste · g perms · o own · p info · y path",
+		kFmOpsHint:          "n dir · N file · r name · d del · c copy · x cut · v paste · g perms · o own · p info · y path · w get · u put",
+
+		kFmPromptDownload: "Download to (local path):",
+		kFmPromptUpload:   "Upload file (local path):",
+		kFmDownloaded:     "downloaded:",
+		kFmUploaded:       "uploaded:",
+		kFmUploadNoFile:   "local file not found",
+		kFmTransferring:   "transferring",
 	},
 }
 

@@ -150,7 +150,39 @@ func (m model) filesOpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			f.opCopyPath(name)
 		}
 		return m, nil
+	case "w": // Download the selected file (Write to disk) — free key, no collision
+		return m.filesOpenDownloadPrompt()
+	case "u": // Upload a local file into cwd — free key, no collision
+		return m.filesOpenUploadPrompt()
 	}
+	return m, nil
+}
+
+// filesOpenDownloadPrompt opens the download prompt for the selected file, seeded with the
+// resolved local destination (downloads dir + basename) so the operator can edit it. A
+// directory entry / ".." is not downloadable (no-op). Blocked while a transfer is in flight.
+func (m model) filesOpenDownloadPrompt() (tea.Model, tea.Cmd) {
+	f := m.files
+	if f.transferring {
+		return m, nil
+	}
+	e, ok := f.selectedEntry()
+	if !ok || e.isDir || e.name == ".." {
+		return m, nil // only regular files are downloadable here
+	}
+	f.openPrompt(fpDownload, downloadLocalDest(e.name), t(m.lang, kFmPromptDownload))
+	f.promptArg = e.name // dispatch target is the REMOTE name; the value is the local dest
+	return m, nil
+}
+
+// filesOpenUploadPrompt opens the upload prompt for a local source path (empty input; the
+// operator types/pastes a host path). Blocked while a transfer is in flight.
+func (m model) filesOpenUploadPrompt() (tea.Model, tea.Cmd) {
+	f := m.files
+	if f.transferring {
+		return m, nil
+	}
+	f.openPrompt(fpUpload, "", t(m.lang, kFmPromptUpload))
 	return m, nil
 }
 
@@ -185,8 +217,12 @@ func (m model) filesActionClick(act fmAction) (tea.Model, tea.Cmd) {
 		if name, ok := f.selectedName(); ok {
 			f.openConfirm(fpConfirmDelete, name, t(m.lang, kFmConfirmDelete)+" "+name+"?")
 		}
-	case fmActOpen, fmActDownload, fmActUpload:
-		// Byte-transfer ops — later task. No-op.
+	case fmActDownload:
+		return m.filesOpenDownloadPrompt()
+	case fmActUpload:
+		return m.filesOpenUploadPrompt()
+	case fmActOpen:
+		// In-TUI file open is a later task. No-op.
 	}
 	return m, nil
 }
@@ -208,17 +244,18 @@ func (m model) filesPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if f.promptKind == fpConfirmPaste && msg.String() == "enter" {
 			yes = true
 		}
+		var cmd tea.Cmd
 		if yes {
-			m.filesDispatchPrompt("")
+			cmd = m.filesDispatchPrompt("")
 		}
 		f.cancelPrompt()
-		return m, nil
+		return m, cmd
 	}
 	if msg.String() == "enter" {
 		val := trimSpaceField(f.prompt.Value())
-		m.filesDispatchPrompt(val)
+		cmd := m.filesDispatchPrompt(val)
 		f.cancelPrompt()
-		return m, nil
+		return m, cmd
 	}
 	var cmd tea.Cmd
 	f.prompt, cmd = f.prompt.Update(msg)
@@ -228,7 +265,9 @@ func (m model) filesPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // filesDispatchPrompt runs the op for the active promptKind with the entered value (text
 // prompts) or the stashed promptArg (confirms). Called with the prompt still open; the
 // caller closes it afterward. An empty text value is a no-op (nothing to create/rename to).
-func (m model) filesDispatchPrompt(val string) {
+// Returns a non-nil tea.Cmd ONLY for the async transfer kinds (download/upload); the
+// synchronous ops return nil.
+func (m model) filesDispatchPrompt(val string) tea.Cmd {
 	f := m.files
 	switch f.promptKind {
 	case fpNewDir:
@@ -255,7 +294,19 @@ func (m model) filesDispatchPrompt(val string) {
 		f.opDelete(f.promptArg)
 	case fpConfirmPaste:
 		f.opPaste()
+	case fpDownload:
+		// promptArg is the remote basename being downloaded; val is the (edited) local dest.
+		// The download Cmd uses the resolved dest from the prompt value.
+		if val != "" {
+			return m.filesStartDownloadTo(f.promptArg, val)
+		}
+	case fpUpload:
+		if val != "" {
+			_, cmd := m.filesStartUpload(val)
+			return cmd
+		}
 	}
+	return nil
 }
 
 // filesActivateSelected acts on the selected entry: descending into a directory (incl

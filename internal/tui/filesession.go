@@ -2,7 +2,6 @@ package tui
 
 import (
 	"charm.land/bubbles/v2/textinput"
-	"github.com/pkg/sftp"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
 )
@@ -24,14 +23,15 @@ type fileClip struct {
 	cut  bool
 }
 
-// fileSession is the NON-COPYABLE state of the Files tab: the (lazily-opened) sftp client
-// plus the browse state (cwd, listing, selection, scroll, clipboard, last error). It is
-// held by the model behind a POINTER so the value-copied model stays copyable (same gotcha
-// as termSession). The SSH client is SHARED with the terminal (dialed once by the
-// workspace) and is NOT owned here — close() never closes cli, only the sftp client.
+// fileSession is the NON-COPYABLE state of the Files tab: the browse state (cwd, listing,
+// selection, scroll, clipboard, last error, address/prompt inputs). It is held by the model
+// behind a POINTER so the value-copied model stays copyable (same gotcha as termSession).
+// The SSH client is SHARED with the terminal (dialed once by the workspace) and is NOT owned
+// here — close() never closes cli. The session does NOT cache an sftp client: each async
+// transfer (files_xfer.go) opens + closes its OWN sftp client inside its goroutine, so there
+// is no shared sftp state to race on or to use-after-close across a teardown.
 type fileSession struct {
 	cli   *sshx.Client // shared transport (owned by the workspace, not by fileSession)
-	sftp  *sftp.Client // lazily opened on first byte transfer; nil until ensureSFTP
 	cwd   string
 	entry []fileEntry // FULL current directory listing (unfiltered)
 	// showHidden controls whether dotfiles appear; when false they are filtered out of
@@ -60,6 +60,13 @@ type fileSession struct {
 	prompt     textinput.Model
 	promptMsg  string
 	promptArg  string
+
+	// transferring is true while an ASYNC sftp Download/Upload is in flight. The sftp client
+	// is NOT concurrency-safe, so a second transfer trigger is ignored until the in-flight
+	// one posts its fmXferDoneMsg (which clears this). xferLabel is the entry name shown in
+	// the "transferring …" notice.
+	transferring bool
+	xferLabel    string
 }
 
 // fmPromptKind selects which mutating op the inline prompt/confirm is currently driving.
@@ -74,6 +81,8 @@ const (
 	fpChown                             // text: user[:group]
 	fpConfirmDelete                     // yes/no: delete promptArg
 	fpConfirmPaste                      // yes/no: overwrite an existing name on paste
+	fpDownload                          // text: local dest path (download the selected file)
+	fpUpload                            // text: local source path (upload into cwd)
 )
 
 // prompting reports whether an inline prompt/confirm is currently open (gates the key
@@ -139,27 +148,11 @@ func newFileSession(cli *sshx.Client, cwd string) *fileSession {
 	return &fileSession{cli: cli, cwd: cwd, addr: ti}
 }
 
-// ensureSFTP opens the sftp subsystem on first use and caches it. Safe to call repeatedly.
-func (f *fileSession) ensureSFTP() error {
-	if f.sftp != nil {
-		return nil
-	}
-	sc, err := f.cli.SFTP()
-	if err != nil {
-		return err
-	}
-	f.sftp = sc
-	return nil
-}
-
-// close releases the sftp client if it was opened. It does NOT close f.cli — the workspace
-// owns that transport. Idempotent and nil-safe.
+// close tears down the Files session. It owns no sftp client (transfers own theirs) and does
+// NOT close f.cli — the workspace owns that transport — so this is a nil-safe no-op kept for
+// API symmetry with termSession.close() and to satisfy the teardown/home-nav call sites.
+// (A nil-safe no-op is deliberately race-free vs an in-flight transfer: there is nothing
+// shared to close.)
 func (f *fileSession) close() {
-	if f == nil {
-		return
-	}
-	if f.sftp != nil {
-		_ = f.sftp.Close()
-		f.sftp = nil
-	}
+	_ = f // nothing to release; transfers own + close their own sftp client
 }
