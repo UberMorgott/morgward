@@ -253,12 +253,13 @@ const (
 	kFixNotNeeded // "не требуется" / "not needed"
 
 	// --- terminal screen (phaseTerminal, 2a) ----------------------------------
-	kDashTermButton // dashboard action button: "Терминал ▸" / "Terminal ▸"
-	kTermTitle      // terminal box title suffix: "Терминал" / "Terminal"
-	kTermHint       // terminal control hint (Ctrl+Q to exit)
-	kTermBackHint   // "esc / ctrl+q — назад" shown on the error/ended notice
-	kTermDialFail   // dial/setup failure prefix
-	kTermEnded      // "Сессия завершена" / "Session ended"
+	kDashTermButton  // dashboard action button: "Терминал ▸" / "Terminal ▸"
+	kDashFilesButton // dashboard action button: "Файлы ▸" / "Files ▸" (opens the workspace on the Files tab)
+	kTermTitle       // terminal box title suffix: "Терминал" / "Terminal"
+	kTermHint        // terminal control hint (Ctrl+Q to exit)
+	kTermBackHint    // "esc / ctrl+q — назад" shown on the error/ended notice
+	kTermDialFail    // dial/setup failure prefix
+	kTermEnded       // "Сессия завершена" / "Session ended"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -442,12 +443,13 @@ var tr = map[Lang]map[stringKey]string{
 
 		kFixNotNeeded: "не требуется",
 
-		kDashTermButton: "Терминал ▸",
-		kTermTitle:      "Терминал",
-		kTermHint:       "SSH-терминал · колесо / shift+pgup — прокрутка · ctrl+q — выход · l — язык",
-		kTermBackHint:   "esc / ctrl+q — назад",
-		kTermDialFail:   "не удалось подключиться",
-		kTermEnded:      "Сессия завершена",
+		kDashTermButton:  "Терминал ▸",
+		kDashFilesButton: "Файлы ▸",
+		kTermTitle:       "Терминал",
+		kTermHint:        "SSH-терминал · колесо / shift+pgup — прокрутка · ctrl+q — выход · l — язык",
+		kTermBackHint:    "esc / ctrl+q — назад",
+		kTermDialFail:    "не удалось подключиться",
+		kTermEnded:       "Сессия завершена",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -628,12 +630,13 @@ var tr = map[Lang]map[stringKey]string{
 
 		kFixNotNeeded: "not needed",
 
-		kDashTermButton: "Terminal ▸",
-		kTermTitle:      "Terminal",
-		kTermHint:       "SSH terminal · wheel / shift+pgup to scroll · ctrl+q to exit · l language",
-		kTermBackHint:   "esc / ctrl+q to go back",
-		kTermDialFail:   "could not connect",
-		kTermEnded:      "Session ended",
+		kDashTermButton:  "Terminal ▸",
+		kDashFilesButton: "Files ▸",
+		kTermTitle:       "Terminal",
+		kTermHint:        "SSH terminal · wheel / shift+pgup to scroll · ctrl+q to exit · l language",
+		kTermBackHint:    "esc / ctrl+q to go back",
+		kTermDialFail:    "could not connect",
+		kTermEnded:       "Session ended",
 	},
 }
 

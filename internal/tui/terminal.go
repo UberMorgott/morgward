@@ -54,8 +54,10 @@ func termTick(gen int) tea.Cmd {
 // retry) and constructs the termSession sized to the current content area, then
 // switches to phaseTerminal. On a dial/setup failure it still switches to the
 // screen but records termErr so the failure is shown in place (Esc/Ctrl+Q returns).
-// from is the phase to return to on exit.
-func (m model) openTerminal(from phase) (tea.Model, tea.Cmd) {
+// from is the phase to return to on exit. initialTab selects which workspace tab is shown
+// first (wsTerminal for the shell, wsFiles to land in the file manager); the terminal
+// session is dialed + started regardless of the initial tab.
+func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
 	m.termReturn = from
 	m.termErr = ""
 	m.termGen++
@@ -101,7 +103,85 @@ func (m model) openTerminal(from phase) (tea.Model, tea.Cmd) {
 	// Make sure the emulator/pty match the actual content area immediately (the
 	// WindowSizeMsg may not re-fire until a resize), then start the repaint tick.
 	m.term.resize(cols, rows)
+	// Select the initial workspace tab; when landing on Files, open the FM session over
+	// the same shared transport (default cwd "/root") so the tab is ready to render.
+	m.wsTab = initialTab
+	if initialTab == wsFiles {
+		m = m.ensureFiles()
+	}
 	return m, termTick(m.termGen)
+}
+
+// wsSwitchTerminalKey / wsSwitchFilesKey select the workspace tab from EITHER tab.
+// ctrl+1/ctrl+2 are reserved for tab switching (a shell rarely needs them; the FM never
+// forwards keys), so they are intercepted before any per-tab routing.
+const (
+	wsSwitchTerminalKey = "ctrl+1"
+	wsSwitchFilesKey    = "ctrl+2"
+)
+
+// ensureFiles lazily creates the Files session over the shared terminal transport
+// (default cwd "/root") if it does not exist yet. Idempotent — a no-op once created so a
+// tab round-trip preserves the browse state. The listing is loaded by a later op (T5/T6).
+// When the terminal dial FAILED (openTerminal recorded termErr and left termClient nil)
+// there is no live transport to open sftp over, so it creates NOTHING — a Files session
+// over a nil client would nil-deref the moment a later op calls cli.SFTP().
+func (m model) ensureFiles() model {
+	if m.termClient == nil {
+		return m // no live transport (dial failed) → no file session
+	}
+	if m.files == nil {
+		m.files = newFileSession(m.termClient, "")
+	}
+	return m
+}
+
+// workspaceKey is the top-level keypress router for the terminal workspace (phaseTerminal).
+// It FIRST handles the cross-tab switch keys (ctrl+1 → Terminal, ctrl+2 → Files), then
+// routes the remaining keys to the active tab: the Files tab to filesKey (with a bare Tab
+// switching back to Terminal), the Terminal tab to terminalKey (so the shell still gets Tab
+// for completion). The terminal session keeps draining in the background regardless of tab.
+func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// termExitKey (ctrl+q) closes the WHOLE workspace from EITHER tab — handled before any
+	// per-tab routing so the Files tab can't trap the user (the filesKey stub would
+	// otherwise swallow it). Esc is deliberately NOT a universal exit: the shell/vim needs
+	// it on the Terminal tab, and the FM reserves it on the Files tab.
+	if msg.String() == termExitKey {
+		m = m.closeTerminal()
+		return m, nil
+	}
+	switch msg.String() {
+	case wsSwitchTerminalKey:
+		m.wsTab = wsTerminal
+		return m, nil
+	case wsSwitchFilesKey:
+		// Only switch to Files if a session actually exists after ensureFiles — when the
+		// dial failed (nil termClient) ensureFiles creates nothing, so stay on Terminal
+		// rather than flip to a Files tab that can't work.
+		m = m.ensureFiles()
+		if m.files != nil {
+			m.wsTab = wsFiles
+		}
+		return m, nil
+	}
+	if m.wsTab == wsFiles {
+		// A bare Tab on the Files tab returns to the Terminal tab (the shell wants Tab for
+		// completion, so this gesture is only meaningful while Files is shown).
+		if msg.String() == "tab" {
+			m.wsTab = wsTerminal
+			return m, nil
+		}
+		return m.filesKey(msg)
+	}
+	return m.terminalKey(msg)
+}
+
+// filesKey handles a keypress while the Files tab is shown. STUB for now — the real file
+// manager key bindings (navigate, open, copy/cut/paste, delete, refresh) land in a later
+// task; ctrl+1/ctrl+2 tab switching and a bare Tab (back to Terminal) are handled by the
+// caller (workspaceKey), so for the moment unhandled keys are simply swallowed.
+func (m model) filesKey(_ tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	return m, nil
 }
 
 // terminalKey handles a keypress while the terminal screen is focused. termExitKey
@@ -221,6 +301,14 @@ func (m model) closeTerminal() model {
 		m.term.close()
 		m.term = nil
 	}
+	// Close the Files session (its sftp client only — the shared transport is m.termClient,
+	// closed above), then reset the workspace to the default Terminal tab so a later reopen
+	// starts clean.
+	if m.files != nil {
+		m.files.close()
+		m.files = nil
+	}
+	m.wsTab = wsTerminal
 	if m.termClient != nil {
 		m.termClient.Close()
 		m.termClient = nil

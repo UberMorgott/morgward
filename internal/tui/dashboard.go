@@ -120,15 +120,16 @@ func (m model) applyConfirmModalView() string {
 	return lipgloss.Place(cw, ch, lipgloss.Center, lipgloss.Center, box)
 }
 
-// dashButtonNames is the ordered list of the two Dashboard action-button labels
-// (Apply / Security). It is the SINGLE source consumed by both the render path
-// (dashButtonsLine) and the hit-test (dashButtonAtClick), so their x-geometry
+// dashButtonNames is the ordered list of the Dashboard action-button labels
+// (Apply / Security / Terminal / Files). It is the SINGLE source consumed by both the
+// render path (dashButtonsLine) and the hit-test (dashButtonAtClick), so their x-geometry
 // cannot diverge.
 func (m model) dashButtonNames() []string {
 	return []string{
 		t(m.lang, kDashApplyButton),
 		t(m.lang, kDashSecButton),
 		t(m.lang, kDashTermButton),
+		t(m.lang, kDashFilesButton),
 	}
 }
 
@@ -540,7 +541,7 @@ func tweakWikiHeader(lang Lang, p tweaks.Probe) string {
 	return fmt.Sprintf("[%s] %s", p.ID, localTweakName(lang, p.ID, p.Name))
 }
 
-// dashButton enumerates the two Dashboard actions resolved by dashButtonAtClick.
+// dashButton enumerates the Dashboard actions resolved by dashButtonAtClick.
 type dashButton int
 
 const (
@@ -548,9 +549,10 @@ const (
 	dashBtnApply
 	dashBtnSecurity
 	dashBtnTerminal
+	dashBtnFiles
 )
 
-// dashButtonAtClick maps a click at (x,y) to one of the two action buttons, using
+// dashButtonAtClick maps a click at (x,y) to one of the action buttons, using
 // pillRanges over dashButtonNames (the same geometry dashButtonsLine renders), or
 // dashBtnNone on a miss.
 func (m model) dashButtonAtClick(x, y int) dashButton {
@@ -568,6 +570,8 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 		return dashBtnSecurity
 	case 2:
 		return dashBtnTerminal
+	case 3:
+		return dashBtnFiles
 	}
 	return dashBtnNone
 }
@@ -603,7 +607,11 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 	case dashBtnTerminal:
 		// Open the interactive terminal (2a). It dials fresh with the form's
 		// connection params; Esc/Ctrl+Q returns here.
-		return m.openTerminal(phaseDashboard)
+		return m.openTerminal(phaseDashboard, wsTerminal)
+	case dashBtnFiles:
+		// Open the terminal workspace landing directly on the Files tab (2b). Same fresh
+		// dial as the terminal; the FM session is created over the shared transport.
+		return m.openTerminal(phaseDashboard, wsFiles)
 	}
 	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's
 	// Probe.Step (matches wiki.Doc keys, e.g. "A2"); keep the specific tweak's

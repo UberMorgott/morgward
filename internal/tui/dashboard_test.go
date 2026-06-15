@@ -138,16 +138,16 @@ func TestDashboardViewRenders(t *testing.T) {
 	}
 }
 
-// TestDashboardButtonHitTest asserts each of the three buttons resolves to the
+// TestDashboardButtonHitTest asserts each of the four buttons resolves to the
 // right action when clicked at its rendered position.
 func TestDashboardButtonHitTest(t *testing.T) {
 	m := dashModel(100, 40)
 	innerW := innerWidth(m.boxWidth())
 	btnRow := m.dashButtonsRowY(innerW) // FIXED screen Y, not via the scroll offset
 	ranges := pillRanges(m.dashButtonNames(), dashButtonStartCol)
-	want := []dashButton{dashBtnApply, dashBtnSecurity, dashBtnTerminal}
+	want := []dashButton{dashBtnApply, dashBtnSecurity, dashBtnTerminal, dashBtnFiles}
 	if len(ranges) != len(want) {
-		t.Fatalf("dashButtonNames has %d buttons, want %d (Apply, Security, Terminal)", len(ranges), len(want))
+		t.Fatalf("dashButtonNames has %d buttons, want %d (Apply, Security, Terminal, Files)", len(ranges), len(want))
 	}
 	for i, r := range ranges {
 		x := r[0] + 1 // inside the pill

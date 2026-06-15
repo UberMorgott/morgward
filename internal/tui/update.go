@@ -81,6 +81,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.formClick(mc.X, mc.Y)
 		case phaseDashboard:
 			return m.dashboardClick(mc.X, mc.Y)
+		case phaseTerminal:
+			// TODO(T5): tab-strip click hit-test. T5 renders the Terminal|Files tab strip
+			// and owns its geometry; wire a wsTabAtClick(mc.X, mc.Y) here to switch tabs on a
+			// click (mirroring the ctrl+1/ctrl+2 keys in workspaceKey: a Terminal-strip click
+			// sets m.wsTab=wsTerminal, a Files-strip click does m=m.ensureFiles();
+			// m.wsTab=wsFiles). Until then a click in the workspace is a no-op.
+			return m, nil
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
 		case phaseWiki:
@@ -244,7 +251,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle it FIRST so none of the global hotkeys (language toggle, q/ctrl+c quit)
 		// below intercept input meant for the shell. Only termExitKey leaves the screen.
 		if m.phase == phaseTerminal {
-			return m.terminalKey(msg)
+			return m.workspaceKey(msg)
 		}
 		// Language hotkey works in BOTH phases (form + run). Use 'l' to cycle ru<->en;
 		// ctrl+l also toggles. In the form phase 'l' is only intercepted when focus is
@@ -343,7 +350,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Open the interactive terminal (2a). Disabled while an apply-confirm is
 				// armed so the keystroke can't slip past the modal.
 				if !m.dashApplyConfirm {
-					return m.openTerminal(phaseDashboard)
+					return m.openTerminal(phaseDashboard, wsTerminal)
 				}
 				return m, nil
 			case "enter":
@@ -753,6 +760,13 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 		m.term.close()
 		m.term = nil
 		m.termGen++
+	}
+	// Mirror closeTerminal: close the Files session (its sftp client only) BEFORE the shared
+	// transport, since sftp rides that transport. Asymmetry here would orphan an opened sftp
+	// client on a home-navigation that bypasses closeTerminal. Nil-safe.
+	if m.files != nil {
+		m.files.close()
+		m.files = nil
 	}
 	if m.termClient != nil {
 		m.termClient.Close()
