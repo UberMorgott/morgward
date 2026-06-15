@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/vt v0.0.0-20260608090822-c3ad58c6c9e5
 	github.com/creativeprojects/go-selfupdate v1.5.2
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/crypto v0.53.0
 	golang.org/x/term v0.44.0
@@ -28,7 +29,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/google/go-github/v74 v74.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect

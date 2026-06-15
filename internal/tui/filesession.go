@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"os"
+
 	"charm.land/bubbles/v2/textinput"
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/ui"
@@ -84,6 +87,30 @@ type fileSession struct {
 	menuItems        []fmMenuItem
 	menuSel          int
 	menuRow, menuCol int
+
+	// --- 2c local-open-and-sync (main-loop-only state; see files_open.go) ---
+	// opened maps a LOCAL temp path → the open record. A file opened-for-edit is downloaded
+	// to openLocalDest, launched in the host editor, and watched; on a debounced save it is
+	// uploaded back to of.remotePath. Keyed by local path because that is what the fsnotify
+	// event carries.
+	opened map[string]*openedFile
+	// watcher is the single lazily-created fsnotify watcher for this session; watchCh is the
+	// channel its pump goroutine posts local-path events on (drained by listenWatch). Both nil
+	// until the first Open. Held here (pointer session) so the value-copied model stays copyable.
+	watcher  *fsnotify.Watcher
+	watchCh  chan string
+	watchSeq int // monotonic debounce sequence; a flush acts only if it is still the latest
+}
+
+// openedFile tracks one remote file opened in the local editor. remoteMtime is the remote
+// mtime (unix seconds) captured at download time; the upload-back re-stats and refuses to
+// clobber silently if it changed (conflict). seq is the debounce generation for THIS file.
+type openedFile struct {
+	remotePath  string
+	localPath   string
+	remoteMtime int64
+	seq         int // last scheduled debounce tick for this file
+	dirty       bool
 }
 
 // fmMenuItem is one context-menu row. key is the SAME single-char shortcut its keyboard
@@ -177,12 +204,21 @@ func newFileSession(cli *sshx.Client, cwd string, lang Lang) *fileSession {
 }
 
 // close tears down the Files session. It owns no sftp client (transfers own theirs) and does
-// NOT close f.cli — the workspace owns that transport — so this is a nil-safe no-op kept for
-// API symmetry with termSession.close() and to satisfy the teardown/home-nav call sites.
-// (A nil-safe no-op is deliberately race-free vs an in-flight transfer: there is nothing
-// shared to close.)
+// NOT close f.cli — the workspace owns that transport. It DOES own the 2c open-sync watcher
+// and the opened-file temps: closing the watcher stops its pump goroutine (the watchCh range
+// ends), and the temp files downloaded for editing are removed best-effort.
 func (f *fileSession) close() {
-	_ = f // nothing to release; transfers own + close their own sftp client
+	if f == nil {
+		return
+	}
+	if f.watcher != nil {
+		_ = f.watcher.Close() // stops the pump goroutine (watchCh range ends)
+		f.watcher = nil
+	}
+	for local := range f.opened {
+		_ = os.Remove(local) // best-effort temp cleanup
+	}
+	f.opened = nil
 }
 
 // setErr stores an inline error/notice, stripping untrusted remote control/ANSI bytes
