@@ -139,7 +139,17 @@ path → check the other.
   stats channel so monitor SSH connections don't leak. **After a MUTATING run** (step /
   revert / run) the model sets `dashStale`; on returning to the Dashboard it re-runs an
   `audit` and `captureAudit` repopulates the dash fields with post-apply state (stale
-  connect-time checkmarks fixed).
+  connect-time checkmarks fixed). **Dashboard tweaks reflect ONLY the "Применить твики"
+  bucket.** That button applies `tweakBucketIDs()` and EXCLUDES the security steps
+  A2/A2.5 (opt-in via the Security menu), yet A2 has non-informational probes
+  (`a2.conf00/conf99/ecdsa_absent`). So the Dashboard grid+counters force any
+  `isSecurityStep(r.Probe.Step)` (`wiki.go`) probe to satisfied — `dashRowSatisfied`
+  (`dashboard.go`) is the single source for the ✓ glyph (`dashAuditCellText` +
+  `dashAuditCell`) AND `captureAudit`'s `dashAuditApplied` tally, so glyph + count can't
+  drift and `можно применить` reaches 0 after applying every tweak. The probes stay
+  VISIBLE in the grid (NOT marked Informational). The Security screen keeps A2's TRUE
+  state — it reads `m.dashAuditRaw` (untouched real `Applied`), never the forced display
+  set; do NOT route the force-satisfied rule into `dashAuditRaw`.
 
 - **FM local-open-and-sync (2c).** "Open" a remote file (Enter / double-click / menu Open
   row / the Open action / the `O` op) is an async sftp-download to `openTempDir()`

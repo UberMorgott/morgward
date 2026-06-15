@@ -168,6 +168,10 @@ func (m model) dashFixedLines(innerW int) []string {
 
 // dashStatusLine is the live audit status row:
 // "Анализ твиков ⠹  применено N из M · можно применить K", truncated to innerW.
+// applied (N) is the security-bucket-aware tally from captureAudit (A2/A2.5 probes
+// count satisfied — the "Применить твики" button never manages them), so canApply
+// (= M-N) reflects ONLY what that button can actually apply; after applying every
+// tweak it reaches 0 rather than sticking on the unmanaged A2 rows.
 func (m model) dashStatusLine(innerW int) string {
 	applied, total := m.dashAuditApplied, m.dashAuditTotal
 	canApply := max(total-applied, 0)
@@ -233,12 +237,21 @@ func (m model) dashAuditNumGridLines(innerW int) int {
 	return (n + cols - 1) / cols
 }
 
+// dashRowSatisfied is the SINGLE source of truth for whether an audit row shows as
+// satisfied (✓) on the Dashboard: the probe is truly applied, OR it is a SECURITY-bucket
+// probe (A2/A2.5) the "Применить твики" button never manages — those are the Security
+// menu's domain, shown ✓ here so they never count as "можно применить". captureAudit's
+// applied tally uses the same rule, so the grid glyph and the counter cannot drift.
+func dashRowSatisfied(r tweaks.Result) bool {
+	return r.Applied || isSecurityStep(r.Probe.Step)
+}
+
 // dashAuditCellText is the PLAIN (uncolored) cell text "  ✓/•  name" truncated to
 // colWidth — the single source for the cell's rendered display width, used by the
 // hit-test (lipgloss.Width over this) so a click only lands within the real text.
 func (m model) dashAuditCellText(r tweaks.Result, colWidth int) string {
 	glyph := "•"
-	if r.Applied {
+	if dashRowSatisfied(r) {
 		glyph = "✓"
 	}
 	name := localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
@@ -250,7 +263,7 @@ func (m model) dashAuditCellText(r tweaks.Result, colWidth int) string {
 // does not change the display width — the pad is computed from the plain text.
 func (m model) dashAuditCell(r tweaks.Result, colWidth int) string {
 	glyph := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("•")
-	if r.Applied {
+	if dashRowSatisfied(r) {
 		glyph = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓")
 	}
 	name := localTweakName(m.lang, r.Probe.ID, r.Probe.Name)

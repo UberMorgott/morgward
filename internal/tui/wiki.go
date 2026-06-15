@@ -253,6 +253,16 @@ func tweakBucketIDs() []string {
 	return []string{"A1", "A3", "A4", "A5", "A6", "A6.5", "A6.7", "A7", "A8", "A9", "A10"}
 }
 
+// isSecurityStep reports whether an engine step belongs to the SECURITY bucket
+// (SSH crypto/access), which is the EXACT complement of tweakBucketIDs: A2/A2.5 are
+// applied via the Security menu, NOT the Dashboard "Применить твики" button. The
+// Dashboard tweaks grid + counters force these probes to "satisfied" (the button can
+// never drive them, so they must never count as "можно применить"); the Security
+// screen keeps their TRUE state (it reads m.dashAuditRaw, untouched by this rule).
+func isSecurityStep(step string) bool {
+	return step == "A2" || step == "A2.5"
+}
+
 // bucketHasA8 reports whether the apply bucket includes A8 (full upgrade + reboot),
 // which warrants the explicit reboot-warning confirm before launching.
 func bucketHasA8(ids []string) bool {

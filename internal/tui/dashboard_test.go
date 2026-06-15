@@ -296,3 +296,87 @@ func TestTweakBucketExcludesSecuritySteps(t *testing.T) {
 		}
 	}
 }
+
+// TestIsSecurityStep guards the predicate that ties the Dashboard "force satisfied"
+// rule to the tweakBucketIDs exclusion: only A2/A2.5 are Security-menu steps.
+func TestIsSecurityStep(t *testing.T) {
+	cases := map[string]bool{"A2": true, "A2.5": true, "A4": false, "A1": false, "": false}
+	for step, want := range cases {
+		if got := isSecurityStep(step); got != want {
+			t.Fatalf("isSecurityStep(%q)=%v, want %v", step, got, want)
+		}
+	}
+}
+
+// TestCaptureAuditSecurityBucketSatisfied asserts the Dashboard tweaks counters treat
+// a SECURITY-bucket probe (Step A2/A2.5) as satisfied even when not applied — the
+// "Применить твики" button never manages it, so it must never count as "можно
+// применить". A NON-applied tweak-bucket probe (A4) still counts as pending. The A2
+// probe stays VISIBLE in the grid (it is non-informational), and dashAuditRaw keeps its
+// TRUE Applied=false so the Security screen can show its real state.
+func TestCaptureAuditSecurityBucketSatisfied(t *testing.T) {
+	m := newModel()
+	sum := engine.Summary{
+		Tweaks: []tweaks.Result{
+			{Probe: tweaks.Probe{ID: "a2.conf00", Step: "A2", Name: "00-hardening.conf"}, Applied: false},
+			{Probe: tweaks.Probe{ID: "a4.bbr_conf", Step: "A4", Name: "BBR"}, Applied: false},
+			{Probe: tweaks.Probe{ID: "a1.input_drop", Step: "A1", Name: "INPUT DROP"}, Applied: true},
+		},
+	}
+	m.captureAudit(sum)
+
+	// total = non-informational display set = all 3 (none are informational).
+	if m.dashAuditTotal != 3 {
+		t.Fatalf("dashAuditTotal=%d want 3", m.dashAuditTotal)
+	}
+	// applied = real-applied (a1) + security-bucket-satisfied (a2.conf00) = 2.
+	if m.dashAuditApplied != 2 {
+		t.Fatalf("dashAuditApplied=%d want 2 (a1 applied + a2 security-satisfied)", m.dashAuditApplied)
+	}
+	// canApply = total - applied = 1 (only the pending A4 tweak).
+	if canApply := m.dashAuditTotal - m.dashAuditApplied; canApply != 1 {
+		t.Fatalf("canApply=%d want 1 (only the pending A4 tweak)", canApply)
+	}
+
+	// The A2 probe must still APPEAR in the display grid (visible, not hidden).
+	var sawA2, sawA4 bool
+	for _, r := range m.dashAuditResults {
+		if r.Probe.ID == "a2.conf00" {
+			sawA2 = true
+		}
+		if r.Probe.ID == "a4.bbr_conf" {
+			sawA4 = true
+		}
+	}
+	if !sawA2 || !sawA4 {
+		t.Fatalf("display grid missing rows: sawA2=%v sawA4=%v", sawA2, sawA4)
+	}
+
+	// dashAuditRaw must retain the TRUE Applied=false for the A2 probe so the Security
+	// screen shows the real (un-forced) state.
+	for _, r := range m.dashAuditRaw {
+		if r.Probe.ID == "a2.conf00" && r.Applied {
+			t.Fatalf("dashAuditRaw a2.conf00 Applied was forced to true; Security screen would lie")
+		}
+	}
+}
+
+// TestDashAuditGridGlyphSecurityForced asserts the grid glyph routes through the same
+// security-bucket rule: a NON-applied A2 row renders the ✓ glyph (Security-menu domain,
+// shown satisfied on the Dashboard) while a NON-applied A4 row renders the • glyph.
+func TestDashAuditGridGlyphSecurityForced(t *testing.T) {
+	m := dashModel(100, 40)
+	m.dashAuditResults = []tweaks.Result{
+		{Probe: tweaks.Probe{ID: "a2.conf00", Step: "A2", Name: "00-hardening.conf"}, Applied: false},
+		{Probe: tweaks.Probe{ID: "a4.bbr_conf", Step: "A4", Name: "BBR"}, Applied: false},
+	}
+	innerW := innerWidth(m.boxWidth())
+	a2cell := m.dashAuditCellText(m.dashAuditResults[0], innerW)
+	a4cell := m.dashAuditCellText(m.dashAuditResults[1], innerW)
+	if !strings.Contains(a2cell, "✓") {
+		t.Fatalf("A2 cell missing ✓ glyph (security-bucket should show satisfied): %q", a2cell)
+	}
+	if !strings.Contains(a4cell, "•") {
+		t.Fatalf("A4 cell missing • glyph (pending tweak): %q", a4cell)
+	}
+}

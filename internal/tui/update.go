@@ -1017,6 +1017,14 @@ func (m model) advanceFromRun() model {
 // captureAudit folds the audit's final Summary into the Dashboard state: the server
 // facts, the full per-tweak results, and the applied/total tally. Called when an
 // "audit" command finishes (its Done carries Summary.Facts + Summary.Tweaks).
+//
+// Security-bucket rule: the Dashboard "Применить твики" button manages only
+// tweakBucketIDs (A2/A2.5 are excluded — applied via the Security menu). So a
+// SECURITY-bucket probe (isSecurityStep) can NEVER be driven by that button; it is
+// counted as APPLIED here (and rendered ✓ in the grid) so it never lingers in "можно
+// применить" forever. The probe STILL appears in the display set (it is
+// non-informational, just shown satisfied). dashAuditRaw keeps every probe's TRUE
+// Applied verdict — the Security screen reads it for the real access posture.
 func (m *model) captureAudit(sum engine.Summary) {
 	m.dashFacts = sum.Facts
 	m.dashAuditRaw = sum.Tweaks
@@ -1033,7 +1041,9 @@ func (m *model) captureAudit(sum engine.Summary) {
 	m.dashAuditTotal = len(disp)
 	applied := 0
 	for _, r := range disp {
-		if r.Applied {
+		// Security-bucket probes count as satisfied (the tweaks button never applies
+		// them) — same rule the grid glyph uses (dashAuditApplied / dashAuditCell).
+		if r.Applied || isSecurityStep(r.Probe.Step) {
 			applied++
 		}
 	}
