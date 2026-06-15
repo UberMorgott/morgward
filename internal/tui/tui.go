@@ -323,6 +323,11 @@ type model struct {
 	// cursor instead. Initialized true (apps launch focused; ?1004 only reports CHANGES).
 	// Plain bool — value-copy safe.
 	focused bool
+	// Files tab of the terminal workspace (2b). wsTab selects the shown tab; files holds
+	// the FM state behind a POINTER (non-copyable sftp client). nil until the Files tab is
+	// first entered. The terminal keeps draining while Files is shown.
+	wsTab wsTab
+	files *fileSession
 }
 
 // newModel builds the initial TUI model.
@@ -357,6 +362,8 @@ func newModel() model {
 		lang:    defaultLang,
 		titleK:  titleIdle,
 		focused: true, // apps launch focused; ?1004 reports CHANGES only
+		// wsTab (zero = wsTerminal) and files (nil until the Files tab is first entered)
+		// default correctly, so they are intentionally omitted from this literal.
 	}
 	m.syncPlaceholders()
 	return m
