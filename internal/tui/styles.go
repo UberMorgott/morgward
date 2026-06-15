@@ -11,6 +11,11 @@ var (
 	pillStyle   = lipgloss.NewStyle().Padding(0, 1).Background(lipgloss.Color("236"))
 	pillOnStyle = lipgloss.NewStyle().Padding(0, 1).Background(lipgloss.Color("57")).Foreground(lipgloss.Color("231")).Bold(true)
 
+	// fileSelStyle highlights the selected file-listing row: the SAME accent background
+	// (57) + white foreground (231) the codebase uses for a selected pill (pillOnStyle),
+	// applied as a full-width row band (no padding) so the selected entry reads as picked.
+	fileSelStyle = lipgloss.NewStyle().Background(lipgloss.Color("57")).Foreground(lipgloss.Color("231"))
+
 	// run-phase box chrome: the rounded border drawn by hand (lipgloss v1.1 has
 	// no native border labels), tinted to match the form's accent.
 	borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("57"))

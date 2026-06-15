@@ -483,6 +483,11 @@ func (m model) viewString() string {
 	case phaseSecurity:
 		return m.securityView()
 	case phaseTerminal:
+		// The terminal workspace has two tabs; wsTab selects which is rendered (both the
+		// shell session and the FM state live in the background regardless).
+		if m.wsTab == wsFiles {
+			return m.filesView()
+		}
 		return m.terminalView()
 	case phaseWiki:
 		return m.wikiView()

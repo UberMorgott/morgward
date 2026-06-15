@@ -260,6 +260,22 @@ const (
 	kTermBackHint    // "esc / ctrl+q — назад" shown on the error/ended notice
 	kTermDialFail    // dial/setup failure prefix
 	kTermEnded       // "Сессия завершена" / "Session ended"
+
+	// --- file manager tab (phaseTerminal, wsFiles, 2b) ------------------------
+	kFmTabTerminal // tab strip: "Терминал" / "Terminal"
+	kFmTabFiles    // tab strip: "Файлы" / "Files"
+	kFmColName     // listing column header: "Имя" / "Name"
+	kFmColSize     // listing column header: "Размер" / "Size"
+	kFmColPerms    // listing column header: "Права" / "Perms"
+	kFmColMTime    // listing column header: "Изменён" / "Modified"
+	kFmEmpty       // empty-listing placeholder: "(пусто)" / "(empty)"
+	kFmHint        // FM control hint
+	kFmActNew      // action pill: "Создать ▾" / "New ▾"
+	kFmActOpen     // action pill: "Открыть" / "Open"
+	kFmActDownload // action pill: "Скачать" / "Download"
+	kFmActUpload   // action pill: "Загрузить" / "Upload"
+	kFmActRename   // action pill: "Переименовать" / "Rename"
+	kFmActDelete   // action pill: "Удалить" / "Delete"
 )
 
 // tr is the translation table: every key carries both ru and en.
@@ -450,6 +466,21 @@ var tr = map[Lang]map[stringKey]string{
 		kTermBackHint:    "esc / ctrl+q — назад",
 		kTermDialFail:    "не удалось подключиться",
 		kTermEnded:       "Сессия завершена",
+
+		kFmTabTerminal: "Терминал",
+		kFmTabFiles:    "Файлы",
+		kFmColName:     "Имя",
+		kFmColSize:     "Размер",
+		kFmColPerms:    "Права",
+		kFmColMTime:    "Изменён",
+		kFmEmpty:       "(пусто)",
+		kFmHint:        "файлы · ↑/↓ выбор · ctrl+1/ctrl+2 вкладки · ctrl+q — выход · l — язык",
+		kFmActNew:      "Создать ▾",
+		kFmActOpen:     "Открыть",
+		kFmActDownload: "Скачать",
+		kFmActUpload:   "Загрузить",
+		kFmActRename:   "Переименовать",
+		kFmActDelete:   "Удалить",
 	},
 	langEN: {
 		kLabelHost:     "Host",
@@ -637,6 +668,21 @@ var tr = map[Lang]map[stringKey]string{
 		kTermBackHint:    "esc / ctrl+q to go back",
 		kTermDialFail:    "could not connect",
 		kTermEnded:       "Session ended",
+
+		kFmTabTerminal: "Terminal",
+		kFmTabFiles:    "Files",
+		kFmColName:     "Name",
+		kFmColSize:     "Size",
+		kFmColPerms:    "Perms",
+		kFmColMTime:    "Modified",
+		kFmEmpty:       "(empty)",
+		kFmHint:        "files · ↑/↓ select · ctrl+1/ctrl+2 tabs · ctrl+q to exit · l language",
+		kFmActNew:      "New ▾",
+		kFmActOpen:     "Open",
+		kFmActDownload: "Download",
+		kFmActUpload:   "Upload",
+		kFmActRename:   "Rename",
+		kFmActDelete:   "Delete",
 	},
 }
 

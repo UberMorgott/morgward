@@ -82,11 +82,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case phaseDashboard:
 			return m.dashboardClick(mc.X, mc.Y)
 		case phaseTerminal:
-			// TODO(T5): tab-strip click hit-test. T5 renders the Terminal|Files tab strip
-			// and owns its geometry; wire a wsTabAtClick(mc.X, mc.Y) here to switch tabs on a
-			// click (mirroring the ctrl+1/ctrl+2 keys in workspaceKey: a Terminal-strip click
-			// sets m.wsTab=wsTerminal, a Files-strip click does m=m.ensureFiles();
-			// m.wsTab=wsFiles). Until then a click in the workspace is a no-op.
+			// Tab-strip click switches workspace tabs (mirrors the ctrl+1/ctrl+2 keys in
+			// workspaceKey): a Terminal-strip click shows the shell; a Files-strip click
+			// ensures the FM session first and only switches if one exists (nil termClient on
+			// a dial-failed workspace creates nothing — stay on Terminal).
+			if tab, ok := m.wsTabAtClick(mc.X, mc.Y); ok {
+				if tab == wsFiles {
+					m = m.ensureFiles()
+					if m.files != nil {
+						m.wsTab = wsFiles
+					}
+				} else {
+					m.wsTab = wsTerminal
+				}
+			}
 			return m, nil
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
