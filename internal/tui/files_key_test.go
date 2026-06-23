@@ -173,6 +173,34 @@ func TestFilesKeyAddressFocusToggle(t *testing.T) {
 	}
 }
 
+// Activating (Enter) a FILE entry now dispatches the local-open flow: it marks the session
+// transferring and returns a non-nil async open-download Cmd (was a no-op returning nil).
+func TestFilesActivateFileOpens(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a.conf"}})
+	m.files.sel = 1 // a regular file
+	n, cmd := m.filesActivateSelected()
+	m = n.(model)
+	if cmd == nil {
+		t.Fatal("activating a file must return the async open Cmd (was a no-op nil)")
+	}
+	if !m.files.transferring {
+		t.Fatal("activating a file must mark the session transferring")
+	}
+}
+
+// The menu Open row is enabled for a regular file and disabled on the ".." parent marker.
+func TestFilesMenuOpenEnablement(t *testing.T) {
+	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a.conf"}})
+	m.files.sel = 1 // regular file → Open enabled
+	if it, ok := findMenuItem(m.buildMenuItems(), "O"); !ok || !it.enabled {
+		t.Fatalf("Open must be enabled for a regular file: ok=%v enabled=%v", ok, it.enabled)
+	}
+	m.files.sel = 0 // ".." → Open disabled
+	if it, ok := findMenuItem(m.buildMenuItems(), "O"); !ok || it.enabled {
+		t.Fatalf("Open must be disabled on '..': ok=%v enabled=%v", ok, it.enabled)
+	}
+}
+
 // '.' toggles hidden files and re-clamps the selection into the new visible range.
 func TestFilesKeyToggleHidden(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: ".dot"}, {name: "a"}})
