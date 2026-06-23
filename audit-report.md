@@ -1,6 +1,6 @@
 # morgward — L3 Deep Audit Report
 
-- **Project:** `morgward` — single-binary Go executor for the VPS-PREP-RUNBOOK (SSH-based VPS hardening)
+- **Project:** `morgward` — single-binary Go executor for SSH-based Ubuntu VPS hardening
 - **Level:** L3 Deep + Verified (CRITICAL/HIGH adversarially reproduced)
 - **Commit:** `f1b6992` · **Date:** 2026-06-01 · **Go:** 1.26.2 windows/amd64
 - **Method:** Wave 1 native scanners (inline) → Wave 2/3 8-dimension review fan-out (workflow `wf_19da26d3-de8`, 11 agents) → adversarial verification of CRITICAL/HIGH

@@ -6,8 +6,8 @@
 
 ## 1. What it is
 
-`morgward` is a portable **single-binary Go executor** for the VPS-PREP-RUNBOOK
-(spec cached locally as [`../RUNBOOK.md`](../RUNBOOK.md), gitignored ~98 KB). It
+`morgward` is a portable **single-binary Go executor** that hardens + tunes an
+Ubuntu VPS (hardening spec cached locally as [`../RUNBOOK.md`](../RUNBOOK.md), gitignored ~98 KB). It
 SSHes into a host over an **embedded** `golang.org/x/crypto/ssh` client (no external
 `ssh`/`sshpass`/Docker/web UI) and applies the runbook's Phase A hardening + tuning
 sequence, then verifies it (§V matrix). One entrypoint serves both a **CLI** and a

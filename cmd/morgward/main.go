@@ -1,5 +1,5 @@
-// Command morgward is a portable, single-binary executor for the
-// VPS-PREP-RUNBOOK: it connects to an Ubuntu 24.04/26.04 VPS (fresh or already
+// Command morgward is a portable, single-binary tool that hardens and tunes an
+// Ubuntu 24.04/26.04 VPS: it connects to it (fresh or already
 // running services) over an embedded SSH client and applies the hardening +
 // tuning sequence, coexisting with detected services on a brownfield box.
 package main
@@ -53,7 +53,7 @@ func newUpdaterConfig() selfupdate.Config {
 	}
 }
 
-const usage = `morgward — portable executor for VPS-PREP-RUNBOOK
+const usage = `morgward — portable Ubuntu VPS hardening + tuning tool
 
 Usage:
   morgward [command] [flags]

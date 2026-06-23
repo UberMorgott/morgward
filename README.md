@@ -1,9 +1,8 @@
 # morgward
 
 A portable, single-binary tool that hardens and tunes an Ubuntu **24.04 / 26.04**
-VPS — fresh or already running services — by applying the
-[VPS-PREP-RUNBOOK](https://github.com/UberMorgott/vps-prep-runbook) over an embedded
-SSH client. No external `ssh`, `sshpass`, Docker, or web UI required: one binary,
+VPS — fresh or already running services — by applying a curated hardening + tuning
+sequence over an embedded SSH client. No external `ssh`, `sshpass`, Docker, or web UI required: one binary,
 point it at a server.
 
 You run morgward **on your own computer** (Windows / macOS / Linux); it connects out

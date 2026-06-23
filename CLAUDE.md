@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`morgward` — a portable single-binary Go executor for the **VPS-PREP-RUNBOOK**
-(spec: https://github.com/UberMorgott/vps-prep-runbook, file `VPS-PREP-RUNBOOK.md`).
+`morgward` — a portable single-binary Go executor that applies an SSH hardening +
+tuning sequence to an Ubuntu 24.04/26.04 VPS.
 It connects to an Ubuntu 24.04/26.04 VPS (fresh OR already running services) over an
 **embedded** SSH client (`golang.org/x/crypto/ssh` — no external `ssh`/`sshpass`/
 Docker/web UI) and applies the runbook's hardening + tuning sequence, coexisting with
