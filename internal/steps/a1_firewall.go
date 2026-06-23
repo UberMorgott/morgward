@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/UberMorgott/morgward/internal/detect"
 )
 
 // A1Firewall implements §A1: iptables-nft INPUT/FORWARD lockdown with a
@@ -35,6 +37,42 @@ func dportOpen(ruleset string, port int) bool {
 	return ok
 }
 
+// allPortsOpenAndPersisted reports whether every port A1 would open is ALREADY
+// present (anchored, boundary-correct) in BOTH the live `iptables -S` (cur) and the
+// persisted rules.v4 (pers). Greenfield only opens SSH :cfg.Port, so it checks just
+// that port. Brownfield ALSO opens every currently-detected ListenPortsTCP/UDP
+// (deduped against cfg.Port, mirroring coexistRuleset's `p == port` skip), so the
+// skip-if only fires when the persisted+live set is a SUPERSET of what we'd add —
+// the moment a NEW listener appears it returns false and the run re-opens the gap.
+func allPortsOpenAndPersisted(cur, pers string, port int, f *detect.Facts) bool {
+	openAndPersisted := func(p int) bool {
+		return dportOpen(cur, p) && dportOpen(pers, p)
+	}
+	if !openAndPersisted(port) {
+		return false
+	}
+	if f == nil || f.Greenfield {
+		return true
+	}
+	for _, p := range f.ListenPortsTCP {
+		if p == port {
+			continue // SSH port already checked above
+		}
+		if !openAndPersisted(p) {
+			return false
+		}
+	}
+	for _, p := range f.ListenPortsUDP {
+		if p == port {
+			continue
+		}
+		if !openAndPersisted(p) {
+			return false
+		}
+	}
+	return true
+}
+
 func (a A1Firewall) Run(ctx *Context) (Status, string, error) {
 	port := ctx.Cfg.Port
 
@@ -56,11 +94,18 @@ func (a A1Firewall) Run(ctx *Context) (Status, string, error) {
 		}
 	}
 
-	// Skip-if: SSH ACCEPT before DROP already present AND persisted.
+	// Skip-if: INPUT DROP in place AND every port we would open is already open in
+	// the live ruleset AND persisted. Read both the live `iptables -S` and the
+	// persisted rules.v4 once, then check per-port presence with the SAME anchored
+	// dportOpen match so the check is boundary-correct (port 22 must not be satisfied
+	// by a 2222 rule, etc.). Greenfield only needs SSH :cfg.Port; brownfield ALSO
+	// needs every currently-detected service port, so a re-run after a NEW listener
+	// appears does NOT skip — it falls through and appends the missing port(s)
+	// (docs/BROWNFIELD.md §8 "re-run step A1 … re-opens them").
 	cur := ctx.Cli.Sudo("iptables -S 2>/dev/null").Stdout
-	persisted := ctx.Cli.Sudo(fmt.Sprintf(`grep -Eq -- '--dport %d( |$)' /etc/iptables/rules.v4 2>/dev/null && echo yes`, port)).Out()
+	pers := ctx.Cli.Sudo("cat /etc/iptables/rules.v4 2>/dev/null").Stdout
 	if strings.Contains(cur, "-P INPUT DROP") &&
-		dportOpen(cur, port) && persisted == "yes" {
+		allPortsOpenAndPersisted(cur, pers, port, ctx.Facts) {
 		return StatusSkip, "firewall already closed with SSH open and persisted", nil
 	}
 

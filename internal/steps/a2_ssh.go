@@ -345,7 +345,17 @@ func assertAdminLoginable(ctx *Context, admin string) (Status, string, error) {
 		return StatusFail, fmt.Sprintf("admin user %q not in sshusers — run the PRE step first (AllowGroups would lock everyone out)", admin),
 			fmt.Errorf("admin precondition: not in sshusers")
 	}
-	if r := ctx.Cli.Sudo(fmt.Sprintf("test -s /home/%s/.ssh/authorized_keys", admin)); r.RC != 0 {
+	// Resolve the admin's real home from getent passwd (6th colon field) rather than
+	// assuming /home/<user> — an admin with a non-default home (e.g. a system user, or
+	// a box that places homes elsewhere) would otherwise wrongly fail the key check.
+	// Fall back to /home/<user> when getent yields nothing. The admin name is
+	// charset-validated in config.Validate, but quote it anyway for completeness.
+	q := shellQuote(admin)
+	home := ctx.Cli.Sudo(fmt.Sprintf("getent passwd %s | cut -d: -f6", q)).Out()
+	if home == "" {
+		home = "/home/" + admin
+	}
+	if r := ctx.Cli.Sudo(fmt.Sprintf("test -s %s/.ssh/authorized_keys", shellQuote(home))); r.RC != 0 {
 		return StatusFail, fmt.Sprintf("admin %q has no authorized_keys — run the PRE step first (key-only login would fail)", admin),
 			fmt.Errorf("admin precondition: empty authorized_keys")
 	}

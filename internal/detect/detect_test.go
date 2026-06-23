@@ -168,6 +168,55 @@ func TestClassifyFirewallMgr(t *testing.T) {
 	}
 }
 
+// TestNatTargetPresent is the FA-0017 regression: NatRules must key off an actual
+// `-j MASQUERADE/SNAT/DNAT` jump target, never the bare word, so a user chain named
+// MASQUERADE or a --comment mentioning it does not falsely flag the box as routing.
+func TestNatTargetPresent(t *testing.T) {
+	cases := []struct {
+		name string
+		dump string
+		want bool
+	}{
+		{"real masquerade", "-P POSTROUTING ACCEPT\n-A POSTROUTING -o eth0 -j MASQUERADE", true},
+		{"real snat", "-A POSTROUTING -o eth0 -j SNAT --to-source 1.2.3.4", true},
+		{"real dnat", "-A PREROUTING -p tcp --dport 80 -j DNAT --to-destination 10.0.0.2:80", true},
+		{"user chain named MASQUERADE", "-N MASQUERADE\n-A POSTROUTING -j MASQUERADE_CUSTOM", false},
+		{"comment mentions MASQUERADE", `-A POSTROUTING -m comment --comment "MASQUERADE here" -j ACCEPT`, false},
+		{"empty default chains", "-P PREROUTING ACCEPT\n-P POSTROUTING ACCEPT\n-P OUTPUT ACCEPT", false},
+		{"empty string", "", false},
+	}
+	for _, c := range cases {
+		if got := natTargetPresent(c.dump); got != c.want {
+			t.Errorf("%s: natTargetPresent = %v, want %v\n%s", c.name, got, c.want, c.dump)
+		}
+	}
+}
+
+// TestManagesIPTablesGatesInputDropMarker documents the FA-0018 fix: the
+// `-P INPUT DROP` already-hardened marker is only counted when morgward owns the
+// raw iptables ruleset (ManagesIPTables). On a ufw/firewalld/nftables box the policy
+// is the MANAGER's own, so ManagesIPTables() is false and the marker must be skipped.
+func TestManagesIPTablesGatesInputDropMarker(t *testing.T) {
+	cases := []struct {
+		name string
+		f    Facts
+		want bool
+	}{
+		{"greenfield → managed", Facts{Greenfield: true}, true},
+		{"brownfield iptables → managed", Facts{FirewallMgr: "iptables"}, true},
+		{"brownfield none → managed", Facts{FirewallMgr: "none"}, true},
+		{"brownfield unknown → managed", Facts{FirewallMgr: ""}, true},
+		{"ufw → NOT managed (marker skipped)", Facts{FirewallMgr: "ufw"}, false},
+		{"firewalld → NOT managed", Facts{FirewallMgr: "firewalld"}, false},
+		{"nftables → NOT managed", Facts{FirewallMgr: "nftables"}, false},
+	}
+	for _, c := range cases {
+		if got := c.f.ManagesIPTables(); got != c.want {
+			t.Errorf("%s: ManagesIPTables = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

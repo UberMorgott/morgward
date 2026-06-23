@@ -5,6 +5,7 @@ package detect
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,9 +130,12 @@ func Run(c *sshx.Client) *Facts {
 	// Egress interface from the DEFAULT ROUTE, not the client IP (§2).
 	f.EgressIface = c.Run(`ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'`).Out()
 	if f.EgressIface != "" {
-		f.IfaceMAC = c.Run("cat /sys/class/net/" + f.EgressIface + "/address 2>/dev/null").Out()
-		f.ServerIPv4 = c.Run(`ip -4 addr show ` + f.EgressIface + ` | awk '/inet /{print $2}' | cut -d/ -f1 | head -1`).Out()
-		v6 := c.Run(`ip -6 addr show ` + f.EgressIface + ` scope global | awk '/inet6 /{print $2}' | cut -d/ -f1 | head -1`).Out()
+		// EgressIface comes from `ip route get` on a trusted box, but quote it for
+		// completeness so an unexpected value can't be reinterpreted by the shell.
+		iface := shQuote(f.EgressIface)
+		f.IfaceMAC = c.Run("cat /sys/class/net/" + iface + "/address 2>/dev/null").Out()
+		f.ServerIPv4 = c.Run(`ip -4 addr show ` + iface + ` | awk '/inet /{print $2}' | cut -d/ -f1 | head -1`).Out()
+		v6 := c.Run(`ip -6 addr show ` + iface + ` scope global | awk '/inet6 /{print $2}' | cut -d/ -f1 | head -1`).Out()
 		if v6 != "" {
 			f.ServerIPv6 = v6
 			f.HasIPv6 = true
@@ -172,9 +176,10 @@ ls /etc/wireguard/*.conf >/dev/null 2>&1 && echo wgconf`
 	f.WireguardSeen = strings.TrimSpace(c.Sudo(wgScript).Stdout) != ""
 
 	// Real NAT rules (beyond the empty default chains) imply this box routes/masqs.
+	// Match an actual rule TARGET (`-j MASQUERADE/SNAT/DNAT`), not the bare word —
+	// a user chain or `--comment "MASQUERADE"` must not count as a NAT rule.
 	natS := c.Sudo("iptables -t nat -S 2>/dev/null").Stdout
-	f.NatRules = strings.Contains(natS, "MASQUERADE") ||
-		strings.Contains(natS, "-j SNAT") || strings.Contains(natS, "-j DNAT")
+	f.NatRules = natTargetPresent(natS)
 
 	f.Forwarding = f.IPForward || f.DockerSeen || f.WireguardSeen || f.NatRules
 
@@ -223,8 +228,16 @@ iptables -S INPUT 2>/dev/null | grep -q -- '-P INPUT DROP' && echo m:input-drop
 systemctl is-active fail2ban >/dev/null 2>&1 && echo m:fail2ban
 [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo m:bbr
 [ -f /etc/sysctl.d/99-zz-kernel-harden.conf ] && echo m:kernel-harden`
+	// The `-P INPUT DROP` policy is only a morgward marker when morgward owns the
+	// raw iptables ruleset. On a ufw/firewalld/nftables box that policy is the
+	// MANAGER's own (ufw's ufw-user-input chain, etc.), so counting it would
+	// falsely flag a manager-owned box as already-hardened by us.
+	managesIPT := f.ManagesIPTables()
 	for line := range strings.SplitSeq(c.Sudo(markerScript).Stdout, "\n") {
 		if m, ok := strings.CutPrefix(strings.TrimSpace(line), "m:"); ok && m != "" {
+			if m == "input-drop" && !managesIPT {
+				continue
+			}
 			f.HardenMarkers = append(f.HardenMarkers, m)
 		}
 	}
@@ -578,6 +591,21 @@ func classifyFirewallMgr(ufwStatusLine string, firewalldActive, nftablesActive b
 	return "none"
 }
 
+// natTargetMatch anchors a `-j <TARGET>` jump where the target is exactly
+// MASQUERADE/SNAT/DNAT, terminated by a space (its options follow) or end-of-line.
+// The trailing `( |$)` boundary stops a user-defined chain jumped to by name —
+// e.g. `-j MASQUERADE_CUSTOM` — from satisfying the MASQUERADE target check.
+var natTargetMatch = regexp.MustCompile(`(?m)-j (MASQUERADE|SNAT|DNAT)( |$)`)
+
+// natTargetPresent reports whether an `iptables -t nat -S` dump contains a real
+// NAT rule — i.e. a line whose jump target is MASQUERADE, SNAT, or DNAT. Matching
+// the anchored `-j <TARGET>` token, not the bare word, avoids a false positive from
+// a user-defined chain named MASQUERADE (`-N MASQUERADE`/`-A MASQUERADE ...`), a
+// `--comment "MASQUERADE"` annotation, or a `-j MASQUERADE_CUSTOM` chain jump.
+func natTargetPresent(natDump string) bool {
+	return natTargetMatch.MatchString(natDump)
+}
+
 // iptablesEffectivelyEmpty reports whether an `iptables -S` dump carries no rule
 // beyond the three default-ACCEPT chain policies. A fresh box prints exactly
 // `-P INPUT ACCEPT` / `-P FORWARD ACCEPT` / `-P OUTPUT ACCEPT`; anything else
@@ -596,6 +624,13 @@ func iptablesEffectivelyEmpty(iptablesS string) bool {
 		}
 	}
 	return true
+}
+
+// shQuote wraps s in single quotes, escaping any embedded single quote, so an
+// arbitrary value can be interpolated into a shell command without being
+// reinterpreted by the shell.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // portFromLocal extracts the port from an `ss` Local Address:Port field. It

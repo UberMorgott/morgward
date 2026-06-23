@@ -61,9 +61,17 @@ func (a A5Kernel) Run(ctx *Context) (Status, string, error) {
 	}
 
 	// Arm a LIVE rp_filter revert (rp_filter=1 can sever asymmetric-routed sessions).
-	ctx.Cli.Sudo(`systemctl stop rpf-revert.timer 2>/dev/null || true
+	// Revert to the CONTEXT-APPROPRIATE baseline, not a blanket loose=2: on a
+	// forwarding box loose (=2) is what the apply targets and what asymmetric
+	// VPN/router routes need; on a greenfield/non-forwarding box the apply targets
+	// strict (=1), so reverting to =2 there would silently loosen below baseline.
+	rpfRevert := 1
+	if ctx.Facts.Forwarding {
+		rpfRevert = 2
+	}
+	ctx.Cli.Sudo(fmt.Sprintf(`systemctl stop rpf-revert.timer 2>/dev/null || true
 systemctl reset-failed 'rpf-revert.*' 2>/dev/null || true
-systemd-run --on-active=300 --unit=rpf-revert sh -c 'sysctl -w net.ipv4.conf.all.rp_filter=2 net.ipv4.conf.default.rp_filter=2 net.ipv4.route.flush=1'`)
+systemd-run --on-active=300 --unit=rpf-revert sh -c 'sysctl -w net.ipv4.conf.all.rp_filter=%[1]d net.ipv4.conf.default.rp_filter=%[1]d net.ipv4.route.flush=1'`, rpfRevert))
 
 	apply := `sysctl --system >/dev/null 2>&1
 sysctl -w net.ipv4.route.flush=1 >/dev/null 2>&1
@@ -72,10 +80,12 @@ sysctl -w net.ipv6.route.flush=1 >/dev/null 2>&1`
 		ctx.Log.Warn("sysctl --system reported rc=%d (a non-existent key is dropped, not fatal)", r.RC)
 	}
 
-	// Verify the session survives rp_filter=1 from a fresh connection, then disarm.
+	// Verify the session survives the applied rp_filter from a fresh connection, then
+	// disarm. On failure revert to the SAME context-appropriate baseline as the armed
+	// timer (loose=2 when forwarding, strict=1 otherwise) — never blindly to loose.
 	if err := freshLogin(ctx, ctx.Cli.User); err != nil {
-		ctx.Cli.Sudo("sysctl -w net.ipv4.conf.all.rp_filter=2 net.ipv4.conf.default.rp_filter=2 net.ipv4.route.flush=1")
-		return StatusFail, "session lost after rp_filter=1 — reverted to loose: " + err.Error(), nil
+		ctx.Cli.Sudo(fmt.Sprintf("sysctl -w net.ipv4.conf.all.rp_filter=%[1]d net.ipv4.conf.default.rp_filter=%[1]d net.ipv4.route.flush=1", rpfRevert))
+		return StatusFail, fmt.Sprintf("session lost after rp_filter apply — reverted to rp_filter=%d: %s", rpfRevert, err.Error()), nil
 	}
 	ctx.Cli.Sudo(`systemctl stop rpf-revert.timer 2>/dev/null || true
 systemctl reset-failed 'rpf-revert.*' 2>/dev/null || true`)
