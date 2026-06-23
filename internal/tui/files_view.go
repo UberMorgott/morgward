@@ -70,9 +70,9 @@ func (m model) filesView() string {
 	sb.WriteString(titledTop(b, title, bw))
 	sb.WriteByte('\n')
 
-	// Tab strip on the switcher row, with the RU|EN switcher right-aligned on the same
+	// Global nav bar on the switcher row, with the RU|EN switcher right-aligned on the same
 	// line (mirrors switcherLine's right-alignment so the two never collide on width).
-	sb.WriteString(m.filesTabStripLine(b, innerW))
+	sb.WriteString(m.navTabStripLine(b, innerW))
 	sb.WriteByte('\n')
 
 	// Address bar (cwd) and column header — fixed chrome above the listing. Size the
@@ -288,12 +288,19 @@ func (m model) filesActionAtClick(x, y int) fmAction {
 	return fmActNone
 }
 
-// --- tab strip ----------------------------------------------------------------
+// --- global tab bar (Главная · Терминал · Файлы) ------------------------------
+//
+// A 3-cell clickable bar rendered identically at the top (switcherRow) of the three hub
+// screens (phaseDashboard, phaseTerminal/wsTerminal, phaseTerminal/wsFiles). The active
+// cell is derived from the current phase/tab, so the render and the hit-test never need a
+// separate "selected" field. Bar clicks + ctrl+1/2/3 funnel through navTo, which keeps
+// the terminal transport alive on a switch to Главная.
 
-// filesTabStripLine renders the "[ Terminal ][▸Files ]" tab strip on the switcher row,
-// the active tab marked, with the RU|EN switcher right-aligned on the same line.
-func (m model) filesTabStripLine(b lipgloss.Border, innerW int) string {
-	strip := m.wsTabStripText()
+// navTabStripLine renders the 3-cell nav bar on the switcher row with the RU|EN switcher
+// right-aligned on the same line (mirrors switcherLine's right-alignment so the two never
+// collide on width). Shared by the dashboard, terminal and files frames.
+func (m model) navTabStripLine(b lipgloss.Border, innerW int) string {
+	strip := m.navTabStripText()
 	styledSw, _, _, _, _ := m.switcherText()
 	const swWidth = 7 // "RU | EN"
 	pad := maxi(innerW-lipgloss.Width(strip)-swWidth, 0)
@@ -301,62 +308,80 @@ func (m model) filesTabStripLine(b lipgloss.Border, innerW int) string {
 	return contentLine(b, content, innerW)
 }
 
-// wsTabLabels returns the two tab labels with a leading active marker ("▸") on the active
-// one (a leading space on the inactive, so both labels are the same width and the click
-// geometry is stable regardless of which is active).
-func (m model) wsTabLabels() (term, files string) {
-	mark := func(active bool, label string) string {
-		if active {
+// navActiveTab reports which bar cell is active in the current frame: Главная on the
+// Dashboard, else Терминал/Файлы per the workspace tab.
+func (m model) navActiveTab() navTarget {
+	if m.phase == phaseDashboard {
+		return navHome
+	}
+	if m.wsTab == wsFiles {
+		return navFiles
+	}
+	return navTerminal
+}
+
+// navTabLabels returns the three bar labels (Главная · Терминал · Файлы), each with a
+// leading active marker ("▸") on the active one and a leading space on the inactive ones,
+// so every label keeps a stable width and the click geometry is independent of which cell
+// is active.
+func (m model) navTabLabels() (home, term, files string) {
+	active := m.navActiveTab()
+	mark := func(self navTarget, label string) string {
+		if self == active {
 			return "▸" + label
 		}
 		return " " + label
 	}
-	term = mark(m.wsTab == wsTerminal, t(m.lang, kFmTabTerminal))
-	files = mark(m.wsTab == wsFiles, t(m.lang, kFmTabFiles))
-	return term, files
+	home = mark(navHome, t(m.lang, kNavHome))
+	term = mark(navTerminal, t(m.lang, kFmTabTerminal))
+	files = mark(navFiles, t(m.lang, kFmTabFiles))
+	return home, term, files
 }
 
-// wsTabStripText is the rendered tab strip: each label wrapped in a pill (the active one
-// accent-highlighted via pillOnStyle, the inactive dim via pillStyle).
-func (m model) wsTabStripText() string {
-	term, files := m.wsTabLabels()
-	tp, fp := pillStyle, pillStyle
-	if m.wsTab == wsTerminal {
-		tp = pillOnStyle
-	} else {
-		fp = pillOnStyle
+// navTabStripText is the rendered 3-cell bar: each label wrapped in a pill (the active one
+// accent-highlighted via pillOnStyle, the inactive ones dim via pillStyle).
+func (m model) navTabStripText() string {
+	home, term, files := m.navTabLabels()
+	active := m.navActiveTab()
+	style := func(self navTarget, label string) string {
+		if self == active {
+			return pillOnStyle.Render(label)
+		}
+		return pillStyle.Render(label)
 	}
-	return tp.Render(term) + " " + fp.Render(files)
+	return style(navHome, home) + " " + style(navTerminal, term) + " " + style(navFiles, files)
 }
 
-// wsTabStartCol is the absolute X where the first tab pill begins: 2 (left border + the
-// leading space contentLine adds). The tab strip is the FIRST content on its line, so it
-// starts at the content origin like the dashboard button row.
+// wsTabStartCol is the absolute X where the first bar pill begins: 2 (left border + the
+// leading space contentLine adds). The bar is the FIRST content on its line, so it starts
+// at the content origin like the dashboard button row.
 const wsTabStartCol = 2
 
-// wsTabZones returns the [start,end) absolute X ranges of the Terminal and Files tab
-// pills (pure function of width + labels, so the View draw and the click hit-test agree).
-// It uses pillRanges over the SAME labels wsTabStripText renders.
-func (m model) wsTabZones() (term, files [2]int) {
-	tlabel, flabel := m.wsTabLabels()
-	r := pillRanges([]string{tlabel, flabel}, wsTabStartCol)
-	return r[0], r[1]
+// navTabZones returns the [start,end) absolute X ranges of the three bar pills (pure
+// function of width + labels, so the View draw and the click hit-test agree). It uses
+// pillRanges over the SAME labels navTabStripText renders.
+func (m model) navTabZones() (home, term, files [2]int) {
+	hl, tl, fl := m.navTabLabels()
+	r := pillRanges([]string{hl, tl, fl}, wsTabStartCol)
+	return r[0], r[1], r[2]
 }
 
-// wsTabAtClick maps a click at (x,y) on the tab-strip row to the tab it hit, or ok=false
-// on a miss. Mirrors wsTabZones (same labels + start col the strip rendered).
-func (m model) wsTabAtClick(x, y int) (wsTab, bool) {
+// navTabAtClick maps a click at (x,y) on the bar row to the cell it hit, or ok=false on a
+// miss. Mirrors navTabZones (same labels + start col the bar rendered).
+func (m model) navTabAtClick(x, y int) (navTarget, bool) {
 	if y != switcherRow {
-		return wsTerminal, false
+		return navHome, false
 	}
-	term, files := m.wsTabZones()
+	home, term, files := m.navTabZones()
 	switch {
+	case x >= home[0] && x < home[1]:
+		return navHome, true
 	case x >= term[0] && x < term[1]:
-		return wsTerminal, true
+		return navTerminal, true
 	case x >= files[0] && x < files[1]:
-		return wsFiles, true
+		return navFiles, true
 	}
-	return wsTerminal, false
+	return navHome, false
 }
 
 // --- listing row hit-test -----------------------------------------------------

@@ -50,7 +50,10 @@ func (m model) dashboardView() string {
 	var sb strings.Builder
 	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
 	sb.WriteByte('\n')
-	sb.WriteString(m.switcherLine(b, innerW))
+	// Global nav bar (Главная · Терминал · Файлы) on the switcher row — same render +
+	// hit-test geometry as the terminal and files frames. Replaces the former plain RU|EN
+	// switcher line and the removed Terminal/Files dashboard buttons.
+	sb.WriteString(m.navTabStripLine(b, innerW))
 	sb.WriteByte('\n')
 
 	// FIXED prefix — plain content rows, never scrolled.
@@ -121,15 +124,13 @@ func (m model) applyConfirmModalView() string {
 }
 
 // dashButtonNames is the ordered list of the Dashboard action-button labels
-// (Apply / Security / Terminal / Files). It is the SINGLE source consumed by both the
-// render path (dashButtonsLine) and the hit-test (dashButtonAtClick), so their x-geometry
-// cannot diverge.
+// (Apply / Security). It is the SINGLE source consumed by both the render path
+// (dashButtonsLine) and the hit-test (dashButtonAtClick), so their x-geometry cannot
+// diverge. The former Terminal/Files buttons moved to the global nav bar (navTabStripLine).
 func (m model) dashButtonNames() []string {
 	return []string{
 		t(m.lang, kDashApplyButton),
 		t(m.lang, kDashSecButton),
-		t(m.lang, kDashTermButton),
-		t(m.lang, kDashFilesButton),
 	}
 }
 
@@ -561,8 +562,6 @@ const (
 	dashBtnNone dashButton = iota
 	dashBtnApply
 	dashBtnSecurity
-	dashBtnTerminal
-	dashBtnFiles
 )
 
 // dashButtonAtClick maps a click at (x,y) to one of the action buttons, using
@@ -581,10 +580,6 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 		return dashBtnApply
 	case 1:
 		return dashBtnSecurity
-	case 2:
-		return dashBtnTerminal
-	case 3:
-		return dashBtnFiles
 	}
 	return dashBtnNone
 }
@@ -597,6 +592,11 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 	// A pending apply-confirm swallows clicks (use Enter/esc on the hint to resolve).
 	if m.dashApplyConfirm {
 		return m, nil
+	}
+	// Global nav bar (Главная · Терминал · Файлы) on the switcher row. A click on a cell
+	// routes through navTo; the active Главная cell is a harmless self-switch.
+	if target, ok := m.navTabAtClick(x, y); ok {
+		return m.navTo(target)
 	}
 	// Button pills take priority over the (overlapping-Y-impossible) audit grid.
 	switch m.dashButtonAtClick(x, y) {
@@ -617,14 +617,6 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.phase = phaseSecurity
 		m.dashScroll = 0 // security menu reuses dashScroll; start at the top
 		return m, nil
-	case dashBtnTerminal:
-		// Open the interactive terminal (2a). It dials fresh with the form's
-		// connection params; Esc/Ctrl+Q returns here.
-		return m.openTerminal(phaseDashboard, wsTerminal)
-	case dashBtnFiles:
-		// Open the terminal workspace landing directly on the Files tab (2b). Same fresh
-		// dial as the terminal; the FM session is created over the shared transport.
-		return m.openTerminal(phaseDashboard, wsFiles)
 	}
 	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's
 	// Probe.Step (matches wiki.Doc keys, e.g. "A2"); keep the specific tweak's

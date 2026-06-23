@@ -100,20 +100,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case phaseDashboard:
 			return m.dashboardClick(mc.X, mc.Y)
 		case phaseTerminal:
-			// Tab-strip click switches workspace tabs (mirrors the ctrl+1/ctrl+2 keys in
-			// workspaceKey): a Terminal-strip click shows the shell; a Files-strip click
-			// ensures the FM session first and only switches if one exists (nil termClient on
-			// a dial-failed workspace creates nothing — stay on Terminal).
-			if tab, ok := m.wsTabAtClick(mc.X, mc.Y); ok {
-				if tab == wsFiles {
-					m = m.ensureFiles()
-					if m.files != nil {
-						m.wsTab = wsFiles
-					}
-				} else {
-					m.wsTab = wsTerminal
-				}
-				return m, nil
+			// Global nav-bar click routes through navTo (mirrors the ctrl+1/2/3 keys in
+			// workspaceKey): Главная returns to the Dashboard keeping the session alive;
+			// Терминал/Файлы switch the workspace tab (reusing the live session). While an
+			// FM prompt is open, don't flip tabs out from under the half-entered prompt.
+			fmPrompting := m.wsTab == wsFiles && m.files != nil && m.files.prompting()
+			if target, ok := m.navTabAtClick(mc.X, mc.Y); ok && !fmPrompting {
+				return m.navTo(target)
 			}
 			// On the Files tab, a click on a listing row selects that entry (operations
 			// land in a later task). Index space is the VISIBLE slice (filesRowAtClick),
@@ -401,11 +394,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// scroll the audit list. enter confirms the pending A8-reboot apply, esc
 			// cancels it; with no pending confirm, esc/b go back.
 			switch s {
-			case "t":
-				// Open the interactive terminal (2a). Disabled while an apply-confirm is
-				// armed so the keystroke can't slip past the modal.
+			case navHomeKey:
+				// Главная: already here; harmless self-switch (kept for symmetry with the bar).
 				if !m.dashApplyConfirm {
-					return m.openTerminal(phaseDashboard, wsTerminal)
+					return m.navTo(navHome)
+				}
+				return m, nil
+			case wsSwitchTerminalKey:
+				// ctrl+2 → Терминал via the nav router (reuse a live session, else dial).
+				if !m.dashApplyConfirm {
+					return m.navTo(navTerminal)
+				}
+				return m, nil
+			case wsSwitchFilesKey:
+				// ctrl+3 → Файлы via the nav router.
+				if !m.dashApplyConfirm {
+					return m.navTo(navFiles)
+				}
+				return m, nil
+			case "t":
+				// Open the interactive terminal via the nav router (reuses a live session,
+				// else dials). Disabled while an apply-confirm is armed so the keystroke
+				// can't slip past the modal.
+				if !m.dashApplyConfirm {
+					return m.navTo(navTerminal)
 				}
 				return m, nil
 			case "enter":

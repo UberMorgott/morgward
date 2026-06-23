@@ -145,9 +145,9 @@ func TestDashboardButtonHitTest(t *testing.T) {
 	innerW := innerWidth(m.boxWidth())
 	btnRow := m.dashButtonsRowY(innerW) // FIXED screen Y, not via the scroll offset
 	ranges := pillRanges(m.dashButtonNames(), dashButtonStartCol)
-	want := []dashButton{dashBtnApply, dashBtnSecurity, dashBtnTerminal, dashBtnFiles}
+	want := []dashButton{dashBtnApply, dashBtnSecurity}
 	if len(ranges) != len(want) {
-		t.Fatalf("dashButtonNames has %d buttons, want %d (Apply, Security, Terminal, Files)", len(ranges), len(want))
+		t.Fatalf("dashButtonNames has %d buttons, want %d (Apply, Security — Terminal/Files moved to the nav bar)", len(ranges), len(want))
 	}
 	for i, r := range ranges {
 		x := r[0] + 1 // inside the pill

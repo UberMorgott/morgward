@@ -58,6 +58,38 @@ func termTick(gen int) tea.Cmd {
 // first (wsTerminal for the shell, wsFiles to land in the file manager); the terminal
 // session is dialed + started regardless of the initial tab.
 func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
+	// Reuse a TRULY-LIVE session: when a connected, running session is already up
+	// (termLive: termClient set, no dial error, term non-nil and NOT finished) re-entering
+	// the workspace must NOT redial — that would leak a second TCP/SSH transport + keepalive
+	// goroutine and bump termGen needlessly. Just switch to the requested tab (ensuring the
+	// FM session for wsFiles) and return; no termGen bump (only closeTerminal invalidates the
+	// running render tick).
+	//
+	// A FINISHED session (remote shell exited via `exit`) is NOT live even though termErr is
+	// "" and termClient is non-nil — reusing it would land on the static "session ended"
+	// banner with no fresh shell. So this branch keys off termLive(), not just termErr/nil.
+	if m.termClient != nil && m.termLive() {
+		m.termReturn = from
+		m.phase = phaseTerminal
+		m.wsTab = initialTab
+		if initialTab == wsFiles {
+			m = m.ensureFiles()
+			if m.files == nil {
+				m.wsTab = wsTerminal // ensureFiles made nothing (shouldn't happen with a live client)
+			}
+		}
+		return m, nil
+	}
+
+	// Not live but a stale/finished/errored session is still hanging around (term/files/
+	// termClient non-nil): tear it down BEFORE the fresh dial so the old transport + its 30s
+	// keepalive goroutine don't leak when m.termClient is overwritten below. closeTerminal is
+	// nil-safe + idempotent; it bumps termGen and sets phase=termReturn, both of which the
+	// fresh-dial path re-establishes (termGen++ again, phase=phaseTerminal) — harmless.
+	if m.term != nil || m.files != nil || m.termClient != nil {
+		m = m.closeTerminal()
+	}
+
 	m.termReturn = from
 	m.termErr = ""
 	m.termGen++
@@ -112,13 +144,51 @@ func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
 	return m, termTick(m.termGen)
 }
 
-// wsSwitchTerminalKey / wsSwitchFilesKey select the workspace tab from EITHER tab.
-// ctrl+1/ctrl+2 are reserved for tab switching (a shell rarely needs them; the FM never
-// forwards keys), so they are intercepted before any per-tab routing.
+// navHomeKey / wsSwitchTerminalKey / wsSwitchFilesKey select a global tab-bar cell from
+// any hub screen (left→right matching the bar: Главная · Терминал · Файлы). ctrl+1/2/3
+// are reserved for tab switching (a shell rarely needs them; the FM never forwards keys),
+// so they are intercepted before any per-tab routing.
 const (
-	wsSwitchTerminalKey = "ctrl+1"
-	wsSwitchFilesKey    = "ctrl+2"
+	navHomeKey          = "ctrl+1"
+	wsSwitchTerminalKey = "ctrl+2"
+	wsSwitchFilesKey    = "ctrl+3"
 )
+
+// navTarget is a cell of the global 3-cell tab bar (Главная · Терминал · Файлы), the
+// single notion the bar render + hit-test + navTo router share.
+type navTarget int
+
+const (
+	navHome navTarget = iota
+	navTerminal
+	navFiles
+)
+
+// navTo is the SINGLE navigation router for the global tab bar (bar clicks on every hub
+// screen + ctrl+1/2/3). It is the one place that decides whether to keep or dial the
+// terminal session:
+//
+//   - navHome → m.phase = phaseDashboard WITHOUT closeTerminal: term/termClient/files stay
+//     alive so a return to Терминал/Файлы is instant (scrollback preserved). The terminal
+//     render tick keeps its gen (no termGen bump) and harmlessly repaints in the
+//     background; the Dashboard view simply doesn't draw it.
+//   - navTerminal / navFiles → openTerminal, which REUSES a live session (no redial) or
+//     dials fresh when none exists (or the prior dial failed). openTerminal also sets the
+//     requested wsTab and ensures the FM session for navFiles.
+//
+// from is the phase the workspace returns to on a real exit (goBack / ctrl+q); on a
+// keep-alive Home switch openTerminal re-stamps it on the next entry.
+func (m model) navTo(target navTarget) (tea.Model, tea.Cmd) {
+	switch target {
+	case navHome:
+		m.phase = phaseDashboard
+		return m, nil
+	case navFiles:
+		return m.openTerminal(phaseDashboard, wsFiles)
+	default: // navTerminal
+		return m.openTerminal(phaseDashboard, wsTerminal)
+	}
+}
 
 // ensureFiles lazily creates the Files session over the shared terminal transport
 // (default cwd "/root") if it does not exist yet. Idempotent — a no-op once created so a
@@ -164,6 +234,10 @@ func (m model) workspaceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	fmPrompting := m.wsTab == wsFiles && m.files != nil && m.files.prompting()
 	if !fmPrompting {
 		switch pk {
+		case navHomeKey:
+			// Главная: return to the Dashboard via navTo, KEEPING the session alive (no
+			// closeTerminal) so a return is instant.
+			return m.navTo(navHome)
 		case wsSwitchTerminalKey:
 			m.wsTab = wsTerminal
 			return m, nil
@@ -391,7 +465,9 @@ func (m model) renderTerminalFrame(bw, innerW int, b lipgloss.Border, body []str
 	title := " " + version.Name + " · " + t(m.lang, kTermTitle) + " "
 	sb.WriteString(titledTop(b, title, bw))
 	sb.WriteByte('\n')
-	sb.WriteString(m.switcherLine(b, innerW))
+	// Global nav bar (Главная · Терминал · Файлы) on the switcher row — same render +
+	// hit-test geometry as the dashboard and files frames.
+	sb.WriteString(m.navTabStripLine(b, innerW))
 	sb.WriteByte('\n')
 
 	// Window the body to exactly `rows` rows (blank-padded), drawing a scrollbar in the

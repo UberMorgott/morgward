@@ -138,7 +138,7 @@ func TestDashButtonsStillResolveWithServices(t *testing.T) {
 	innerW := innerWidth(m.boxWidth())
 	btnRow := m.dashButtonsRowY(innerW)
 	ranges := pillRanges(m.dashButtonNames(), dashButtonStartCol)
-	want := []dashButton{dashBtnApply, dashBtnSecurity, dashBtnTerminal, dashBtnFiles}
+	want := []dashButton{dashBtnApply, dashBtnSecurity}
 	for i, r := range ranges {
 		x := r[0] + 1
 		if got := m.dashButtonAtClick(x, btnRow); got != want[i] {
@@ -179,7 +179,7 @@ func TestDashSpacerBetweenButtonsAndStatus(t *testing.T) {
 		t.Fatalf("dashButtonsRowY=%d, want %d (spacer must not move the buttons row)", btnRow, summaryBodyTopRow+cardLen)
 	}
 	ranges := pillRanges(m.dashButtonNames(), dashButtonStartCol)
-	want := []dashButton{dashBtnApply, dashBtnSecurity, dashBtnTerminal, dashBtnFiles}
+	want := []dashButton{dashBtnApply, dashBtnSecurity}
 	for i, r := range ranges {
 		if got := m.dashButtonAtClick(r[0]+1, btnRow); got != want[i] {
 			t.Fatalf("after spacer, button %d → %v, want %v", i, got, want[i])

@@ -8,18 +8,19 @@ import (
 	"github.com/UberMorgott/morgward/internal/sshx"
 )
 
-// Ctrl+2 from the terminal tab switches to Files and keeps the terminal session alive.
-func TestCtrl2SwitchesToFiles(t *testing.T) {
+// Ctrl+3 (renumbered: ctrl+1=Главная, ctrl+2=Терминал, ctrl+3=Файлы) from the terminal
+// tab switches to Files and keeps the terminal session alive.
+func TestCtrl3SwitchesToFiles(t *testing.T) {
 	m, _ := termModel(t, 100, 40) // existing helper: live phaseTerminal w/ fake session
 	defer m.term.close()
 	// A non-nil (unconnected) transport so ensureFiles creates the session — the switch is
 	// a deliberate no-op when termClient is nil (dial-failed guard), which is not under test
 	// here. No live connection is needed: the tab flip + session creation don't touch it.
 	m.termClient = &sshx.Client{}
-	next, _ := m.Update(tea.KeyPressMsg{Code: '2', Mod: tea.ModCtrl})
+	next, _ := m.Update(tea.KeyPressMsg{Code: '3', Mod: tea.ModCtrl})
 	mm := next.(model)
 	if mm.wsTab != wsFiles {
-		t.Fatal("ctrl+2 must switch to the Files tab")
+		t.Fatal("ctrl+3 must switch to the Files tab")
 	}
 	if mm.term == nil {
 		t.Fatal("terminal session must stay alive across a tab switch")
@@ -40,18 +41,19 @@ func TestCtrlQExitsFromFilesTab(t *testing.T) {
 	}
 }
 
-// Files state survives a tab round-trip.
+// Files state survives a tab round-trip (ctrl+2 → Терминал, ctrl+3 → Файлы under the
+// renumbered map).
 func TestFilesStatePersistsAcrossSwitch(t *testing.T) {
 	m, _ := termModel(t, 100, 40)
 	defer m.term.close()
 	m.files = newFileSession(m.termClient, "/var/log", langRU)
 	m.wsTab = wsFiles
-	n1, _ := m.Update(tea.KeyPressMsg{Code: '1', Mod: tea.ModCtrl})
+	n1, _ := m.Update(tea.KeyPressMsg{Code: '2', Mod: tea.ModCtrl})
 	m = n1.(model)
 	if m.wsTab != wsTerminal {
-		t.Fatal("ctrl+1 must switch to Terminal")
+		t.Fatal("ctrl+2 must switch to Terminal")
 	}
-	n2, _ := m.Update(tea.KeyPressMsg{Code: '2', Mod: tea.ModCtrl})
+	n2, _ := m.Update(tea.KeyPressMsg{Code: '3', Mod: tea.ModCtrl})
 	m = n2.(model)
 	if m.files == nil || m.files.cwd != "/var/log" {
 		t.Fatal("Files cwd must survive a tab round-trip")

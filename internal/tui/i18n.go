@@ -262,6 +262,7 @@ const (
 	kTermEnded       // "Сессия завершена" / "Session ended"
 
 	// --- file manager tab (phaseTerminal, wsFiles, 2b) ------------------------
+	kNavHome       // global tab bar leading cell: "Главная" / "Home" (→ phaseDashboard)
 	kFmTabTerminal // tab strip: "Терминал" / "Terminal"
 	kFmTabFiles    // tab strip: "Файлы" / "Files"
 	kFmColName     // listing column header: "Имя" / "Name"
@@ -515,11 +516,12 @@ var tr = map[Lang]map[stringKey]string{
 		kDashTermButton:  "Терминал ▸",
 		kDashFilesButton: "Файлы ▸",
 		kTermTitle:       "Терминал",
-		kTermHint:        "SSH-терминал · колесо / shift+pgup — прокрутка · ctrl+q — выход · l — язык",
+		kTermHint:        "SSH-терминал · колесо / shift+pgup — прокрутка · ctrl+1/2/3 вкладки · ctrl+q — выход · l — язык",
 		kTermBackHint:    "esc / ctrl+q — назад",
 		kTermDialFail:    "не удалось подключиться",
 		kTermEnded:       "Сессия завершена",
 
+		kNavHome:       "Главная",
 		kFmTabTerminal: "Терминал",
 		kFmTabFiles:    "Файлы",
 		kFmColName:     "Имя",
@@ -527,7 +529,7 @@ var tr = map[Lang]map[stringKey]string{
 		kFmColPerms:    "Права",
 		kFmColMTime:    "Изменён",
 		kFmEmpty:       "(пусто)",
-		kFmHint:        "файлы · ↑/↓ выбор · enter — открыть · ctrl+1/ctrl+2 вкладки · ctrl+q выход",
+		kFmHint:        "файлы · ↑/↓ выбор · enter — открыть · ctrl+1/2/3 вкладки · ctrl+q выход",
 		kFmActNew:      "Создать ▾",
 		kFmActOpen:     "Открыть",
 		kFmActDownload: "Скачать",
@@ -765,11 +767,12 @@ var tr = map[Lang]map[stringKey]string{
 		kDashTermButton:  "Terminal ▸",
 		kDashFilesButton: "Files ▸",
 		kTermTitle:       "Terminal",
-		kTermHint:        "SSH terminal · wheel / shift+pgup to scroll · ctrl+q to exit · l language",
+		kTermHint:        "SSH terminal · wheel / shift+pgup to scroll · ctrl+1/2/3 tabs · ctrl+q to exit · l language",
 		kTermBackHint:    "esc / ctrl+q to go back",
 		kTermDialFail:    "could not connect",
 		kTermEnded:       "Session ended",
 
+		kNavHome:       "Home",
 		kFmTabTerminal: "Terminal",
 		kFmTabFiles:    "Files",
 		kFmColName:     "Name",
@@ -777,7 +780,7 @@ var tr = map[Lang]map[stringKey]string{
 		kFmColPerms:    "Perms",
 		kFmColMTime:    "Modified",
 		kFmEmpty:       "(empty)",
-		kFmHint:        "files · ↑/↓ select · enter open · ctrl+1/ctrl+2 tabs · ctrl+q exit",
+		kFmHint:        "files · ↑/↓ select · enter open · ctrl+1/2/3 tabs · ctrl+q exit",
 		kFmActNew:      "New ▾",
 		kFmActOpen:     "Open",
 		kFmActDownload: "Download",
