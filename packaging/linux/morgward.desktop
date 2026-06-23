@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=morgward
+GenericName=VPS Hardening Executor
+Comment=Harden and tune an Ubuntu VPS over embedded SSH (VPS-PREP-RUNBOOK)
+Exec=morgward
+Icon=morgward
+Terminal=true
+Categories=System;Network;Security;
+Keywords=vps;ssh;hardening;firewall;ubuntu;security;
+StartupNotify=false

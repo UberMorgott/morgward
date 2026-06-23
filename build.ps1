@@ -23,4 +23,23 @@ $lines = foreach ($f in Get-ChildItem -Path dist -File -Filter 'morgward-*' | So
     "$hash  $($f.Name)"
 }
 Set-Content -Path 'dist/checksums.txt' -Value $lines -Encoding ascii -NoNewline:$false
+
+# Linux desktop-integration tarballs (binary + .desktop + hicolor icons + install).
+# Emitted under dist/desktop/ so they never enter the dist/morgward-* checksum glob
+# above (the go-selfupdate contract). File modes are normalized by install.sh at
+# install time (install -Dm755/-Dm644), so Windows-built tarballs need no chmod.
+New-Item -ItemType Directory -Force dist/desktop | Out-Null
+foreach ($arch in @('amd64', 'arm64')) {
+    $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("mw-" + [System.Guid]::NewGuid().ToString('N'))
+    $root  = Join-Path $stage 'morgward'
+    New-Item -ItemType Directory -Force $root | Out-Null
+    Copy-Item "dist/morgward-linux-$arch"        (Join-Path $root 'morgward')
+    Copy-Item 'packaging/linux/morgward.desktop' $root
+    Copy-Item 'packaging/linux/install.sh'       $root
+    Copy-Item 'packaging/linux/uninstall.sh'     $root
+    Copy-Item 'packaging/linux/icons'            $root -Recurse
+    tar.exe -C $stage -czf "dist/desktop/morgward-linux-$arch-desktop.tar.gz" morgward
+    Remove-Item $stage -Recurse -Force
+    Write-Host "packaged dist/desktop/morgward-linux-$arch-desktop.tar.gz"
+}
 Write-Host "done -> ./dist"

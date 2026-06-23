@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64" role="img" aria-label="morgward">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b222c"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+  </defs>
+  <!-- shield body -->
+  <path d="M32 4 L56 12 V30 C56 46 45 56 32 60 C19 56 8 46 8 30 V12 Z"
+        fill="url(#body)" stroke="#39d353" stroke-width="2"/>
+  <!-- terminal prompt: >_ -->
+  <path d="M20 24 L28 32 L20 40" fill="none" stroke="#39d353" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="32" y="38" width="12" height="4" rx="1.5" fill="#39d353"/>
+</svg>
