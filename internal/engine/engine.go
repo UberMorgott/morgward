@@ -240,10 +240,18 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 			return nil, cleanup, fmt.Errorf("load key: %w", err)
 		}
 	}
+	// Opt-in host-key pin (FA-0010): verify the FIRST handshake against an operator
+	// known_hosts file / fingerprint instead of blind TOFU. nil => unchanged TOFU.
+	// Config.Validate already vetted the flag shape; ParseHostKeyPin builds the
+	// verifier (and re-checks, defensively).
+	pin, err := sshx.ParseHostKeyPin(cfg.KnownHostsPath, cfg.HostFingerprint)
+	if err != nil {
+		return nil, cleanup, fmt.Errorf("host-key pin: %w", err)
+	}
 	// Resilient initial dial: a freshly-reset box often is not auth-ready for the
 	// first ~minute (sshd in initramfs / cloud-init still installing keys or the
 	// root password). Retry for up to 90s with 5s backoff, streaming progress.
-	cli, err := sshx.DialWithRetry(cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM,
+	cli, err := sshx.DialWithRetry(cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM, pin,
 		90*time.Second, func(msg string) { log.Info("%s", msg) })
 	if err != nil {
 		if errors.Is(err, sshx.ErrNoMutualAuth) {

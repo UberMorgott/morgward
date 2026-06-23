@@ -73,6 +73,47 @@ func TestIsNoMutualAuth(t *testing.T) {
 	}
 }
 
+// TestRunProbe covers the bounded keepalive probe (FA-0021): a timely result is
+// returned verbatim; a probe that outlives the timeout is reported as a miss
+// (errKeepaliveTimeout) rather than blocking; closing stop short-circuits to a miss.
+func TestRunProbe(t *testing.T) {
+	t.Run("timely success", func(t *testing.T) {
+		err := runProbe(func() error { return nil }, make(chan struct{}), 500*time.Millisecond)
+		if err != nil {
+			t.Fatalf("want nil, got %v", err)
+		}
+	})
+	t.Run("timely error propagated", func(t *testing.T) {
+		sentinel := errors.New("transport down")
+		err := runProbe(func() error { return sentinel }, make(chan struct{}), 500*time.Millisecond)
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("want sentinel, got %v", err)
+		}
+	})
+	t.Run("stuck probe times out as a miss", func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release) // unblock the abandoned goroutine so it can exit cleanly
+		start := time.Now()
+		err := runProbe(func() error { <-release; return nil }, make(chan struct{}), 30*time.Millisecond)
+		if !errors.Is(err, errKeepaliveTimeout) {
+			t.Fatalf("want errKeepaliveTimeout, got %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("probe did not fast-fail: took %s", elapsed)
+		}
+	})
+	t.Run("stop signals a miss", func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		stop := make(chan struct{})
+		close(stop)
+		err := runProbe(func() error { <-release; return nil }, stop, 5*time.Second)
+		if !errors.Is(err, errKeepaliveTimeout) {
+			t.Fatalf("want errKeepaliveTimeout on stop, got %v", err)
+		}
+	})
+}
+
 // slowReader yields its payload in chunks with a small delay between them, so the
 // test exercises the streaming path (emit must fire per line as data arrives, not
 // only after EOF) rather than a single buffered read.

@@ -59,6 +59,15 @@ var ErrRebootAuthFailed = errors.New("ssh: box rebooted and is reachable but our
 const (
 	keepaliveInterval = 30 * time.Second
 	keepaliveMaxFails = 3
+	// keepaliveProbeTimeout bounds a single keepalive global-request round-trip
+	// (FA-0021). cli.SendRequest(...,wantReply=true,...) blocks until the server
+	// replies or the transport errors; on a half-open TCP (silent NAT drop, dead
+	// peer) that can park one probe for the full OS TCP timeout, defeating the
+	// fast-fail the miss-counter is meant to give. A probe that does not complete
+	// within this window counts as a miss so the existing keepaliveMaxFails logic
+	// force-closes promptly. Comfortably under keepaliveInterval so probes never
+	// overlap.
+	keepaliveProbeTimeout = 10 * time.Second
 )
 
 // ErrNoMutualAuth is returned (wrapped via %w) when the SSH handshake reaches the
@@ -105,6 +114,19 @@ type Client struct {
 	// handshake by this Client must present the same key (see hostKeyCallback).
 	pinnedHostKey []byte
 
+	// pin, when non-nil, is an operator-supplied host-key expectation (a
+	// known_hosts file and/or a sha256 fingerprint). It replaces blind TOFU on the
+	// FIRST handshake: the presented key must satisfy the pin or the connect is
+	// refused. nil => today's TOFU (trust-on-first-use), byte-identical.
+	pin *HostKeyPin
+
+	// agentConns collects ssh-agent unix sockets opened during a handshake (FA-0020).
+	// agentAuthMethod's signers must keep their socket open for the DURATION of the
+	// handshake, so we cannot close it inside the auth callback; instead each conn is
+	// recorded here and closed by closeAgentConns once connect's handshake returns.
+	// Guarded by mu (the auth callback may run on a handshake goroutine).
+	agentConns []net.Conn
+
 	// OnOutput, when set, receives every server output line as it is produced
 	// (stream is "out" or "err"). Optional: nil = silent capture, preserving the
 	// behavior of callers that do not opt in (e.g. short-lived verify dials). This
@@ -117,9 +139,20 @@ type Client struct {
 // to disable streaming and fall back to silent capture.
 func (c *Client) SetOutputSink(fn func(stream, line string)) { c.OnOutput = fn }
 
-// Dial opens a connection. Provide either keyPEM or password (key wins).
+// Dial opens a connection. Provide either keyPEM or password (key wins). Host-key
+// handling is the default in-run TOFU (no operator pin); see DialWithPin to verify
+// the first host key against a --known-hosts file / --host-fingerprint.
 func Dial(host string, port int, user, password string, keyPEM []byte) (*Client, error) {
-	c := &Client{Host: host, Port: port, User: user, password: password}
+	return DialWithPin(host, port, user, password, keyPEM, nil)
+}
+
+// DialWithPin is Dial with an OPT-IN host-key pin. When pin is non-nil the FIRST
+// handshake must satisfy it (else ErrHostKeyMismatch) instead of blindly trusting
+// the server's key; when pin is nil this is byte-identical to Dial (default TOFU).
+// The in-run pin-on-first + ErrHostKeyChanged-on-later-change guard is unchanged on
+// both paths.
+func DialWithPin(host string, port int, user, password string, keyPEM []byte, pin *HostKeyPin) (*Client, error) {
+	c := &Client{Host: host, Port: port, User: user, password: password, pin: pin}
 	if len(keyPEM) > 0 {
 		signer, err := ssh.ParsePrivateKey(keyPEM)
 		if err != nil {
@@ -142,7 +175,7 @@ func (c *Client) authMethods() []ssh.AuthMethod {
 	// 2. ssh-agent (if running): the common "just works" path when the provider
 	//    installed the operator's public key. Signers are resolved lazily at
 	//    handshake time so a dead socket costs nothing here.
-	if am := agentAuthMethod(); am != nil {
+	if am := c.agentAuthMethod(); am != nil {
 		m = append(m, am)
 	}
 	// 3. Password + keyboard-interactive fallback (some sshd configs require the
@@ -163,7 +196,13 @@ func (c *Client) authMethods() []ssh.AuthMethod {
 // agentAuthMethod returns a publickey auth method backed by the running ssh-agent
 // (via $SSH_AUTH_SOCK), or nil if no agent is reachable. Signers are fetched at
 // handshake time, so this is cheap and tolerant of a stale/absent socket.
-func agentAuthMethod() ssh.AuthMethod {
+//
+// FA-0020: the dialed unix socket must stay open while its signers sign during the
+// handshake, so it cannot be closed inside this callback. Instead each opened conn
+// is recorded on the Client and closed by closeAgentConns once connect's handshake
+// returns — so a long-lived TUI that redials per reconnect (with an agent socket
+// present) no longer leaks one fd per dial.
+func (c *Client) agentAuthMethod() ssh.AuthMethod {
 	sock := os.Getenv("SSH_AUTH_SOCK")
 	if sock == "" {
 		return nil
@@ -173,11 +212,25 @@ func agentAuthMethod() ssh.AuthMethod {
 		if err != nil {
 			return nil, err
 		}
-		// The conn intentionally outlives this call: the returned signers use it to
-		// sign during the handshake. It is reclaimed when the process exits; a
-		// bootstrap CLI is short-lived, so this is acceptable.
+		c.mu.Lock()
+		c.agentConns = append(c.agentConns, conn)
+		c.mu.Unlock()
 		return agent.NewClient(conn).Signers()
 	})
+}
+
+// closeAgentConns closes (and clears) every ssh-agent socket opened by
+// agentAuthMethod during the just-finished handshake. Safe to call when none were
+// opened (the common no-agent path) and idempotent. Called after the handshake
+// completes — never before signing, which would break agent auth (FA-0020).
+func (c *Client) closeAgentConns() {
+	c.mu.Lock()
+	conns := c.agentConns
+	c.agentConns = nil
+	c.mu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
 }
 
 const dialTimeout = 15 * time.Second
@@ -208,6 +261,10 @@ func (c *Client) connect() error {
 	// caller that re-connects without Close()/detachConn() cannot orphan the old
 	// goroutine. Idempotent — a no-op when the keepalive was already stopped.
 	c.stopKeepalive()
+	// FA-0020: any ssh-agent socket opened by agentAuthMethod is needed only while
+	// the handshake below signs with it; close every one once connect returns
+	// (success OR failure), so repeated redials cannot accrete agent-socket fds.
+	defer c.closeAgentConns()
 	cfg := &ssh.ClientConfig{
 		User:              c.User,
 		Auth:              c.authMethods(),
@@ -241,6 +298,11 @@ func (c *Client) connect() error {
 		if errors.Is(err, ErrHostKeyChanged) {
 			return fmt.Errorf("ssh handshake %s@%s: %w", c.User, addr, ErrHostKeyChanged)
 		}
+		// A failed operator host-key pin on the first dial: surface it preserving the
+		// wrapped reason so errors.Is(err, ErrHostKeyMismatch) works for the caller.
+		if errors.Is(err, ErrHostKeyMismatch) {
+			return fmt.Errorf("ssh handshake %s@%s: %w", c.User, addr, err)
+		}
 		return fmt.Errorf("ssh handshake %s@%s: %w", c.User, addr, err)
 	}
 	cli := ssh.NewClient(sc, chans, reqs)
@@ -252,18 +314,32 @@ func (c *Client) connect() error {
 	return nil
 }
 
-// hostKeyCallback implements in-run TOFU. The first successful handshake records
-// (pins) the server's host key; every later handshake by this same Client must
-// present a byte-identical key or it is rejected with ErrHostKeyChanged. First
-// connect accepts any key (a fresh VPS has no known fingerprint — documented
-// tradeoff). The callback runs synchronously inside the handshake, before connect
-// returns and before the keepalive goroutine starts, so the pin field needs no
-// extra locking against command execution.
+// hostKeyCallback implements in-run TOFU (with an optional operator pin). The first
+// successful handshake records (pins) the server's host key; every later handshake
+// by this same Client must present a byte-identical key or it is rejected with
+// ErrHostKeyChanged.
+//
+// First connect: when c.pin is nil, accept any key (a fresh VPS has no known
+// fingerprint — the documented TOFU tradeoff, byte-identical to before this
+// feature). When c.pin is set (opt-in --known-hosts / --host-fingerprint), the
+// presented key must satisfy the pin instead of being trusted blindly, else the
+// connect is refused with ErrHostKeyMismatch. Either way the accepted first key is
+// recorded so the in-run ErrHostKeyChanged guard protects every later redial.
+//
+// The callback runs synchronously inside the handshake, before connect returns and
+// before the keepalive goroutine starts, so the pin field needs no extra locking
+// against command execution.
 func (c *Client) hostKeyCallback() ssh.HostKeyCallback {
-	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	return func(hostport string, remote net.Addr, key ssh.PublicKey) error {
 		marshaled := key.Marshal()
 		if c.pinnedHostKey == nil {
-			// TOFU: trust and pin on first sight.
+			// First sight. With an operator pin, verify against it instead of blind
+			// trust; without one, fall back to TOFU. Pin the (accepted) key either way.
+			if c.pin != nil {
+				if err := c.pin.verify(hostport, remote, key); err != nil {
+					return err
+				}
+			}
 			c.pinnedHostKey = marshaled
 			return nil
 		}
@@ -296,9 +372,12 @@ func (c *Client) startKeepalive(cli *ssh.Client) {
 				return
 			case <-t.C:
 				// wantReply=true so the server actually round-trips; an error means
-				// the transport is broken (or the remote is wedged). SendRequest on a
-				// dead conn returns promptly, so this can't itself hang indefinitely.
-				if _, _, err := cli.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+				// the transport is broken (or the remote is wedged). A half-open TCP
+				// can park SendRequest for the full OS TCP timeout, so bound the single
+				// call (FA-0021): a probe that neither replies nor errors within
+				// keepaliveProbeTimeout is treated as a miss, letting the miss-counter
+				// force-close promptly instead of wedging here.
+				if err := sendKeepalive(cli, stop); err != nil {
 					fails++
 					if fails >= keepaliveMaxFails {
 						// Force the connection down so a blocked Run/sess.Wait unblocks.
@@ -313,6 +392,50 @@ func (c *Client) startKeepalive(cli *ssh.Client) {
 			}
 		}
 	}()
+}
+
+// errKeepaliveTimeout is the synthetic miss returned by sendKeepalive when a probe
+// neither replied nor errored within keepaliveProbeTimeout (FA-0021). It is treated
+// exactly like any other probe failure by the caller's miss-counter.
+var errKeepaliveTimeout = errors.New("ssh: keepalive probe timed out")
+
+// sendKeepalive runs a single keepalive global request with a bounded deadline so a
+// stuck round-trip (half-open TCP) cannot park the keepalive loop. The blocking
+// SendRequest runs in its own goroutine; we return on whichever fires first: the
+// request result, the probe timeout, or the keepalive stop signal. When the timer
+// or stop wins, the in-flight SendRequest goroutine is abandoned — it unblocks on
+// its own once the transport is torn down (the miss-counter force-closes cli after
+// keepaliveMaxFails), and it only writes to a buffered channel, so it cannot leak
+// or block. Returns nil only on a real, timely reply.
+func sendKeepalive(cli *ssh.Client, stop <-chan struct{}) error {
+	return runProbe(func() error {
+		_, _, err := cli.SendRequest("keepalive@openssh.com", true, nil)
+		return err
+	}, stop, keepaliveProbeTimeout)
+}
+
+// runProbe runs a single blocking probe (send) in its own goroutine and returns on
+// whichever fires first: the probe result, the timeout, or stop. On timeout/stop it
+// returns errKeepaliveTimeout (a miss) and abandons the in-flight goroutine, which
+// unblocks once the transport is torn down; done is buffered so that goroutine never
+// blocks. Split out from sendKeepalive so the timeout/stop behavior is unit-testable
+// without a live *ssh.Client. (FA-0021)
+func runProbe(send func() error, stop <-chan struct{}, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- send() }()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-t.C:
+		return errKeepaliveTimeout
+	case <-stop:
+		// Connection is being torn down; report a miss so the loop exits its select
+		// and re-reads stop (it will return on the next iteration). No force-close
+		// here — stopKeepalive owns lifecycle.
+		return errKeepaliveTimeout
+	}
 }
 
 // stopKeepalive signals the current connection's keepalive goroutine to exit, if
@@ -348,10 +471,15 @@ func isNoMutualAuth(err error) bool {
 // failures are retried while the window is open. onTick (if non-nil) is called
 // before each wait with a human-readable status, mirroring WaitForReboot.
 //
+// pin is the OPT-IN host-key expectation (see DialWithPin / ParseHostKeyPin); pass
+// nil for the default trust-on-first-use. A pinned mismatch is NOT retried — an
+// unexpected host key never heals by waiting, so it fails fast with
+// ErrHostKeyMismatch rather than burning the retry window.
+//
 // On the final failure after the window expires it returns the last error; when
 // that last error was a no-mutual-auth rejection it is wrapped with
 // ErrNoMutualAuth so the caller can print an actionable hint.
-func DialWithRetry(host string, port int, user, password string, keyPEM []byte, timeout time.Duration, onTick func(string)) (*Client, error) {
+func DialWithRetry(host string, port int, user, password string, keyPEM []byte, pin *HostKeyPin, timeout time.Duration, onTick func(string)) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 90 * time.Second
 	}
@@ -362,11 +490,16 @@ func DialWithRetry(host string, port int, user, password string, keyPEM []byte, 
 	attempt := 0
 	for {
 		attempt++
-		cli, err := Dial(host, port, user, password, keyPEM)
+		cli, err := DialWithPin(host, port, user, password, keyPEM, pin)
 		if err == nil {
 			return cli, nil
 		}
 		lastErr = err
+		// A host-key pin mismatch is a hard stop, not a transient provisioning state:
+		// retrying cannot make a wrong/forged key become right, so fail immediately.
+		if errors.Is(err, ErrHostKeyMismatch) {
+			return nil, err
+		}
 		if !time.Now().Add(retryBackoff).Before(deadline) {
 			break // next attempt would land past the window — stop now.
 		}

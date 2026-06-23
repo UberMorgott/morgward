@@ -1,11 +1,14 @@
 package main
 
 import (
+	"flag"
 	"reflect"
 	"strings"
 	"testing"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
+
+	"github.com/UberMorgott/morgward/internal/config"
 )
 
 // TestUsageDocumentsUpdate asserts the CLI `update` self-update command is
@@ -40,6 +43,26 @@ func TestNewUpdaterHasChecksumValidator(t *testing.T) {
 	}
 	if cv.UniqueFilename != checksumsFile {
 		t.Fatalf("validator UniqueFilename = %q, want %q", cv.UniqueFilename, checksumsFile)
+	}
+}
+
+// TestBindFlagsHostKeyPin confirms the FA-0010 pin flags are wired into the config
+// (parsed into KnownHostsPath / HostFingerprint) and documented in usage.
+func TestBindFlagsHostKeyPin(t *testing.T) {
+	cfg := &config.Config{}
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	bindFlags(fs, cfg)
+	if err := fs.Parse([]string{"--known-hosts", "kh.txt", "--host-fingerprint", "SHA256:abc"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.KnownHostsPath != "kh.txt" {
+		t.Errorf("KnownHostsPath = %q, want kh.txt", cfg.KnownHostsPath)
+	}
+	if cfg.HostFingerprint != "SHA256:abc" {
+		t.Errorf("HostFingerprint = %q, want SHA256:abc", cfg.HostFingerprint)
+	}
+	if !strings.Contains(usage, "--known-hosts") || !strings.Contains(usage, "--host-fingerprint") {
+		t.Error("usage does not document the host-key pin flags")
 	}
 }
 
@@ -88,6 +111,18 @@ func TestPartitionArgs(t *testing.T) {
 			args:     []string{"--host", "1.2.3.4", "--assume-yes"},
 			wantFlag: []string{"--host", "1.2.3.4", "--assume-yes"},
 			wantPos:  nil,
+		},
+		{
+			name:     "known-hosts value absorbs its token after a step id",
+			args:     []string{"A1", "--known-hosts", "kh.txt", "A5"},
+			wantFlag: []string{"--known-hosts", "kh.txt"},
+			wantPos:  []string{"A1", "A5"},
+		},
+		{
+			name:     "host-fingerprint value absorbs its token",
+			args:     []string{"--host-fingerprint", "SHA256:abc", "A1"},
+			wantFlag: []string{"--host-fingerprint", "SHA256:abc"},
+			wantPos:  []string{"A1"},
 		},
 	}
 	for _, c := range cases {

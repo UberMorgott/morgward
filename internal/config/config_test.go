@@ -1,7 +1,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -56,6 +60,57 @@ func TestValidateAdminUser(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("AdminUser %q: unexpected err %v", c.admin, err)
+			}
+		})
+	}
+}
+
+// goodFingerprint returns a syntactically valid SHA256:<base64> host-key
+// fingerprint (32-byte digest, OpenSSH unpadded base64) for the pin-flag tests.
+func goodFingerprint() string {
+	sum := sha256.Sum256([]byte("any 32-byte-after-hash payload"))
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
+// TestValidateHostKeyPin covers FA-0010 flag-shape validation: both empty is the
+// default TOFU path; both set conflicts; a missing known_hosts path and a malformed
+// fingerprint are rejected up front; one valid source of either kind passes.
+func TestValidateHostKeyPin(t *testing.T) {
+	khFile := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(khFile, []byte("example.com ssh-ed25519 AAAA...\n"), 0o600); err != nil {
+		t.Fatalf("seed known_hosts: %v", err)
+	}
+	fp := goodFingerprint()
+
+	cases := []struct {
+		name    string
+		kh, fp  string
+		wantErr error // nil => must pass
+	}{
+		{"both empty (TOFU)", "", "", nil},
+		{"valid known_hosts", khFile, "", nil},
+		{"valid fingerprint", "", fp, nil},
+		{"valid fingerprint no prefix", "", fp[len("SHA256:"):], nil},
+		{"both set conflicts", khFile, fp, ErrPinConflict},
+		{"missing known_hosts", filepath.Join(t.TempDir(), "absent"), "", ErrKnownHostsPath},
+		{"fingerprint bad base64", "", "SHA256:not base64 %%%", ErrBadFingerprint},
+		{"fingerprint wrong length", "", "SHA256:" + base64.RawStdEncoding.EncodeToString([]byte("short")), ErrBadFingerprint},
+		{"fingerprint md5 form", "", "MD5:aa:bb:cc:dd", ErrBadFingerprint},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := baseValid()
+			cfg.KnownHostsPath = c.kh
+			cfg.HostFingerprint = c.fp
+			err := cfg.Validate()
+			if c.wantErr == nil {
+				if err != nil {
+					t.Fatalf("unexpected err: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("err = %v, want %v", err, c.wantErr)
 			}
 		})
 	}

@@ -49,7 +49,13 @@ func runShell(cfg *config.Config) error {
 			return fmt.Errorf("load key: %w", err)
 		}
 	}
-	cli, err := sshx.Dial(cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM)
+	// Honor the opt-in host-key pin (FA-0010) on the interactive shell too, so a
+	// pinned operator gets the same first-handshake verification as a hardening run.
+	pin, err := sshx.ParseHostKeyPin(cfg.KnownHostsPath, cfg.HostFingerprint)
+	if err != nil {
+		return fmt.Errorf("host-key pin: %w", err)
+	}
+	cli, err := sshx.DialWithPin(cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM, pin)
 	if err != nil {
 		if errors.Is(err, sshx.ErrNoMutualAuth) {
 			return fmt.Errorf("could not authenticate to %s@%s — the server accepted none of the offered methods (check user/key/password): %w", cfg.User, cfg.Host, err)
