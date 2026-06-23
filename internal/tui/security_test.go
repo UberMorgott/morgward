@@ -121,7 +121,7 @@ func TestSecurityScrollHitTest(t *testing.T) {
 	m := secModel(100, 16)
 	innerW := innerWidth(m.boxWidth())
 	body := m.securityBodyLines(innerW)
-	viewH := m.bodyViewH()
+	viewH := m.secBodyViewH()
 	if len(body) <= viewH {
 		t.Fatalf("test precondition: body (%d) must overflow viewH (%d)", len(body), viewH)
 	}
@@ -279,6 +279,46 @@ func TestFormHasNoModeToggle(t *testing.T) {
 				t.Fatalf("landing form (advancedOpen=%v) leaked mode label %q", adv, leak)
 			}
 		}
+	}
+}
+
+// TestSecurityBackPillHitTest asserts the Security menu renders a clickable "← Назад"
+// pill that resolves at its drawn position, misses off-target, and returns to the
+// Dashboard when clicked.
+func TestSecurityBackPillHitTest(t *testing.T) {
+	m := secModel(100, 40)
+	backY := m.secBackRow()
+	backX := pillRanges([]string{t2(m.lang, kWikiBack)}, wikiBackStartCol)[0][0] + 1
+	if !m.secBackAtClick(backX, backY) {
+		t.Fatalf("security back pill click at x=%d y=%d did not register", backX, backY)
+	}
+	if m.secBackAtClick(backX, backY+1) {
+		t.Fatalf("security back pill matched one row off the pill row")
+	}
+	if m.secBackAtClick(95, backY) {
+		t.Fatalf("security back pill matched past its rendered width")
+	}
+	if !strings.Contains(m.securityView(), t2(m.lang, kWikiBack)) {
+		t.Fatalf("securityView missing the back pill label")
+	}
+	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: backY, Button: tea.MouseLeft})
+	if next.(model).phase != phaseDashboard {
+		t.Fatalf("security back click → phase %v, want phaseDashboard", next.(model).phase)
+	}
+}
+
+// TestSecurityBackPillSwallowedByDangerConfirm asserts that while the danger confirm is
+// armed, a click on the back pill is swallowed (does not navigate), mirroring the
+// existing modal-swallow behavior for the action buttons.
+func TestSecurityBackPillSwallowedByDangerConfirm(t *testing.T) {
+	m := secModel(100, 40)
+	m.secDangerConfirm = true
+	backY := m.secBackRow()
+	backX := pillRanges([]string{t2(m.lang, kWikiBack)}, wikiBackStartCol)[0][0] + 1
+	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: backY, Button: tea.MouseLeft})
+	mm := next.(model)
+	if mm.phase != phaseSecurity {
+		t.Fatalf("back click while danger-confirm armed navigated to %v; want it swallowed (phaseSecurity)", mm.phase)
 	}
 }
 

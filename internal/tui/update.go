@@ -131,6 +131,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case phaseMatrix:
+			return m.matrixClick(mc.X, mc.Y)
 		case phaseSecurity:
 			return m.securityClick(mc.X, mc.Y)
 		case phaseWiki:
@@ -143,14 +145,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// confirm (hint switches to the prompt); the launch happens only on Enter in
 			// the key handler. While the confirm is armed, every OTHER click cancels it and
 			// is otherwise harmless (no apply/revert/back fires on the arming interaction).
-			if m.wikiUpdateAtClick(mc.X, mc.Y) {
-				m.wikiUpdateConfirm = true
+			// A pending A8-reboot confirm owns the buttons row (the armed state swaps the
+			// action pills for [подтвердить]/[отмена]). Resolve it FIRST: the confirm pill
+			// launches A8 (same as Enter), and any click that misses it cancels the confirm
+			// (the existing "stray click cancels armed confirm" behavior + the explicit cancel
+			// pill) — keeping apply/revert/back harmless while armed.
+			if m.wikiUpdateConfirm {
+				if m.wikiUpdateConfirmConfirmAtClick(mc.X, mc.Y) {
+					m.wikiUpdateConfirm = false
+					return m.startSteps([]string{"A8"})
+				}
+				m.wikiUpdateConfirm = false
 				return m, nil
 			}
-			if m.wikiUpdateConfirm {
-				// A pending reboot confirm swallows any other click (cancel it; resolve via
-				// Enter/Esc on the hint). This keeps apply/revert/back harmless while armed.
-				m.wikiUpdateConfirm = false
+			if m.wikiUpdateAtClick(mc.X, mc.Y) {
+				m.wikiUpdateConfirm = true
 				return m, nil
 			}
 			if m.wikiApplyAtClick(mc.X, mc.Y) {
@@ -207,9 +216,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.goBack()
 			}
 		case phaseKey:
-			// The "Copy key" button is the only click target on this screen.
+			// The "Copy key" button copies the PEM. On the PRE-RUN modal the pill splits
+			// into a START half (Enter → confirmPreRunKey, launch the run) and a CANCEL half
+			// (Esc → clear the staged key + go home); on the post-run / read-only viewer the
+			// "← Назад" pill dismisses to keyReturn.
 			if m.keyCopyAtClick(mc.X, mc.Y) {
 				m = m.copyKey()
+				return m, nil
+			}
+			if m.keyPreRun {
+				if m.keyStartAtClick(mc.X, mc.Y) {
+					return m.confirmPreRunKey()
+				}
+				if m.keyCancelAtClick(mc.X, mc.Y) {
+					// Abort before the run even starts: clear the staged key and go home
+					// (the same path as Esc in the key handler).
+					m.keyPreRun = false
+					m.pendingKey = nil
+					return m.goBack()
+				}
+				return m, nil
+			}
+			if m.keyBackAtClick(mc.X, mc.Y) {
+				m = m.dismissKeyViewer()
 			}
 			return m, nil
 		}
@@ -253,7 +282,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if down {
 				d = wheelStep
 			}
-			m.matScroll = clampScroll(m.matScroll+d, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+			m.matScroll = clampScroll(m.matScroll+d, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.matrixBodyViewH())
 		case phaseDashboard:
 			d := 0
 			if up {
@@ -271,7 +300,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				d = wheelStep
 			}
 			iw := innerWidth(m.boxWidth())
-			m.dashScroll = clampScroll(m.dashScroll+d, len(m.securityBodyLines(iw)), m.bodyViewH())
+			m.dashScroll = clampScroll(m.dashScroll+d, len(m.securityBodyLines(iw)), m.secBodyViewH())
 		case phaseTerminal:
 			// Wheel scrolls LOCAL scrollback (not forwarded to the remote app). Disabled
 			// while on the alternate screen (vim/top own the screen) — see terminalScrollable.
@@ -384,9 +413,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc", "b":
 				return m.goBack()
 			case "up", "k":
-				m.matScroll = clampScroll(m.matScroll-1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				m.matScroll = clampScroll(m.matScroll-1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.matrixBodyViewH())
 			case "down", "j":
-				m.matScroll = clampScroll(m.matScroll+1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				m.matScroll = clampScroll(m.matScroll+1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.matrixBodyViewH())
 			}
 			return m, nil
 		case phaseDashboard:
@@ -468,9 +497,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseDashboard
 				return m, nil
 			case "up", "k":
-				m.dashScroll = clampScroll(m.dashScroll-1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				m.dashScroll = clampScroll(m.dashScroll-1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.secBodyViewH())
 			case "down", "j":
-				m.dashScroll = clampScroll(m.dashScroll+1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.bodyViewH())
+				m.dashScroll = clampScroll(m.dashScroll+1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.secBodyViewH())
 			}
 			return m, nil
 		case phaseKey:

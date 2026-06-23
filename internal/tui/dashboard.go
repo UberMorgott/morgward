@@ -93,15 +93,28 @@ var modalBoxStyle = lipgloss.NewStyle().
 // handled by the phaseDashboard key handler (launchApplyTweaks / cancel) — this is
 // purely the visual. The box is centered in the full terminal viewport.
 func (m model) applyConfirmModalView() string {
-	// Modal inner width: bounded so the box never spans the whole terminal but stays
-	// readable on a narrow one.
-	w := m.boxWidth()
-	innerW := min(max(innerWidth(w)-8, 32), 64)
+	parts := m.applyModalParts()
+	box := modalBoxStyle.Render(strings.Join(parts, "\n"))
 
-	title := sumHeadStyle.Render(t(m.lang, kApplyModalTitle))
+	// Center the box over a full-viewport canvas so it visibly floats in the middle.
+	cw, ch := m.boxWidth(), max(m.h, 1)
+	return lipgloss.Place(cw, ch, lipgloss.Center, lipgloss.Center, box)
+}
 
+// applyModalInnerW is the bounded content width of the apply-confirm modal — the SINGLE
+// source shared by the render (applyModalParts) and the hit-test geometry.
+func (m model) applyModalInnerW() int {
+	return min(max(innerWidth(m.boxWidth())-8, 32), 64)
+}
+
+// applyModalParts builds the apply-confirm modal's content lines (before the box frame):
+// title, body, optional A8 reboot warning, blank, then the buttons line. It is the
+// SINGLE source of truth for BOTH applyConfirmModalView (render) and the centered-box
+// hit-test geometry (applyConfirmGeom), so a click maps to the same pills that are drawn.
+func (m model) applyModalParts() []string {
+	innerW := m.applyModalInnerW()
 	var parts []string
-	parts = append(parts, title)
+	parts = append(parts, sumHeadStyle.Render(t(m.lang, kApplyModalTitle)))
 	parts = append(parts, "")
 	parts = append(parts, wrap(labelStyle.Render(t(m.lang, kApplyModalBody)), innerW)...)
 	if bucketHasA8(tweakBucketIDs()) {
@@ -115,12 +128,116 @@ func (m model) applyConfirmModalView() string {
 	confirmPill := pillOnStyle.Render(t(m.lang, kApplyModalConfirm))
 	cancelPill := pillStyle.Render(t(m.lang, kApplyModalCancel))
 	parts = append(parts, confirmPill+"   "+cancelPill)
+	return parts
+}
 
+// modalBorderW / modalPadH / modalPadV mirror modalBoxStyle's frame: a 1-cell rounded
+// border on every side plus Padding(1,3) (1 row top/bottom, 3 cols left/right). The
+// hit-test derives the centered box origin + the buttons cell from these so it can never
+// drift from modalBoxStyle.
+const (
+	modalBorderW = 1
+	modalPadH    = 3
+	modalPadV    = 1
+)
+
+// applyConfirmGeom returns the screen geometry of the centered apply-confirm modal's
+// buttons row: the absolute screen Y of the buttons line and the absolute X where the
+// buttons content begins (the column of the first pill). It reproduces lipgloss.Place's
+// centering EXACTLY from the rendered box's outer width/height, so the hit-test lands on
+// the same pills applyConfirmModalView draws.
+func (m model) applyConfirmGeom() (buttonsY, buttonsX0 int) {
+	parts := m.applyModalParts()
 	box := modalBoxStyle.Render(strings.Join(parts, "\n"))
-
-	// Center the box over a full-viewport canvas so it visibly floats in the middle.
+	boxW := lipgloss.Width(box)
+	boxH := lipgloss.Height(box)
 	cw, ch := m.boxWidth(), max(m.h, 1)
-	return lipgloss.Place(cw, ch, lipgloss.Center, lipgloss.Center, box)
+	// lipgloss.Place centers: origin = (canvas - box) / 2 (floored), clamped at 0.
+	originX := max((cw-boxW)/2, 0)
+	originY := max((ch-boxH)/2, 0)
+	// The buttons line is the LAST content row inside the frame: border + top padding
+	// rows precede the content; the buttons are content row (len(parts)-1).
+	buttonsY = originY + modalBorderW + modalPadV + (len(parts) - 1)
+	buttonsX0 = originX + modalBorderW + modalPadH
+	return buttonsY, buttonsX0
+}
+
+// applyConfirmPillPoint returns a click point inside the confirm (or cancel) pill of the
+// centered apply-modal, using the SAME geometry the render path draws. Exposed for the
+// hit-test tests so they don't hard-code the centered-box math.
+func (m model) applyConfirmPillPoint(confirm bool) (x, y int) {
+	buttonsY, buttonsX0 := m.applyConfirmGeom()
+	ranges := applyModalPillRanges(m.lang, buttonsX0)
+	idx := 0
+	if !confirm {
+		idx = 1
+	}
+	r := ranges[idx]
+	return (r[0] + r[1]) / 2, buttonsY
+}
+
+// confirmPillsGap is the plain-space separator drawn between the confirm and cancel
+// pills on every confirm row (the centered apply-modal AND the pinned security/wiki rows),
+// matching applyModalParts' "   " (BUG 2 — keep the two pills visually distinct).
+const confirmPillsGap = 3
+
+// confirmPillsLine renders the shared "[подтвердить]   [отмена]" pair: an accent confirm
+// pill, a 3-space plain gap, a dim cancel pill. The SINGLE render source for the security
+// danger-confirm row and the wiki update-confirm row; confirmPillRanges recovers its
+// geometry for the hit-tests. (The centered apply-modal builds the same pair inline in
+// applyModalParts because it sits inside the modal box, not a contentLine row.)
+func confirmPillsLine(lang Lang) string {
+	return pillOnStyle.Render(t(lang, kApplyModalConfirm)) +
+		strings.Repeat(" ", confirmPillsGap) +
+		pillStyle.Render(t(lang, kApplyModalCancel))
+}
+
+// confirmPillRanges returns the absolute [start,end) X ranges of the confirm and cancel
+// pills starting at startCol. pillOnStyle/pillStyle both add Padding(0,1); the two pills
+// are joined by confirmPillsGap plain spaces. The SINGLE geometry source for every confirm
+// row's pill hit-tests (apply modal, security danger, wiki update).
+func confirmPillRanges(lang Lang, startCol int) [][2]int {
+	const pad = 2 // Padding(0,1): one cell each side
+	confirmW := lipgloss.Width(t(lang, kApplyModalConfirm)) + pad
+	cancelW := lipgloss.Width(t(lang, kApplyModalCancel)) + pad
+	c0 := startCol
+	x0 := c0 + confirmW + confirmPillsGap
+	return [][2]int{
+		{c0, c0 + confirmW},
+		{x0, x0 + cancelW},
+	}
+}
+
+// applyModalPillRanges is confirmPillRanges keyed at the centered modal's buttons column.
+func applyModalPillRanges(lang Lang, buttonsX0 int) [][2]int {
+	return confirmPillRanges(lang, buttonsX0)
+}
+
+// applyConfirmConfirmAtClick / applyConfirmCancelAtClick report whether (x,y) hit the
+// confirm / cancel pill of the centered apply-modal. Only valid while dashApplyConfirm
+// is armed on the Dashboard.
+func (m model) applyConfirmConfirmAtClick(x, y int) bool {
+	if m.phase != phaseDashboard || !m.dashApplyConfirm {
+		return false
+	}
+	buttonsY, buttonsX0 := m.applyConfirmGeom()
+	if y != buttonsY {
+		return false
+	}
+	r := applyModalPillRanges(m.lang, buttonsX0)[0]
+	return x >= r[0] && x < r[1]
+}
+
+func (m model) applyConfirmCancelAtClick(x, y int) bool {
+	if m.phase != phaseDashboard || !m.dashApplyConfirm {
+		return false
+	}
+	buttonsY, buttonsX0 := m.applyConfirmGeom()
+	if y != buttonsY {
+		return false
+	}
+	r := applyModalPillRanges(m.lang, buttonsX0)[1]
+	return x >= r[0] && x < r[1]
 }
 
 // dashButtonNames is the ordered list of the Dashboard action-button labels
@@ -589,8 +706,19 @@ func (m model) dashButtonAtClick(x, y int) dashButton {
 // warning (Enter to confirm). "Безопасность ▸" navigates to the security menu
 // (phaseSecurity).
 func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
-	// A pending apply-confirm swallows clicks (use Enter/esc on the hint to resolve).
+	// A pending apply-confirm modal owns the screen: a click on the confirm pill launches
+	// the apply (same as Enter), the cancel pill clears it (same as Esc), and any click
+	// that misses both pills is swallowed (stays armed) so a stray click can't bypass the
+	// reboot warning.
 	if m.dashApplyConfirm {
+		if m.applyConfirmConfirmAtClick(x, y) {
+			m.dashApplyConfirm = false
+			return m.launchApplyTweaks()
+		}
+		if m.applyConfirmCancelAtClick(x, y) {
+			m.dashApplyConfirm = false
+			return m, nil
+		}
 		return m, nil
 	}
 	// Global nav bar (Главная · Терминал · Файлы) on the switcher row. A click on a cell

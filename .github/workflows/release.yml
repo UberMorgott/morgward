@@ -1,0 +1,51 @@
+name: Release
+
+# Build the cross-compiled, stripped release artifacts in CI (clean, auditable
+# environment) and publish them to a GitHub Release, with signed build-provenance
+# attestation so consumers can verify each binary came from THIS workflow at THIS
+# commit (`gh attestation verify <binary> --repo UberMorgott/morgward`).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write     # create the Release + upload assets
+  id-token: write     # OIDC token for provenance attestation
+  attestations: write # write the attestation to the repo
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # SHA-pinned (supply-chain hardening), matching ci.yml.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+
+      # `make release` cross-compiles the 5 targets with -trimpath -ldflags '-s -w'
+      # (the single source of truth shared with local build.ps1) and writes
+      # dist/checksums.txt in the sha256sum format go-selfupdate parses.
+      - name: Cross-compile (stripped, trimpath)
+        run: make release
+
+      # Cryptographic build-provenance for every binary (not checksums.txt).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: 'dist/morgward-*'
+
+      # Publish the Release from the binaries + checksums; gh is preinstalled on
+      # the runner and uses the workflow GITHUB_TOKEN (contents: write above).
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/morgward-* dist/checksums.txt \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

@@ -220,6 +220,45 @@ func (m model) wikiActionRowY(kind wikiActionKind) (int, bool) {
 // wikiBackRow is the screen Y of the buttons row (the back pill always lives there).
 func (m model) wikiBackRow() int { return m.wikiButtonsRowY() }
 
+// wikiConfirmRow is the screen Y of the A8-reboot confirm pill row — the SAME buttons row
+// (the armed state swaps the action pills for confirm/cancel).
+func (m model) wikiConfirmRow() int { return m.wikiButtonsRowY() }
+
+// wikiConfirmContentX0 is the absolute X where the wiki confirm pills begin: 2 (left
+// border + the leading content space contentLine adds), matching wikiBackStartCol.
+const wikiConfirmContentX0 = wikiBackStartCol
+
+// wikiConfirmPillX returns a click X inside the confirm (or cancel) update pill, from the
+// SAME geometry confirmPillsLine renders. Exposed for the hit-test tests.
+func (m model) wikiConfirmPillX(confirm bool) int {
+	ranges := confirmPillRanges(m.lang, wikiConfirmContentX0)
+	idx := 0
+	if !confirm {
+		idx = 1
+	}
+	r := ranges[idx]
+	return (r[0] + r[1]) / 2
+}
+
+// wikiUpdateConfirmConfirmAtClick / wikiUpdateConfirmCancelAtClick report whether (x,y)
+// hit the confirm / cancel pill of the armed A8-reboot confirm. Valid only while
+// wikiUpdateConfirm is armed on the wiki page.
+func (m model) wikiUpdateConfirmConfirmAtClick(x, y int) bool {
+	if m.phase != phaseWiki || !m.wikiUpdateConfirm || y != m.wikiConfirmRow() {
+		return false
+	}
+	r := confirmPillRanges(m.lang, wikiConfirmContentX0)[0]
+	return x >= r[0] && x < r[1]
+}
+
+func (m model) wikiUpdateConfirmCancelAtClick(x, y int) bool {
+	if m.phase != phaseWiki || !m.wikiUpdateConfirm || y != m.wikiConfirmRow() {
+		return false
+	}
+	r := confirmPillRanges(m.lang, wikiConfirmContentX0)[1]
+	return x >= r[0] && x < r[1]
+}
+
 // wikiBackAtClick reports whether (x,y) hit the wiki "← Назад" pill on the shared
 // buttons row.
 func (m model) wikiBackAtClick(x, y int) bool {
@@ -339,7 +378,15 @@ func (m model) wikiView() string {
 		sb.WriteString(contentLine(b, errStyle.Render(t(m.lang, kWikiUpdateWarn)), innerW))
 		sb.WriteByte('\n')
 	}
-	sb.WriteString(contentLine(b, m.wikiButtonsLine(), innerW))
+	// While the A8 reboot confirm is armed the buttons row carries the clickable
+	// [подтвердить]/[отмена] pills (confirm launches A8, cancel clears it) instead of the
+	// normal action pills; the row Y is unchanged so geometry never drifts. Keyboard
+	// Enter/Esc still resolves it.
+	if m.wikiUpdateConfirm {
+		sb.WriteString(contentLine(b, confirmPillsLine(m.lang), innerW))
+	} else {
+		sb.WriteString(contentLine(b, m.wikiButtonsLine(), innerW))
+	}
 	sb.WriteByte('\n')
 	hintKey := kWikiHint
 	if m.wikiUpdateConfirm {

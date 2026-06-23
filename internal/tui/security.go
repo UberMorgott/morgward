@@ -72,9 +72,21 @@ func (m model) securityView() string {
 	sb.WriteString(m.switcherLine(b, innerW))
 	sb.WriteByte('\n')
 
-	viewH := m.bodyViewH()
+	viewH := m.secBodyViewH()
 	off := clampScroll(m.dashScroll, len(body), viewH)
 	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
+
+	// Pinned action-pill row (one fixed row reserved below the scroll region so the footer
+	// never moves). Normally it carries the clickable "← Назад" pill; while the danger
+	// confirm is armed it instead carries the clickable [подтвердить]/[отмена] pills so the
+	// lockout can be confirmed/cancelled by mouse (keyboard Enter/Esc still works). secBackRow
+	// / secBackAtClick and secConfirmRow / secConfirm*AtClick share this row's geometry.
+	if m.secDangerConfirm {
+		sb.WriteString(contentLine(b, confirmPillsLine(m.lang), innerW))
+	} else {
+		sb.WriteString(contentLine(b, pillStyle.Render(t(m.lang, kWikiBack)), innerW))
+	}
+	sb.WriteByte('\n')
 
 	hint := t(m.lang, kSecHint)
 	if m.secDangerConfirm {
@@ -206,7 +218,7 @@ const (
 // otherwise the bottom DANGER/SAFE buttons clip unreachable on a short terminal.
 func (m model) secRowYToBodyIdx(y int) (int, bool) {
 	body := m.securityBodyLines(innerWidth(m.boxWidth()))
-	viewH := m.bodyViewH()
+	viewH := m.secBodyViewH()
 	off := clampScroll(m.dashScroll, len(body), viewH)
 	rowInRegion := y - summaryBodyTopRow
 	if rowInRegion < 0 || rowInRegion >= viewH {
@@ -278,12 +290,82 @@ func (m model) launchKeyOnlyDanger() (tea.Model, tea.Cmd) {
 	return m.startSteps([]string{"A2-danger", "A2.5"})
 }
 
-// securityClick resolves a Security-menu click to one of the three buttons. A pending
-// danger confirm swallows clicks (resolve with Enter/esc on the hint), mirroring the
-// Dashboard apply-confirm pattern so a stray click can never bypass the lockout
-// warning.
+// secBodyViewH is the height of the scrollable Security-menu region: the shared
+// bodyViewH minus the one fixed row reserved for the pinned "← Назад" pill, floored at
+// 1. Used by BOTH securityView's render and secRowYToBodyIdx so the button geometry
+// never drifts.
+func (m model) secBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+
+// secBackRow is the FIXED screen Y of the pinned "← Назад" pill: it follows the 2 chrome
+// rows and the scroll region, so it never moves with the scroll offset.
+func (m model) secBackRow() int { return summaryBodyTopRow + m.secBodyViewH() }
+
+// secBackAtClick reports whether (x,y) hit the pinned "← Назад" pill, using the same
+// pillRanges geometry the render path draws.
+func (m model) secBackAtClick(x, y int) bool {
+	if m.phase != phaseSecurity || y != m.secBackRow() {
+		return false
+	}
+	return pillIndexAt([]string{t(m.lang, kWikiBack)}, wikiBackStartCol, x) == 0
+}
+
+// secConfirmRow is the screen Y of the danger-confirm pill row — the SAME pinned row the
+// back pill normally occupies (the danger state swaps the back pill for confirm/cancel).
+func (m model) secConfirmRow() int { return m.secBackRow() }
+
+// secConfirmContentX0 is the absolute X where the danger-confirm pills begin: 2 (left
+// border + the leading content space contentLine adds).
+const secConfirmContentX0 = 2
+
+// secConfirmPillX returns a click X inside the confirm (or cancel) danger pill, from the
+// SAME geometry confirmPillsLine renders. Exposed for the hit-test tests.
+func (m model) secConfirmPillX(confirm bool) int {
+	ranges := confirmPillRanges(m.lang, secConfirmContentX0)
+	idx := 0
+	if !confirm {
+		idx = 1
+	}
+	r := ranges[idx]
+	return (r[0] + r[1]) / 2
+}
+
+// secConfirmConfirmAtClick / secConfirmCancelAtClick report whether (x,y) hit the confirm
+// / cancel danger pill. Valid only while secDangerConfirm is armed on the Security menu.
+func (m model) secConfirmConfirmAtClick(x, y int) bool {
+	if m.phase != phaseSecurity || !m.secDangerConfirm || y != m.secConfirmRow() {
+		return false
+	}
+	r := confirmPillRanges(m.lang, secConfirmContentX0)[0]
+	return x >= r[0] && x < r[1]
+}
+
+func (m model) secConfirmCancelAtClick(x, y int) bool {
+	if m.phase != phaseSecurity || !m.secDangerConfirm || y != m.secConfirmRow() {
+		return false
+	}
+	r := confirmPillRanges(m.lang, secConfirmContentX0)[1]
+	return x >= r[0] && x < r[1]
+}
+
+// securityClick resolves a Security-menu click. While the danger confirm is armed the
+// pinned row carries the [подтвердить]/[отмена] pills: confirm launches the key-only
+// lockdown (same as Enter), cancel clears the confirm (same as Esc), and any click that
+// misses both pills is swallowed (stays armed) so a stray click can't bypass the lockout
+// warning. Otherwise a click resolves a SAFE/DANGER button or the back pill.
 func (m model) securityClick(x, y int) (tea.Model, tea.Cmd) {
 	if m.secDangerConfirm {
+		if m.secConfirmConfirmAtClick(x, y) {
+			m.secDangerConfirm = false
+			return m.launchKeyOnlyDanger()
+		}
+		if m.secConfirmCancelAtClick(x, y) {
+			m.secDangerConfirm = false
+			return m, nil
+		}
+		return m, nil
+	}
+	if m.secBackAtClick(x, y) {
+		m.phase = phaseDashboard
 		return m, nil
 	}
 	switch m.secButtonAtClick(x, y) {
