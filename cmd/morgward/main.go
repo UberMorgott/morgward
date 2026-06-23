@@ -82,6 +82,10 @@ Flags:
   --admin-user   non-root sudo user to create/verify (default vpsadmin)
   --log-file     write a full run log to this file (default: no file written)
   --assume-yes   proceed on a brownfield box (applies in coexistence mode)
+  --known-hosts  verify the server's host key against this known_hosts file on the
+                 first connect (opt-in; default is trust-on-first-use)
+  --host-fingerprint  verify the first host key against this SHA256:<base64>
+                 fingerprint (ssh-keygen -lf form); mutually exclusive with --known-hosts
 
 Note:
   On the password path a fresh ed25519 key is generated for SSH. The generated
@@ -351,13 +355,15 @@ func printKeyBlock(pem string) {
 // valueFlags lists the value-taking flag names bound in bindFlags (everything
 // except the sole bool flag --assume-yes).
 var valueFlags = map[string]bool{
-	"host":       true,
-	"port":       true,
-	"user":       true,
-	"password":   true,
-	"key":        true,
-	"admin-user": true,
-	"log-file":   true,
+	"host":             true,
+	"port":             true,
+	"user":             true,
+	"password":         true,
+	"key":              true,
+	"admin-user":       true,
+	"log-file":         true,
+	"known-hosts":      true,
+	"host-fingerprint": true,
 }
 
 // partitionArgs splits args into flag tokens (and their values) and positional
@@ -396,6 +402,8 @@ func bindFlags(fs *flag.FlagSet, cfg *config.Config) {
 	fs.StringVar(&cfg.AdminUser, "admin-user", "vpsadmin", "non-root sudo user to create/verify")
 	fs.StringVar(&cfg.LogFile, "log-file", "", "write a full run log to this file (default: no file written)")
 	fs.BoolVar(&cfg.Assume, "assume-yes", false, "proceed on a brownfield box without prompting")
+	fs.StringVar(&cfg.KnownHostsPath, "known-hosts", "", "verify the server host key against this known_hosts file on first connect (default: trust-on-first-use)")
+	fs.StringVar(&cfg.HostFingerprint, "host-fingerprint", "", "verify the first host key against this SHA256:<base64> fingerprint (mutually exclusive with --known-hosts)")
 }
 
 func interactive(cfg *config.Config) error {

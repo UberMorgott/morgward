@@ -27,7 +27,7 @@ make release                                  # cross-compile 5 targets into dis
 ./build.ps1                                    # same, PowerShell (Windows dev host)
 ```
 
-Targets built/verified: linux+darwin × amd64+arm64, windows/amd64. Go `1.26.2`.
+Targets built/verified: linux+darwin × amd64+arm64, windows/amd64. Go `1.26.4`.
 
 ## Architecture
 

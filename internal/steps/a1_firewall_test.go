@@ -3,7 +3,75 @@ package steps
 import (
 	"strings"
 	"testing"
+
+	"github.com/UberMorgott/morgward/internal/detect"
 )
+
+// TestAllPortsOpenAndPersistedGreenfield: greenfield only needs SSH :cfg.Port in
+// both the live ruleset and rules.v4 — service ports are irrelevant.
+func TestAllPortsOpenAndPersistedGreenfield(t *testing.T) {
+	live := "-P INPUT DROP\n-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT"
+	pers := "-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT"
+	f := &detect.Facts{Greenfield: true}
+	if !allPortsOpenAndPersisted(live, pers, 22, f) {
+		t.Error("greenfield with SSH :22 open+persisted should skip (true)")
+	}
+	// SSH missing from persisted ⇒ must not skip.
+	if allPortsOpenAndPersisted(live, "", 22, f) {
+		t.Error("greenfield with SSH not persisted should not skip (false)")
+	}
+}
+
+// TestAllPortsOpenAndPersistedBrownfieldRerun is the FA-0007 regression: a
+// brownfield re-run after a NEW listener appears must NOT skip — every detected
+// port has to be open+persisted before the skip-if fires, so a freshly-listening
+// port (9099 here, not yet in the ruleset) forces a fall-through that re-opens it.
+func TestAllPortsOpenAndPersistedBrownfieldRerun(t *testing.T) {
+	// Round-1 ruleset: SSH + 8080 open & persisted; the operator later starts a 9099
+	// listener that detect now reports but the firewall has not opened yet.
+	live := "-P INPUT DROP\n" +
+		"-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT\n" +
+		"-A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT"
+	pers := live
+	f := &detect.Facts{
+		Greenfield:     false,
+		ListenPortsTCP: []int{22, 8080, 9099},
+	}
+	if allPortsOpenAndPersisted(live, pers, 22, f) {
+		t.Error("brownfield re-run with a NEW detected port (9099) must NOT skip (want false)")
+	}
+
+	// Once 9099 is open AND persisted, the skip-if may fire again (idempotent re-run).
+	live2 := live + "\n-A INPUT -p tcp --dport 9099 -m conntrack --ctstate NEW -j ACCEPT"
+	pers2 := live2
+	if !allPortsOpenAndPersisted(live2, pers2, 22, f) {
+		t.Error("brownfield with every detected port open+persisted should skip (want true)")
+	}
+}
+
+// TestAllPortsOpenAndPersistedPersistGap: a port open live but NOT in rules.v4 must
+// not skip — otherwise a reboot would drop it.
+func TestAllPortsOpenAndPersistedPersistGap(t *testing.T) {
+	live := "-P INPUT DROP\n" +
+		"-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT\n" +
+		"-A INPUT -p udp --dport 51820 -j ACCEPT"
+	pers := "-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT" // 51820 not persisted
+	f := &detect.Facts{Greenfield: false, ListenPortsUDP: []int{51820}}
+	if allPortsOpenAndPersisted(live, pers, 22, f) {
+		t.Error("a detected UDP port open live but not persisted must NOT skip (want false)")
+	}
+}
+
+// TestAllPortsOpenAndPersistedBoundary guards that the anchored dportOpen match is
+// used: a 2222 rule must not satisfy a check for SSH :22.
+func TestAllPortsOpenAndPersistedBoundary(t *testing.T) {
+	live := "-P INPUT DROP\n-A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT"
+	pers := live
+	f := &detect.Facts{Greenfield: true}
+	if allPortsOpenAndPersisted(live, pers, 22, f) {
+		t.Error("a 2222 rule must not satisfy the SSH :22 presence check (want false)")
+	}
+}
 
 // TestGreenfieldRulesetUnchanged pins the greenfield build to its exact original
 // shape: SSH-only INPUT, INPUT+FORWARD DROP, no per-service port openings.

@@ -512,24 +512,6 @@ func (s *termSession) cursorShown() bool {
 	return s.cursorVisible
 }
 
-// cursorXY returns the live emulator cursor cell (col x, row y), read via emuNow() so
-// it observes the current emulator even across a reflow swap. uv.Position is an alias
-// for image.Point, so the fields are X/Y.
-func (s *termSession) cursorXY() (x, y int) {
-	p := s.emuNow().CursorPosition()
-	return p.X, p.Y
-}
-
-// cursorCell returns the grapheme under the cursor cell (empty when the cell is blank or
-// out of range), used as the glyph the reverse-video block reverses. Read via emuNow().
-func (s *termSession) cursorCell(x, y int) string {
-	c := s.emuNow().CellAt(x, y)
-	if c == nil {
-		return ""
-	}
-	return c.Content
-}
-
 // screenLines is the live screen split into physical rows (ANSI-styled), trailing
 // blank rows trimmed so the join is exactly the visible content. The SafeEmulator
 // serializes Render against the drain goroutine.
@@ -606,14 +588,6 @@ func (s *termSession) cursorSnapshot() termSnapshot {
 	snap.cursorVisible = s.cursorVisible
 	s.mu.Unlock()
 	return snap
-}
-
-// dirty reports whether the emulator has untouched-since-last-render damage, so the
-// render ticker can skip a repaint when nothing changed. Touched() returns the set of
-// changed lines (and clears the damage), so this is a one-shot check per call —
-// callers that want the value to drive a render must act on a true result.
-func (s *termSession) dirty() bool {
-	return len(s.emuNow().Touched()) > 0
 }
 
 // finished reports whether the Shell goroutine has returned (the remote shell exited
