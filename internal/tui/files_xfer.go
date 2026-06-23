@@ -52,7 +52,7 @@ func downloadLocalDest(remoteName string) string {
 func (m model) downloadCmd(remotePath, localPath, label string) tea.Cmd {
 	cli := m.files.cli // plain local — never deref f inside the goroutine
 	return func() tea.Msg {
-		if err := os.MkdirAll(downloadsDir(), 0o755); err != nil {
+		if err := os.MkdirAll(downloadsDir(), 0o700); err != nil {
 			return fmXferDoneMsg{err: err, label: label}
 		}
 		sc, err := cli.SFTP() // the goroutine's OWN sftp client

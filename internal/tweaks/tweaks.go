@@ -105,7 +105,7 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Probe{ID: "a1.input_drop", Step: "A1", Name: "INPUT policy DROP",
 				Cmd: "iptables -S INPUT 2>/dev/null | grep -m1 '^-P INPUT'", Want: has("DROP")},
 			Probe{ID: "a1.ssh_accept", Step: "A1", Name: "SSH port accepted",
-				Cmd: fmt.Sprintf("iptables -S INPUT 2>/dev/null | grep -- '--dport %d' | grep -m1 ACCEPT", port), Want: has("ACCEPT")},
+				Cmd: fmt.Sprintf("iptables -S INPUT 2>/dev/null | grep -E -- '--dport %d( |$)' | grep -m1 ACCEPT", port), Want: has("ACCEPT")},
 			Probe{ID: "a1.rules_v4", Step: "A1", Name: "rules.v4 persisted",
 				Cmd: fileExists("/etc/iptables/rules.v4"), Want: eq("1")},
 			Probe{ID: "a1.persistent", Step: "A1", Name: "iptables-persistent installed",

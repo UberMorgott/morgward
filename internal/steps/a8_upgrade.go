@@ -29,7 +29,7 @@ func (a A8Upgrade) Run(ctx *Context) (Status, string, error) {
 	if ctx.Facts.ManagesIPTables() {
 		gate := fmt.Sprintf(`V4=$(wc -l < /etc/iptables/rules.v4 2>/dev/null || echo 0)
 V6=$(wc -l < /etc/iptables/rules.v6 2>/dev/null || echo 0)
-DP=$(grep -c -- "--dport %d" /etc/iptables/rules.v4 2>/dev/null || echo 0)
+DP=$(grep -Ec -- '--dport %d( |$)' /etc/iptables/rules.v4 2>/dev/null || echo 0)
 printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 		g := ctx.Cli.Sudo(gate)
 		if !strings.Contains(g.Stdout, "dport=") || strings.Contains(g.Stdout, "dport=0") || strings.Contains(g.Stdout, "v4=0") {
@@ -139,7 +139,7 @@ exit $__rc`)
 	// asserting raw iptables would falsely abort. Match the pre-gate's branching.
 	health := ctx.Cli.Run("systemctl is-system-running").Out()
 	if ctx.Facts.ManagesIPTables() {
-		fwOK := ctx.Cli.Sudo(fmt.Sprintf(`iptables -S | grep -q -- "--dport %d" && iptables -S | grep -q -- "-P INPUT DROP" && echo ok`, port)).Out()
+		fwOK := ctx.Cli.Sudo(fmt.Sprintf(`iptables -S | grep -Eq -- '--dport %d( |$)' && iptables -S | grep -q -- "-P INPUT DROP" && echo ok`, port)).Out()
 		if fwOK != "ok" {
 			return StatusFail, "firewall not loaded after reboot (boot default-ACCEPT?)", fmt.Errorf("post-reboot firewall missing")
 		}

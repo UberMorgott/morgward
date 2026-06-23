@@ -1,11 +1,30 @@
 package tweaks
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
 )
+
+// TestA1SSHAcceptDportAnchored is the regression guard for the dport-prefix
+// false-match bug: the a1.ssh_accept probe greps `iptables -S` for the SSH port,
+// and an unanchored `--dport 22` substring wrongly matches a :2222 rule. The probe
+// runs remotely, so the behavioral proof is the CLI repro documented on the branch;
+// this test only pins the `( |$)` anchor into the generated Cmd against silent
+// regression.
+func TestA1SSHAcceptDportAnchored(t *testing.T) {
+	// Empty FirewallMgr ⇒ ManagesIPTables() true ⇒ A1 probes are emitted.
+	ps := ids(Registry(&detect.Facts{Is2404: true}, &config.Config{Port: 22}))
+	p, ok := ps["a1.ssh_accept"]
+	if !ok {
+		t.Fatal("registry must contain a1.ssh_accept on a managed-iptables box")
+	}
+	if !strings.Contains(p.Cmd, "( |$)") {
+		t.Errorf("a1.ssh_accept Cmd lost its dport anchor (regression):\n%s", p.Cmd)
+	}
+}
 
 func TestPredicates(t *testing.T) {
 	if !eq("1")(" 1 ") {

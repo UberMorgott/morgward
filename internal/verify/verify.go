@@ -128,7 +128,7 @@ func firewallChecks(facts *detect.Facts, port int) []Check {
 	// Managed iptables (greenfield + iptables/none): unchanged, byte-identical.
 	return []Check{
 		{Name: "Firewall order", Cmd: "iptables -S | grep -- '-P INPUT DROP'", Want: contains("drop"), Lockout: true},
-		{Name: "SSH port open", Cmd: fmt.Sprintf("iptables -S | grep -- '--dport %d'", port), Want: contains("accept"), Lockout: true},
+		{Name: "SSH port open", Cmd: fmt.Sprintf("iptables -S | grep -E -- '--dport %d( |$)'", port), Want: contains("accept"), Lockout: true},
 	}
 }
 

@@ -22,7 +22,10 @@ func seedLines(t *testing.T, m model, n, wantScrollback int) {
 	}
 	m.term.write([]byte(b.String()))
 	waitFor(t, 2*time.Second, func() bool {
-		return m.term.emu.Scrollback().Len() >= wantScrollback
+		// Read scrollback length through cursorSnapshot() so it holds out.mu — the same
+		// lock the fake-shell drain (termOut.Write) takes when appending to scrollback.
+		// Reading m.term.emu.Scrollback().Len() directly races that drain goroutine.
+		return m.term.cursorSnapshot().scrollbackLen >= wantScrollback
 	}, "emulator to accumulate scrollback")
 }
 
