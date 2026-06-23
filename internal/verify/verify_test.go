@@ -2,10 +2,30 @@ package verify
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
 )
+
+// TestFirewallChecksDportAnchored is the regression guard for the dport-prefix
+// false-match bug: the managed "SSH port open" matcher must anchor the port with
+// `( |$)` so a rule for :2222 cannot satisfy a check for :22. The matcher runs
+// remotely (grep over `iptables -S`), so the behavioral proof is the CLI repro
+// documented in the branch (`echo '… --dport 2222 …' | grep -E -- '--dport 22( |$)'`
+// exits 1); this Go test only pins the anchor into the generated Cmd so it can't
+// silently regress.
+func TestFirewallChecksDportAnchored(t *testing.T) {
+	// nil facts ⇒ managed iptables path (the original byte-identical matcher).
+	fw := firewallChecks(nil, 22)
+	ssh := fw[1] // {Name: "SSH port open", ...}
+	if ssh.Name != "SSH port open" {
+		t.Fatalf("fw[1] = %q, want the SSH-port-open row", ssh.Name)
+	}
+	if !strings.Contains(ssh.Cmd, "( |$)") {
+		t.Errorf("SSH-port-open Cmd lost its dport anchor (regression):\n%s", ssh.Cmd)
+	}
+}
 
 // TestClassifyTransportError is the F21 guard: a transport/exec failure (RC==-1 or
 // Err!=nil) on a NON-lockout row must read as StatusUnknown ("could not measure"),

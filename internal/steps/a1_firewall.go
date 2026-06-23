@@ -2,6 +2,7 @@ package steps
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -23,6 +24,16 @@ iptables -F; iptables -X; ip6tables -F; ip6tables -X
 iptables-restore  < /root/iptables-backup.v4
 ip6tables-restore < /root/iptables-backup.v6
 `
+
+// dportOpen reports whether an iptables ruleset contains a rule for the exact
+// destination port. The anchor `( |$)` (a space OR end-of-line) prevents a
+// superset-prefix false match — e.g. a `--dport 2222` rule must NOT satisfy a
+// query for port 22, and `--dport 80` must NOT match a `--dport 8080` rule.
+// `(?m)` makes `$` match per-line end so a port at the end of any rule line counts.
+func dportOpen(ruleset string, port int) bool {
+	ok, _ := regexp.MatchString(fmt.Sprintf("(?m)--dport %d( |$)", port), ruleset)
+	return ok
+}
 
 func (a A1Firewall) Run(ctx *Context) (Status, string, error) {
 	port := ctx.Cfg.Port
@@ -47,9 +58,9 @@ func (a A1Firewall) Run(ctx *Context) (Status, string, error) {
 
 	// Skip-if: SSH ACCEPT before DROP already present AND persisted.
 	cur := ctx.Cli.Sudo("iptables -S 2>/dev/null").Stdout
-	persisted := ctx.Cli.Sudo(fmt.Sprintf(`grep -q -- "--dport %d" /etc/iptables/rules.v4 2>/dev/null && echo yes`, port)).Out()
+	persisted := ctx.Cli.Sudo(fmt.Sprintf(`grep -Eq -- '--dport %d( |$)' /etc/iptables/rules.v4 2>/dev/null && echo yes`, port)).Out()
 	if strings.Contains(cur, "-P INPUT DROP") &&
-		strings.Contains(cur, fmt.Sprintf("--dport %d", port)) && persisted == "yes" {
+		dportOpen(cur, port) && persisted == "yes" {
 		return StatusSkip, "firewall already closed with SSH open and persisted", nil
 	}
 
@@ -109,7 +120,7 @@ netfilter-persistent save >/dev/null 2>&1
 
 	// Confirm disarmed + persisted opens the SSH port.
 	timers := ctx.Cli.Sudo("systemctl list-timers --all 2>/dev/null | grep fw-rollback || true").Out()
-	pchk := ctx.Cli.Sudo(fmt.Sprintf(`grep -q -- "--dport %d" /etc/iptables/rules.v4 && echo ok`, port)).Out()
+	pchk := ctx.Cli.Sudo(fmt.Sprintf(`grep -Eq -- '--dport %d( |$)' /etc/iptables/rules.v4 && echo ok`, port)).Out()
 	if timers != "" {
 		ctx.Log.Warn("fw-rollback timer still listed after disarm")
 	}

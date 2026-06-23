@@ -136,6 +136,33 @@ func TestCountServicePorts(t *testing.T) {
 	}
 }
 
+// TestDportOpen guards the superset-prefix false-match bug: an unanchored
+// substring match of `--dport 22` wrongly matches a rule for port 2222 (and
+// `--dport 80` matches `--dport 8080`). dportOpen anchors with `( |$)` so only the
+// exact destination port satisfies the query — whether the port is mid-rule
+// (followed by a space) or at end-of-line.
+func TestDportOpen(t *testing.T) {
+	// Superset-prefix rule must NOT satisfy the shorter port (the reported bug).
+	if dportOpen("-A INPUT -p tcp -m tcp --dport 2222 -j ACCEPT", 22) {
+		t.Error("dportOpen(2222-rule, 22) = true, want false (superset-prefix false match)")
+	}
+	if dportOpen("-A INPUT -p tcp -m tcp --dport 8080 -j ACCEPT", 80) {
+		t.Error("dportOpen(8080-rule, 80) = true, want false (superset-prefix false match)")
+	}
+	// Exact match mid-rule (port followed by a space) must succeed.
+	if !dportOpen("-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT", 22) {
+		t.Error("dportOpen(22-rule, 22) = false, want true")
+	}
+	// Exact match at end-of-line ($ branch of the anchor) must succeed.
+	if !dportOpen("-A INPUT -p tcp -m tcp --dport 22\n", 22) {
+		t.Error("dportOpen(rule ending in --dport 22, 22) = false, want true (end-of-line anchor)")
+	}
+	// A real 2222 rule still matches a query FOR 2222 (anchor doesn't over-restrict).
+	if !dportOpen("-A INPUT -p tcp -m tcp --dport 2222 -j ACCEPT", 2222) {
+		t.Error("dportOpen(2222-rule, 2222) = false, want true")
+	}
+}
+
 // TestUFWAllowScript asserts the ufw path emits an idempotent allow for SSH +
 // every detected TCP/UDP service port (deduped against SSH), and NEVER touches
 // the default policy or enables/disables ufw (allow-only ⇒ cannot lock out).
