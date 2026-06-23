@@ -4,16 +4,25 @@ on:
   push:
   pull_request:
 
+# Least privilege: this workflow only reads the repo (build/test/vet/vuln).
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      # SHA-pinned to the commit the tag pointed at (supply-chain hardening).
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: '1.26.4'
           check-latest: false
+
+      - name: Gofmt
+        run: test -z "$(gofmt -l .)" || { echo 'gofmt drift — run gofmt -w .'; gofmt -l .; exit 1; }
 
       - name: Build
         run: go build ./...

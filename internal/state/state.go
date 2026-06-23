@@ -4,15 +4,14 @@
 // file. The on-box configs remain the durable data checkpoints.
 package state
 
-// Checkpoint is the in-memory run state.
+// Checkpoint is the in-memory run state. Nothing is persisted (see Save), so no
+// field carries a json tag — they are working scratch for the current run only.
 type Checkpoint struct {
-	Host       string            `json:"host"`
-	AdminUser  string            `json:"admin_user"`
-	KeyPath    string            `json:"key_path"`
-	Completed  map[string]string `json:"completed"` // stepID -> status (OK/SKIP)
-	BootID     string            `json:"boot_id"`
-	Greenfield bool              `json:"greenfield"`
-	UpdatedAt  string            `json:"updated_at"`
+	Host       string            // connect target (set by the engine for logging context)
+	AdminUser  string            // non-root admin (set by PRE)
+	Completed  map[string]string // stepID -> status (OK/SKIP)
+	BootID     string            // last observed boot_id (set by A8 across the reboot)
+	Greenfield bool              // fresh-box flag snapshotted from detect.Facts
 }
 
 // Load returns a fresh in-memory checkpoint. The path argument is ignored; no

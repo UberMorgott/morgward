@@ -25,13 +25,6 @@ import (
 // dashAuditRowAtClick does off dashScrollTopRow.
 const filesListTopRow = 4
 
-// filesAddressRow / filesColHeaderRow are the fixed Y of the address bar and column
-// header (between the tab strip and the listing).
-const (
-	filesAddressRow   = 2
-	filesColHeaderRow = 3
-)
-
 // filesChromeRows is the number of NON-listing rows the Files frame spends: the 4 header
 // rows above the listing (border, tab strip, address bar, column header) + the action
 // bar (1) + hint (1) + bottom border (1) + the pinned 3-row monitor box = 10.

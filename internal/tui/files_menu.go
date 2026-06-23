@@ -150,7 +150,7 @@ func (m model) filesMenuView() string {
 	rows = append(rows, sumHeadStyle.Render(t(m.lang, kFmMenuTitle)))
 	rows = append(rows, "")
 	for i, it := range f.menuItems {
-		line := it.label
+		var line string
 		switch {
 		case i == f.menuSel:
 			line = fileSelStyle.Render(" " + it.label + " ")

@@ -24,7 +24,6 @@ var (
 	sumHeadStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true) // section headers
 	sumOKStyle   = monGreenStyle                                                    // OK glyph
 	sumFailStyle = monRedStyle                                                      // FAIL glyph
-	sumSkipStyle = monYellowStyle                                                   // SKIP glyph
 )
 
 // humanKB64 renders an int64 KB value via the float helper (engine snapshots use
