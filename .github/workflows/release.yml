@@ -20,12 +20,12 @@ jobs:
     timeout-minutes: 20
     steps:
       # SHA-pinned (supply-chain hardening), matching ci.yml.
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: '1.26.4'
-          check-latest: false
+          go-version: stable
+          check-latest: true
 
       # `make release` cross-compiles the 5 targets with -trimpath -ldflags '-s -w'
       # (the single source of truth shared with local build.ps1) and writes
@@ -35,7 +35,7 @@ jobs:
 
       # Cryptographic build-provenance for every binary (not checksums.txt).
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: 'dist/morgward-*'
 
