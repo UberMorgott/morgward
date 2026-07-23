@@ -27,10 +27,16 @@ jobs:
           go-version: stable
           check-latest: true
 
+      # UPX packs the linux + windows binaries in `make release` (darwin is skipped
+      # — UPX can't produce a working macho). upx-ucl is Ubuntu's package name.
+      - name: Install UPX
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl
+
       # `make release` cross-compiles the 5 targets with -trimpath -ldflags '-s -w'
-      # (the single source of truth shared with local build.ps1) and writes
-      # dist/checksums.txt in the sha256sum format go-selfupdate parses.
-      - name: Cross-compile (stripped, trimpath)
+      # (the single source of truth shared with local build.ps1), UPX-compresses the
+      # linux + windows binaries, then writes dist/checksums.txt in the sha256sum
+      # format go-selfupdate parses (hashing the already-compressed artifacts).
+      - name: Cross-compile (stripped, trimpath, UPX-packed)
         run: make release
 
       # Cryptographic build-provenance for every binary (not checksums.txt).

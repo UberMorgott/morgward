@@ -23,6 +23,13 @@ release:
 	GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BINARY)-darwin-amd64       $(PKG)
 	GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BINARY)-darwin-arm64       $(PKG)
 	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BINARY)-windows-amd64.exe  $(PKG)
+	# UPX-compress the packable targets (linux + windows). macOS macho is
+	# unsupported by modern UPX and a packed darwin binary breaks under Gatekeeper,
+	# so darwin stays stripped-only. MUST run before checksums (go-selfupdate hashes
+	# the shipped file). --best --lzma shrinks the ~17MB stripped binary to ~4-5MB.
+	# CI installs upx (upx-ucl); a local `make release` without upx fails here on
+	# purpose rather than silently shipping the uncompressed 17MB artifact.
+	upx --best --lzma dist/$(BINARY)-linux-amd64 dist/$(BINARY)-linux-arm64 dist/$(BINARY)-windows-amd64.exe
 	cd dist && sha256sum --text $(BINARY)-* > checksums.txt
 
 # Regenerate the embedded Windows icon resource from assets/icons.

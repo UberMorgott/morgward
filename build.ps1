@@ -16,6 +16,19 @@ foreach ($t in $targets) {
 }
 Remove-Item Env:GOOS, Env:GOARCH
 
+# UPX-compress the packable targets (linux + windows). macOS macho is unsupported
+# by modern UPX (a packed darwin binary breaks under Gatekeeper) so darwin stays
+# stripped-only. Runs BEFORE the checksum block below (go-selfupdate hashes the
+# shipped file). Unlike CI's `make release`, this is best-effort locally: if upx
+# isn't on PATH, warn and ship uncompressed so casual dev builds still succeed.
+if (Get-Command upx -ErrorAction SilentlyContinue) {
+    $packable = 'dist/morgward-linux-amd64', 'dist/morgward-linux-arm64', 'dist/morgward-windows-amd64.exe'
+    Write-Host "compressing $($packable.Count) targets with upx"
+    upx --best --lzma @packable
+} else {
+    Write-Warning 'upx not on PATH — shipping uncompressed binaries (install upx to shrink release artifacts)'
+}
+
 # Emit dist/checksums.txt in the sha256sum format go-selfupdate's ChecksumValidator
 # parses: lowercase hex sha256, two spaces, then the bare artifact filename.
 $lines = foreach ($f in Get-ChildItem -Path dist -File -Filter 'morgward-*' | Sort-Object Name) {
