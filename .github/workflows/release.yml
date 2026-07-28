@@ -50,10 +50,12 @@ jobs:
       # Runner caveat: this job is ubuntu-latest/amd64 only. The gates prove the
       # code is correct and vuln-free on linux/amd64 and that all 5 targets
       # COMPILE (cross-compile below) — they do NOT execute a single test on
-      # darwin or windows. Acceptable because ci.yml has no matrix either (same
-      # blind spot, so the release gate is not the narrower one) and the
-      # per-OS surface is a handful of small build-tagged shims
-      # (openlocal_*, shell_resize_*, title_*, hide_*).
+      # darwin or windows. ci.yml IS the narrower-gate backstop now: it runs the
+      # suite on an ubuntu/macos/windows matrix, so the per-OS shims
+      # (openlocal_*, shell_resize_*, title_*, hide_*) are executed there on
+      # every push. This job stays single-OS because a tag is cut from a commit
+      # that matrix already covered; if you ever tag a commit CI never saw, that
+      # coverage is not there.
       - name: Vet
         run: go vet ./...
 

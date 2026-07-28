@@ -9,7 +9,18 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  # The OS-INDEPENDENT gates, deliberately kept OUT of the matrix below.
+  #
+  # gofmt and govulncheck read source and the module graph; neither verdict
+  # changes with the runner OS, so putting them in the matrix would triple the
+  # wall clock for three identical answers.
+  #
+  # gofmt is worse than merely redundant on Windows: the hosted image ships Git
+  # for Windows with core.autocrlf=true, so the checkout rewrites every .go file
+  # to CRLF and `gofmt -l` then reports ALL of them. That is a guaranteed red
+  # that says nothing about the code — the drift is in the checkout, not the
+  # tree. Keep formatting on the one OS where working tree == blob.
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -24,6 +35,50 @@ jobs:
       - name: Gofmt
         run: test -z "$(gofmt -l .)" || { echo 'gofmt drift — run gofmt -w .'; gofmt -l .; exit 1; }
 
+      # @latest on purpose, unlike release.yml's pin: scanner updates get
+      # exercised on every push here rather than discovered mid-release.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # The OS-DEPENDENT half. Until this matrix existed, every build-tagged shim in
+  # the repo was only ever cross-COMPILED (by `make release`) and never EXECUTED
+  # off linux/amd64:
+  #   internal/tui/openlocal_{windows,darwin,unix}.go   — spawning the OS opener
+  #   internal/selfupdate/hide_{windows,other}.go       — the rename-aside path
+  #   cmd/morgward/shell_resize_{windows,unix}.go       — PTY resize
+  #   cmd/morgward/title_{windows,other}.go             — console title
+  # Windows is both a stated primary dev host and a release target, and the
+  # selfupdate rename-aside path (v0.8.4) exists BECAUSE Windows will not unlink
+  # a running executable — validating it only on Linux validates the one OS
+  # where the problem it solves does not occur.
+  #
+  # Beyond the shims, this catches what single-OS test suites reliably encode by
+  # accident: path separators, line endings, temp-dir semantics and timing.
+  test:
+    strategy:
+      # Cancelling siblings on the first red would hide the single thing this
+      # matrix exists to answer: whether a failure is one-OS or all-OS. That
+      # distinction is the difference between "a shim is wrong" and "the code is
+      # wrong", and re-running the matrix to recover it costs more than letting
+      # all three finish. Nothing is saved by cancelling either — this repo is
+      # public, so standard hosted runners are unmetered.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # The Windows and macOS legs start from a cold module/build cache and
+    # compile slower than ubuntu; 15 was tight for the single ubuntu job.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+          check-latest: true
+
       - name: Build
         run: go build ./...
 
@@ -33,12 +88,20 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Race stays on ONE OS — the same coverage as before this job gained a
+      # matrix, so no gate is lost.
+      #
+      # A data race is a property of the Go memory model, not of the runner:
+      # what the macOS and Windows legs add over ubuntu is OS-specific BEHAVIOUR
+      # (path separators, temp-dir semantics, exec argv, file locking), and plain
+      # `go test` above already exercises all of it under those OSes. What
+      # running -race three times WOULD triple is exposure to the known flake
+      # inside the charmbracelet/x/vt dependency — not our bug, and a matrix
+      # that goes red on a dependency's schedule is a matrix nobody reads.
+      # If a Windows- or darwin-only race is ever suspected, drop the `if:` for
+      # that investigation rather than paying the flake tax on every push.
       - name: Test (race)
+        if: matrix.os == 'ubuntu-latest'
         run: go test -race ./...
         env:
           CGO_ENABLED: 1
-
-      - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
