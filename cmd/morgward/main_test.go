@@ -2,13 +2,14 @@ package main
 
 import (
 	"flag"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	selfupdate "github.com/creativeprojects/go-selfupdate"
-
 	"github.com/UberMorgott/morgward/internal/config"
+	"github.com/UberMorgott/morgward/internal/selfupdate"
 )
 
 // TestUsageDocumentsUpdate asserts the CLI `update` self-update command is
@@ -19,30 +20,33 @@ func TestUsageDocumentsUpdate(t *testing.T) {
 	}
 }
 
-// TestNewUpdaterHasChecksumValidator confirms self-update is wired with a SHA-256
-// ChecksumValidator (F01): without it go-selfupdate would apply an unverified
-// binary. The validator field on Updater is unexported, so we assert the gate the
-// other way — building the same Config and checking the Validator is a
-// ChecksumValidator pointed at checksums.txt, the goreleaser-default asset name.
-func TestNewUpdaterHasChecksumValidator(t *testing.T) {
-	if checksumsFile != "checksums.txt" {
-		t.Fatalf("checksumsFile = %q, want goreleaser default checksums.txt", checksumsFile)
-	}
-
-	up, err := newUpdater()
+// TestCleanupOldBinarySweepsUpdateLeftover covers the Windows ".old" sweep: after
+// a self-update the replaced binary is parked at selfupdate.OldPath (it stays
+// locked while the updating process runs, so only a later launch can delete it),
+// and every launch must clear it. Asserted against selfupdate.OldPath so the sweep
+// and the writer cannot drift apart, and on the literal ".<base>.old" name so a
+// leftover from a pre-migration build is still swept.
+func TestCleanupOldBinarySweepsUpdateLeftover(t *testing.T) {
+	exe, err := os.Executable()
 	if err != nil {
-		t.Fatalf("newUpdater() error: %v", err)
+		t.Skipf("os.Executable unavailable: %v", err)
 	}
-	if up == nil {
-		t.Fatal("newUpdater() returned nil updater")
+	old := selfupdate.OldPath(exe)
+	if want := filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"); old != want {
+		t.Fatalf("OldPath(%q) = %q, want %q", exe, old, want)
 	}
+	if _, err := os.Stat(old); err == nil {
+		t.Skipf("%s already exists — refusing to delete a real leftover", old)
+	}
+	if err := os.WriteFile(old, []byte("previous version"), 0o600); err != nil {
+		t.Skipf("cannot stage a leftover next to the test binary: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(old) })
 
-	cv, ok := newUpdaterConfig().Validator.(*selfupdate.ChecksumValidator)
-	if !ok {
-		t.Fatalf("validator type = %T, want *selfupdate.ChecksumValidator", newUpdaterConfig().Validator)
-	}
-	if cv.UniqueFilename != checksumsFile {
-		t.Fatalf("validator UniqueFilename = %q, want %q", cv.UniqueFilename, checksumsFile)
+	cleanupOldBinary()
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("cleanupOldBinary left %s behind (stat err = %v)", old, err)
 	}
 }
 

@@ -261,6 +261,26 @@ path → check the other.
   (a down operator service must not abort the run or trip ssh-revert). Greenfield path
   is byte-identical.
 
+- **Self-update is ours now (`internal/selfupdate`), not `go-selfupdate`.** The library
+  was dropped because its unconditional `golang.org/x/crypto/openpgp` import
+  (`validate.go:17`) propagated **GO-2026-5932** — an advisory with `Fixed in: N/A`, so no
+  bump ever clears it — and it linked **16 modules / 53 packages** (Gitea+GitLab+GitHub
+  SDKs, OAuth2, httpsig, xz) for features morgward never used. Upstream's fix
+  (creativeprojects/go-selfupdate#58) is open, unmerged. Ours is `Latest(ctx, slug)` →
+  `rel.GreaterThan(cur)` → `rel.Apply(ctx, exe)`; both the CLI (`applyUpdate`) and the TUI
+  strip (`checkUpdateCmd`) go through it. Don't regress: (1) **`AssetName()` must match the
+  release pipeline** — `Makefile`/`build.ps1` emit `dist/<repo>-<goos>-<goarch>[.exe]`;
+  rename one without the other and every update becomes "no release asset found for this
+  OS/arch" (`TestAssetNameMatchesReleasePipeline` pins it). (2) **`checksums.txt` is the ONLY
+  authenticity gate (F01)** — a release lacking it is an ERROR at detect time, an asset it
+  doesn't list or whose SHA-256 differs is refused BEFORE anything on disk is touched; there
+  is no signature fallback. (3) **`selfupdate.OldPath(exe)` is the one name** for the binary
+  parked aside during the swap — `cleanupOldBinary` (`cmd/morgward/main.go`) sweeps exactly
+  it at every launch. It is byte-identical to go-selfupdate's `.<base>.old`, so leftovers
+  from pre-migration builds still get swept; don't "improve" the name. (4) `GreaterThan`
+  fails **closed** on an unparsable version (the library panicked via `semver.MustParse`) —
+  the anti-downgrade gate (F08) lives in `applyUpdate`, keep it there.
+
 - **Secrets:** read from env `VPS_PASSWORD` / `VPS_HOST` when flags omitted; password
   is cleared after key auth works and never written to the log file.
 

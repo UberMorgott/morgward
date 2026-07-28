@@ -18,7 +18,7 @@ Remove-Item Env:GOOS, Env:GOARCH
 
 # UPX-compress the packable targets (linux + windows). macOS macho is unsupported
 # by modern UPX (a packed darwin binary breaks under Gatekeeper) so darwin stays
-# stripped-only. Runs BEFORE the checksum block below (go-selfupdate hashes the
+# stripped-only. Runs BEFORE the checksum block below (self-update hashes the
 # shipped file). Unlike CI's `make release`, this is best-effort locally: if upx
 # isn't on PATH, warn and ship uncompressed so casual dev builds still succeed.
 if (Get-Command upx -ErrorAction SilentlyContinue) {
@@ -29,7 +29,7 @@ if (Get-Command upx -ErrorAction SilentlyContinue) {
     Write-Warning 'upx not on PATH — shipping uncompressed binaries (install upx to shrink release artifacts)'
 }
 
-# Emit dist/checksums.txt in the sha256sum format go-selfupdate's ChecksumValidator
+# Emit dist/checksums.txt in the sha256sum format internal/selfupdate's checksum gate
 # parses: lowercase hex sha256, two spaces, then the bare artifact filename.
 $lines = foreach ($f in Get-ChildItem -Path dist -File -Filter 'morgward-*' | Sort-Object Name) {
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLower()
@@ -39,7 +39,7 @@ Set-Content -Path 'dist/checksums.txt' -Value $lines -Encoding ascii -NoNewline:
 
 # Linux desktop-integration tarballs (binary + .desktop + hicolor icons + install).
 # Emitted under dist/desktop/ so they never enter the dist/morgward-* checksum glob
-# above (the go-selfupdate contract). File modes are normalized by install.sh at
+# above (the internal/selfupdate contract). File modes are normalized by install.sh at
 # install time (install -Dm755/-Dm644), so Windows-built tarballs need no chmod.
 New-Item -ItemType Directory -Force dist/desktop | Out-Null
 foreach ($arch in @('amd64', 'arm64')) {

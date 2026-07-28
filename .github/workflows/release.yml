@@ -35,7 +35,7 @@ jobs:
       # `make release` cross-compiles the 5 targets with -trimpath -ldflags '-s -w'
       # (the single source of truth shared with local build.ps1), UPX-compresses the
       # linux + windows binaries, then writes dist/checksums.txt in the sha256sum
-      # format go-selfupdate parses (hashing the already-compressed artifacts).
+      # format internal/selfupdate parses (hashing the already-compressed artifacts).
       - name: Cross-compile (stripped, trimpath, UPX-packed)
         run: make release
 

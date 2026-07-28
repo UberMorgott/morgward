@@ -43,3 +43,6 @@ graphify-out/
 # Audit artifacts (machine-readable findings + meta-issues, not for public repo)
 audit-bugs.json
 audit-meta-issues.md
+
+# self-update leftover (Windows rename-aside dance)
+.*.exe.old

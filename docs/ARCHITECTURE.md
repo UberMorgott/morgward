@@ -74,7 +74,7 @@ IDs; `fs` itself decides which flags take a value, so it can't drift from `bindF
 secrets from
 `VPS_PASSWORD`/`VPS_HOST`, interactive prompts when host absent, `cfg.Validate()`, then
 `engine.Execute(context.Background(), …, Hooks{OnKey: printKeyBlock})`. Also owns
-`performUpdate` (go-selfupdate: detect → anti-downgrade gate → checksum-verified `UpdateTo`
+`performUpdate` (`internal/selfupdate`: detect → anti-downgrade gate → checksum-verified `Apply`
 → relaunch). Bare invocation (no args) launches the TUI. `title_windows.go` / `title_other.go`
 set the console title (Windows-only).
 

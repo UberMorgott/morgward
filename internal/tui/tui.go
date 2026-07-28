@@ -12,10 +12,10 @@ import (
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
+	"github.com/UberMorgott/morgward/internal/selfupdate"
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/tweaks"
 	"github.com/UberMorgott/morgward/internal/version"
-	"github.com/creativeprojects/go-selfupdate"
 )
 
 const (
@@ -412,25 +412,18 @@ func checkUpdateCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// ChecksumValidator gates DetectLatest on a SHA-256 checksums.txt asset, so
-		// the strip never advertises an update we couldn't verify and apply (F01).
-		// Mirrors cmd/morgward newUpdater(); a release lacking checksums.txt resolves
-		// to updErr rather than a phantom "update available".
-		updater, err := selfupdate.NewUpdater(selfupdate.Config{
-			Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
-		})
+		// Latest requires the release to carry a SHA-256 checksums.txt, so the strip
+		// never advertises an update we couldn't verify and apply (F01): a release
+		// lacking it resolves to updErr rather than a phantom "update available".
+		latest, err := selfupdate.Latest(ctx, updateRepo)
 		if err != nil {
 			return updateCheckMsg{err: err}
 		}
-		latest, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(updateRepo))
-		if err != nil {
-			return updateCheckMsg{err: err}
-		}
-		// DetectLatest reports found==true for any matching release; it does NOT
-		// compare against the running version. An update is available ONLY when the
-		// latest is strictly newer than version.Version. No matching release
-		// (found==false) is "nothing to update to" → up-to-date, not an error.
-		if !found || latest == nil || !latest.GreaterThan(version.Version) {
+		// Latest reports the newest published release; it does NOT compare against
+		// the running version. An update is available ONLY when it is strictly newer
+		// than version.Version. No release at all, or none built for this OS/arch
+		// (latest == nil), is "nothing to update to" → up-to-date, not an error.
+		if latest == nil || !latest.GreaterThan(version.Version) {
 			return updateCheckMsg{found: false}
 		}
 		return updateCheckMsg{found: true, ver: latest.Version()}

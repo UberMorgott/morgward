@@ -11,48 +11,22 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"golang.org/x/term"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/engine"
+	"github.com/UberMorgott/morgward/internal/selfupdate"
 	"github.com/UberMorgott/morgward/internal/tui"
 	"github.com/UberMorgott/morgward/internal/version"
 )
 
 // updateRepo is the GitHub "owner/repo" slug self-update pulls releases from.
 const updateRepo = "UberMorgott/morgward"
-
-// checksumsFile is the per-release asset listing the SHA-256 of every release
-// binary (one "<hash>  <filename>" line each). Self-update refuses to apply any
-// asset whose hash is absent or mismatched, so releases MUST publish a
-// checksums.txt alongside the binaries (goreleaser's `checksum` block emits this
-// by default). Without it, go-selfupdate's DetectLatest fails closed with
-// ErrValidationAssetNotFound rather than downloading an unverified binary.
-const checksumsFile = "checksums.txt"
-
-// newUpdater builds a go-selfupdate Updater whose downloads are gated on a
-// SHA-256 ChecksumValidator. With a validator set, both DetectLatest and the
-// download path verify the asset against checksums.txt before it can replace the
-// running binary — closing the unverified-binary RCE (F01). Shared by the CLI
-// update path and the TUI launch-strip check so neither can skip verification.
-func newUpdater() (*selfupdate.Updater, error) {
-	return selfupdate.NewUpdater(newUpdaterConfig())
-}
-
-// newUpdaterConfig is the single source of the self-update config, split out so a
-// test can assert the checksum validator is wired (Updater hides the field).
-func newUpdaterConfig() selfupdate.Config {
-	return selfupdate.Config{
-		Validator: &selfupdate.ChecksumValidator{UniqueFilename: checksumsFile},
-	}
-}
 
 const usage = `morgward — portable Ubuntu VPS hardening + tuning tool
 
@@ -127,7 +101,7 @@ func main() {
 	setConsoleTitle(version.Name + " — " + version.Tagline)
 
 	// Sweep the self-update leftover on EVERY launch (CLI or TUI). On Windows a
-	// running exe can't be deleted in place, so go-selfupdate renames the prior
+	// running exe can't be deleted in place, so self-update renames the prior
 	// binary to ".<base>.old"; that file stays locked until the old process exits,
 	// so only a later launch can remove it. Doing this here (not just in the TUI)
 	// means any command clears it — no hidden junk lingers after an update.
@@ -269,29 +243,25 @@ func main() {
 // success. It does NOT relaunch — callers decide (the TUI relaunches; the CLI
 // `update` command just reports and exits).
 func applyUpdate(ctx context.Context, targetVer string) (string, error) {
-	updater, err := newUpdater()
-	if err != nil {
-		return "", fmt.Errorf("new updater: %w", err)
-	}
 	if targetVer != "" {
 		fmt.Printf("%s: обновление до v%s…\n", version.Name, targetVer)
 	} else {
 		fmt.Printf("%s: обновление…\n", version.Name)
 	}
 
-	// Detect first so we can vet the release BEFORE applying it. DetectLatest also
-	// resolves (and requires) the checksums.txt validation asset; a release without
-	// it fails closed here rather than downloading an unverified binary.
-	rel, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(updateRepo))
+	// Detect first so we can vet the release BEFORE applying it. Latest also
+	// requires the checksums.txt asset; a release without it fails closed here
+	// rather than offering a binary we could only apply unverified.
+	rel, err := selfupdate.Latest(ctx, updateRepo)
 	if err != nil {
 		return "", fmt.Errorf("detect latest: %w", err)
 	}
-	if !found || rel == nil {
+	if rel == nil {
 		return "", fmt.Errorf("no release asset found for this OS/arch")
 	}
-	// Anti-downgrade (F08): go-selfupdate's UpdateCommand only gates on version
-	// inequality, so it would happily apply an OLDER "latest". Refuse anything that
-	// is not strictly newer than the running build before touching the binary.
+	// Anti-downgrade (F08): "latest" is whatever the repo published last, which can
+	// be OLDER than this build (a re-tag, a yanked release). Refuse anything that is
+	// not strictly newer than the running build before touching the binary.
 	if !rel.GreaterThan(version.Version) {
 		return "", fmt.Errorf("latest release v%s is not newer than current v%s — refusing",
 			rel.Version(), version.Version)
@@ -301,30 +271,32 @@ func applyUpdate(ctx context.Context, targetVer string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate executable: %w", err)
 	}
-	// UpdateTo applies exactly the release we just vetted (verifying its checksum),
+	// Apply installs exactly the release we just vetted (verifying its checksum),
 	// avoiding a re-detect TOCTOU window between the version gate and the download.
-	if err := updater.UpdateTo(ctx, rel, exe); err != nil {
+	if err := rel.Apply(ctx, exe); err != nil {
 		return "", fmt.Errorf("update self: %w", err)
 	}
 	return rel.Version(), nil
 }
 
-// cleanupOldBinary removes the ".<base>.old" leftover go-selfupdate creates next
-// to the executable on Windows (a running binary can't be replaced in place, so
-// the prior version is renamed aside). It stays locked until the old process
-// exits, so this runs at startup of the NEXT launch — by then it's removable.
-// Best-effort: any error (no leftover, still locked, non-Windows) is ignored.
+// cleanupOldBinary removes the ".<base>.old" leftover self-update parks next to
+// the executable on Windows (a running binary can't be replaced in place, so the
+// prior version is renamed aside). It stays locked until the old process exits, so
+// this runs at startup of the NEXT launch — by then it's removable. The name comes
+// from selfupdate.OldPath, the same helper that writes it, so sweep and writer
+// cannot drift apart. Best-effort: any error (no leftover, still locked,
+// non-Windows) is ignored.
 func cleanupOldBinary() {
 	exe, err := os.Executable()
 	if err != nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"))
+	_ = os.Remove(selfupdate.OldPath(exe))
 }
 
 // performUpdate downloads + replaces the running binary with the latest release
 // via applyUpdate, then relaunches the updated executable and exits. On Windows
-// the running exe cannot be deleted, so go-selfupdate renames it to "<exe>.old";
+// the running exe cannot be deleted, so self-update renames it aside;
 // the next launch's cleanupOldBinary() sweeps that leftover. targetVer is the
 // version the operator saw on the strip (informational; applyUpdate re-detects).
 func performUpdate(targetVer string) error {

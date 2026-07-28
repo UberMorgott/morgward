@@ -25,7 +25,7 @@ release:
 	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BINARY)-windows-amd64.exe  $(PKG)
 	# UPX-compress the packable targets (linux + windows). macOS macho is
 	# unsupported by modern UPX and a packed darwin binary breaks under Gatekeeper,
-	# so darwin stays stripped-only. MUST run before checksums (go-selfupdate hashes
+	# so darwin stays stripped-only. MUST run before checksums (self-update hashes
 	# the shipped file). --best --lzma shrinks the ~17MB stripped binary to ~4-5MB.
 	# CI installs upx (upx-ucl); a local `make release` without upx fails here on
 	# purpose rather than silently shipping the uncompressed 17MB artifact.
@@ -41,7 +41,7 @@ winres:
 
 # Assemble Linux desktop-integration tarballs (binary + .desktop + hicolor icons
 # + install/uninstall). Output goes under dist/desktop/ so it never pollutes the
-# dist/morgward-* glob that checksums.txt (go-selfupdate contract) keys off.
+# dist/morgward-* glob that checksums.txt (internal/selfupdate contract) keys off.
 # Run after `release` (it consumes the linux binaries it produced).
 package-linux:
 	mkdir -p dist/desktop
