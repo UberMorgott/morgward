@@ -2,6 +2,7 @@ package tui
 
 import (
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -10,13 +11,7 @@ import (
 // around. If cur isn't in rows (e.g. it was just hidden), it lands on the first
 // row so focus is never stranded.
 func stepFocus(rows []int, cur, dir int) int {
-	at := -1
-	for i, r := range rows {
-		if r == cur {
-			at = i
-			break
-		}
-	}
+	at := slices.Index(rows, cur)
 	if at < 0 {
 		return rows[0]
 	}
@@ -59,11 +54,4 @@ func atoiDefault(s string, def int) int {
 		return n
 	}
 	return def
-}
-
-func maxi(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

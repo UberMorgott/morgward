@@ -31,13 +31,11 @@ exit 0
 `
 
 func (a A10Detection) Run(ctx *Context) (Status, string, error) {
-	port := ctx.Cfg.Port
-
 	// auditd + rules.
-	script := `export DEBIAN_FRONTEND=noninteractive
-stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y auditd audispd-plugins
-mkdir -p /etc/audit/rules.d
-` + putFile("/etc/audit/rules.d/99-vps.rules", auditRules, "0640") +
+	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+		aptInstall("auditd audispd-plugins") +
+		"mkdir -p /etc/audit/rules.d\n" +
+		putFile("/etc/audit/rules.d/99-vps.rules", auditRules, "0640") +
 		"augenrules --load >/dev/null 2>&1\nsystemctl enable --now auditd >/dev/null 2>&1\n"
 
 	// Successful-login PAM notify (session optional — never blocks login).
@@ -51,7 +49,6 @@ mkdir -p /etc/audit/rules.d
 	// box this would impose a conflicting second firewall layer over the operator's
 	// manager, so the block is skipped there entirely. auditd + login-notify above
 	// are firewall-agnostic and always apply.
-	_ = port
 	if ctx.Facts.ManagesIPTables() {
 		script += `iptables  -C INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt-drop-in: "  --log-level 4 2>/dev/null || iptables  -A INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt-drop-in: "  --log-level 4
 ip6tables -C INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt6-drop-in: " --log-level 4 2>/dev/null || ip6tables -A INPUT -m limit --limit 5/min -j LOG --log-prefix "ipt6-drop-in: " --log-level 4

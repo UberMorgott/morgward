@@ -5,9 +5,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/version"
@@ -29,15 +26,16 @@ import (
 // to the remote shell (SIGINT) and Esc is needed by vim/less.
 const termExitKey = "ctrl+q"
 
+// termReconnectKey redials from the dead-session / dial-error notice. openTerminal is
+// the ONLY dial site and is otherwise reachable just through the nav bar, so without
+// this key a session killed mid-use (the box rebooted under us) could only be revived
+// by leaving the workspace and coming back.
+const termReconnectKey = "r"
+
 // termTickInterval drives the repaint while the terminal is open (~40fps). Each tick
 // re-renders only when the emulator reports damage (see termSession.dirty), so an
 // idle shell does not busy-repaint.
 const termTickInterval = 25 * time.Millisecond
-
-// termBlinkPeriod is the cursor blink half-cycle (~530ms, the classic VT/xterm rate):
-// the cursor is solid for one period, hidden for the next. Driven by the render tick
-// (termBlinkPeriod / termTickInterval ≈ 21 ticks per flip).
-const termBlinkPeriod = 530 * time.Millisecond
 
 // termTickMsg is the terminal repaint heartbeat. It carries the session generation it
 // was scheduled under so a tick left over from a CLOSED session (a new one may have a
@@ -69,6 +67,14 @@ func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
 	// "" and termClient is non-nil — reusing it would land on the static "session ended"
 	// banner with no fresh shell. So this branch keys off termLive(), not just termErr/nil.
 	if m.termClient != nil && m.termLive() {
+		// Coming back from ANOTHER phase (Главная keeps the session but parks the model on
+		// phaseDashboard) means the repaint heartbeat has retired: the tick handler drops a
+		// tick whose phase is not phaseTerminal WITHOUT rescheduling it. Restart it here, or
+		// termPinIfFollowing never runs again and follow mode is dead for the rest of the
+		// session (new output arrives, the view stays put). A tab switch WITHIN the workspace
+		// (wsTerminal↔wsFiles, both phaseTerminal) never retired the chain — scheduling a
+		// second one there would double the heartbeat on every self-switch.
+		reentry := m.phase != phaseTerminal
 		m.termReturn = from
 		m.phase = phaseTerminal
 		m.wsTab = initialTab
@@ -77,6 +83,14 @@ func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
 			if m.files == nil {
 				m.wsTab = wsTerminal // ensureFiles made nothing (shouldn't happen with a live client)
 			}
+		}
+		if reentry {
+			// Nothing re-pinned while we were parked, so the offset trails whatever output
+			// arrived there. Pin NOW rather than leaving it to the tick we are about to
+			// schedule: that is up to one interval away, and the frame rendered in between
+			// would draw at the stale offset and then visibly jump.
+			m.termPinIfFollowing()
+			return m, termTick(m.termGen)
 		}
 		return m, nil
 	}
@@ -98,9 +112,6 @@ func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
 	// bottom on the first render once the body length is known.
 	m.termScroll = 0
 	m.termFollow = true
-	// Cursor starts solid; the blink cycle advances on the render tick.
-	m.termBlinkOn = true
-	m.termBlinkTicks = 0
 
 	host := strings.TrimSpace(m.inputs[fHost].Value())
 	user := strings.TrimSpace(m.inputs[fUser].Value())
@@ -276,16 +287,17 @@ func (m model) terminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.closeTerminal()
 		return m, nil
 	}
-	// When there is no live session to type into (dial failed, or the remote shell
-	// already exited), Esc is a convenient "back" — otherwise keystrokes are dropped.
-	if m.termErr != "" || m.term == nil {
-		if msg.String() == "esc" {
-			m = m.closeTerminal()
-		}
-		return m, nil
-	}
-	if done, _ := m.term.finished(); done {
-		if msg.String() == "esc" {
+	// No live session to type into — the dial failed, or the remote shell already exited
+	// (the box rebooted out from under us). termLive() is exactly those cases, so the two
+	// notices share one branch. Esc is a convenient "back"; termReconnectKey redials
+	// through openTerminal, which tears the dead session down and dials fresh (its
+	// live-reuse branch can't trigger — the session is not live). Every other keystroke is
+	// dropped: there is nothing to type into.
+	if !m.termLive() {
+		switch {
+		case physKey(msg) == termReconnectKey:
+			return m.openTerminal(m.termReturn, wsTerminal)
+		case msg.String() == "esc":
 			m = m.closeTerminal()
 		}
 		return m, nil
@@ -305,10 +317,6 @@ func (m model) terminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the response to it (standard terminal follow-on-input behavior).
 		m.termFollow = true
 		m.termPinIfFollowing()
-		// Snap the cursor SOLID immediately on a keystroke (standard terminal feel — the
-		// cursor doesn't blink-out mid-typing), restarting the blink cycle.
-		m.termBlinkOn = true
-		m.termBlinkTicks = 0
 	}
 	return m, nil
 }
@@ -323,7 +331,7 @@ func (m model) terminalScrollKey(k tea.Key) (bool, model) {
 		return false, m // not a Shift gesture → forward to the remote
 	}
 	_, rows := m.termContentSize()
-	page := maxi(rows-1, 1) // page step leaves one row of context, like a pager
+	page := max(rows-1, 1) // page step leaves one row of context, like a pager
 	switch k.Code {
 	case tea.KeyPgUp:
 		m.termScrollBy(-page)
@@ -355,7 +363,7 @@ func (m *model) termScrollBy(delta int) {
 	m.termScroll = clampScroll(m.termScroll+delta, total, rows)
 	// Re-arm follow only when the offset is exactly at the bottom; any higher position
 	// holds (the user is reading scrollback).
-	m.termFollow = m.termScroll >= maxi(total-rows, 0)
+	m.termFollow = m.termScroll >= max(total-rows, 0)
 }
 
 // termPinIfFollowing re-pins the scroll offset to the bottom when in follow mode, so
@@ -367,7 +375,7 @@ func (m *model) termPinIfFollowing() {
 	}
 	_, rows := m.termContentSize()
 	total := m.termBodyLen()
-	m.termScroll = maxi(total-rows, 0)
+	m.termScroll = max(total-rows, 0)
 }
 
 // closeTerminal tears down the terminal screen: it closes the live session (cancel +
@@ -403,14 +411,13 @@ func (m model) closeTerminal() model {
 }
 
 // termContentSize is the (cols, rows) of the terminal's inner content area — the box
-// inner width and the middle region height, mirroring the other screens' chrome math
-// so the emulator never overflows the frame. Floored at a usable minimum.
+// inner width and the middle region height. The row budget comes from the SHARED
+// chrome arithmetic (bodyViewH → chromeViewH): the terminal frame spends the standard
+// chrome and adds no fixed or pinned rows of its own, so the emulator can never
+// overflow the frame and this can't drift from the other screens.
 func (m model) termContentSize() (cols, rows int) {
-	cols = maxi(innerWidth(m.boxWidth()), 1)
-	// Chrome rows: top border + switcher (2) + hint + bottom border (2) = 4, plus the
-	// pinned 3-row monitor box at the very bottom (titledTop + metrics + bottom) = 7.
-	rows = maxi(m.h-7, 1)
-	return cols, rows
+	cols = max(innerWidth(m.boxWidth()), 1)
+	return cols, m.bodyViewH()
 }
 
 // terminalView renders the terminal screen: the framed emulator body (or a dial
@@ -421,28 +428,34 @@ func (m model) termContentSize() (cols, rows int) {
 // in the right border when there is hidden content. The emulator's own ANSI styling is
 // preserved inside the box.
 func (m model) terminalView() string {
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
+	s, _ := m.terminalFrame()
+	return s
+}
+
+// terminalFrame is terminalView plus the frame's native cursor placement, produced
+// TOGETHER from the SAME emulator snapshot — both for consistency (the cursor maps
+// against exactly the rows drawn) and for cost: a second snapshot just for the cursor
+// would double the per-frame emulator read at the 40fps repaint tick. A nil cursor
+// means "no cursor this frame" (tea.View hides it).
+func (m model) terminalFrame() (string, *tea.Cursor) {
+	innerW := innerWidth(m.boxWidth())
 	_, rows := m.termContentSize()
 
 	// For a LIVE session take ONE snapshot and use it for BOTH the body assembly and the
-	// cursor overlay, so the overlay maps the cursor against exactly the rows it splices
-	// (no TOCTOU vs the concurrent drain). The error/"session ended" notices are static
-	// (no cursor), so they skip the snapshot via terminalBody().
-	var body []string
+	// cursor placement, so the cursor maps against exactly the rows that get drawn (no
+	// TOCTOU vs the concurrent drain). The error/"session ended" notices are static (no
+	// cursor), so they skip the snapshot via terminalBody().
 	if m.termLive() {
-		snap := m.term.cursorSnapshot()
-		body = liveBodyFromSnapshot(snap)
-		off := clampScroll(m.termScroll, len(body), rows)
-		// Overlay the blinking reverse-video cursor block (row count is unchanged, so `off`
-		// computed above still holds). No-op when inactive/hidden/scrolled-off.
-		body = m.applyCursorOverlay(body, snap)
-		return m.renderTerminalFrame(bw, innerW, b, body, rows, off)
+		// snap.off is the clamped offset the snapshot rendered its scrollback window for
+		// — use it, never a re-clamp, or the frame could window rows the snapshot left
+		// unrendered.
+		snap := m.term.cursorSnapshot(m.termScroll, rows)
+		body := liveBodyFromSnapshot(snap)
+		cur := m.terminalCursor(snap, len(body), innerW, rows, snap.off)
+		return m.terminalFrameOf(body, rows, snap.off), cur
 	}
-	body = m.terminalBody()
-	off := clampScroll(m.termScroll, len(body), rows)
-	return m.renderTerminalFrame(bw, innerW, b, body, rows, off)
+	body := m.terminalBody()
+	return m.terminalFrameOf(body, rows, clampScroll(m.termScroll, len(body), rows)), nil
 }
 
 // termLive reports whether the session is connected and running (not a dial error, not
@@ -455,35 +468,20 @@ func (m model) termLive() bool {
 	return !done
 }
 
-// renderTerminalFrame draws the framed terminal chrome (titled top, switcher, the
-// windowed scroll region, hint, bottom border, monitor footer) around an already-
-// assembled (and possibly cursor-overlaid) body. Shared by the live and notice paths so
-// the chrome is identical.
-func (m model) renderTerminalFrame(bw, innerW int, b lipgloss.Border, body []string, rows, off int) string {
-
-	var sb strings.Builder
-	title := " " + version.Name + " · " + t(m.lang, kTermTitle) + " "
-	sb.WriteString(titledTop(b, title, bw))
-	sb.WriteByte('\n')
-	// Global nav bar (Главная · Терминал · Файлы) on the switcher row — same render +
-	// hit-test geometry as the dashboard and files frames.
-	sb.WriteString(m.navTabStripLine(b, innerW))
-	sb.WriteByte('\n')
-
-	// Window the body to exactly `rows` rows (blank-padded), drawing a scrollbar in the
-	// right border when the body overflows — keeps the footer pinned.
-	m.renderScrollRegion(&sb, b, body, innerW, rows, off)
-
-	hint := helpStyle.Render(t(m.lang, kTermHint))
-	sb.WriteString(contentLine(b, hint, innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-
-	// Pinned monitor footer (sampler kept alive from the dashboard) — mirrors summaryView
-	// so the live server metrics stay visible while on the terminal screen.
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+// terminalFrameOf draws the terminal chrome around an already-assembled body via the
+// SHARED frame builder — the terminal is the 8th screen on framedScrollView: its own
+// titled top (named after the tab, not frameTitle), the global nav tab strip, no fixed
+// or pinned rows, the windowed scroll region and the control hint. Shared by the live
+// and notice paths so the chrome is identical.
+func (m model) terminalFrameOf(body []string, rows, off int) string {
+	return m.framedScrollView(frame{
+		title:  " " + version.Name + " · " + t(m.lang, kTermTitle) + " ",
+		nav:    m.navTabStripLine,
+		body:   body,
+		viewH:  rows,
+		scroll: off,
+		hint:   helpStyle.Render(t(m.lang, kTermHint)),
+	})
 }
 
 // terminalScrollable reports whether scrollback scrolling is active: a live (not
@@ -529,8 +527,11 @@ func (m model) terminalBody() []string {
 		}
 	}
 	// Live content: build from a single consistent snapshot so the body and any cursor
-	// overlay share one source of truth.
-	return liveBodyFromSnapshot(m.term.cursorSnapshot())
+	// overlay share one source of truth. Only the rows visible at the CURRENT scroll
+	// offset are rendered (see cursorSnapshot) — the body is full-length either way, so
+	// every length/offset caller (termBodyLen, the scroll clamp) is unaffected.
+	_, rows := m.termContentSize()
+	return liveBodyFromSnapshot(m.term.cursorSnapshot(m.termScroll, rows))
 }
 
 // liveBodyFromSnapshot assembles the live terminal body from a consistent snapshot: on
@@ -548,11 +549,57 @@ func liveBodyFromSnapshot(snap termSnapshot) []string {
 	return body
 }
 
-// --- Cursor overlay -----------------------------------------------------------
+// --- Cursor -------------------------------------------------------------------
 //
-// A blinking reverse-video BLOCK cursor drawn at the remote shell's cursor position.
-// The overlay is spliced into the body slice (before renderScrollRegion windows it) so
-// the cursor scrolls with the content and respects the scrollbar geometry for free.
+// The remote shell's cursor is the HOST TERMINAL's own hardware cursor, placed via
+// tea.View.Cursor at the screen cell the emulator cursor maps to. The host therefore
+// owns the blink (including stopping it while its window is unfocused) and the shape,
+// so there is no local blink state and nothing is spliced into the rendered text.
+
+// termCursorTopRow / termCursorLeftCol are the screen coordinates of body cell (0,0)
+// inside the terminal frame. They mirror renderTerminalFrame + contentLineR exactly:
+// vertically the titled top border (1) + the nav tab strip (1) precede the scroll
+// region; horizontally the left border (1) + its one-cell pad (1) precede the content.
+const (
+	termCursorTopRow  = 2
+	termCursorLeftCol = 2
+)
+
+// terminalCursor maps the emulator cursor onto a screen cell of the rendered frame,
+// or nil when no cursor should be shown this frame. bodyLen/rows/off describe the
+// scroll region the caller is about to draw, innerW its content width; snap is the
+// SAME snapshot the body was built from, so the row can't drift under the drain.
+//
+// Placement is by COORDINATE, independent of the row's rendered text. That is what the
+// spliced cursor could not do: ultraviolet's Line.Render trims trailing blank cells, so
+// a cursor parked to the RIGHT of a row's last non-blank cell (every app that positions
+// with CUP/CHA on a mostly-empty line — vim, top, less) sat past the rendered string and
+// the splice appended its block at the end of the CONTENT instead. Measured on an 80x24
+// session (innerW=76): cursor at column 40 of a row rendering as "$" drew the block at
+// visual column 1.
+func (m model) terminalCursor(snap termSnapshot, bodyLen, innerW, rows, off int) *tea.Cursor {
+	if !m.terminalCursorActive() || !snap.cursorVisible {
+		return nil
+	}
+	scrollbackLen := 0
+	if !snap.alt {
+		scrollbackLen = snap.scrollbackLen
+	}
+	row := cursorBodyRow(scrollbackLen, snap.cursorY, snap.alt)
+	if row < 0 || row >= bodyLen {
+		return nil
+	}
+	// Windowed out of the visible scroll region (scrolled past it) → no cursor.
+	y := row - off
+	if y < 0 || y >= rows {
+		return nil
+	}
+	// Past the visible content width → the cell is not drawn, so neither is the cursor.
+	if snap.cursorX < 0 || snap.cursorX >= innerW {
+		return nil
+	}
+	return tea.NewCursor(termCursorLeftCol+snap.cursorX, termCursorTopRow+y)
+}
 
 // cursorBodyRow maps the emulator cursor row `y` to an index into the assembled body
 // slice: on the NORMAL screen the body is scrollback ++ screen, so the live screen row
@@ -564,60 +611,12 @@ func cursorBodyRow(scrollbackLen, y int, alt bool) int {
 	return scrollbackLen + y
 }
 
-// spliceCursorBlock overlays a reverse-video block at VISUAL column `col` of an
-// ANSI-styled row, reversing the grapheme `cell` whose display width is `cellWidth`
-// (a single space when empty). It is ANSI-aware: ansi.Cut slices by display column (not
-// byte/rune offset), so the splice lands correctly even when the row contains SGR
-// escapes. CRITICAL: the right segment is cut at col+cellWidth, NOT col+1 — a double-
-// width glyph (CJK/emoji) occupies two cells, and cutting at col+1 would land MID-glyph,
-// where ansi.Cut rounds outward and re-emits the whole glyph (duplicating it and growing
-// the row's width). cellWidth<1 clamps to 1 (a blank/zero-width cell shows a 1-cell
-// space block). A col at/past the row width clamps — the block is appended after the
-// content (cursor at end-of-line). The result has the same visual width as the input
-// (reverse video is zero-width chrome) and never duplicates the cursor glyph.
-func spliceCursorBlock(row string, col int, cell string, cellWidth int, focused bool) string {
-	if cell == "" {
-		cell = " "
-	}
-	if cellWidth < 1 {
-		cellWidth = 1
-	}
-	// Focused → a solid REVERSE-video block (the active cursor). Unfocused → an UNDERLINE
-	// span, which reads as a hollow/outline "the window isn't focused" cursor in virtually
-	// every terminal and is steady (the caller draws it every frame when unfocused). Chosen
-	// over a true box-drawing hollow cell because underline composes cleanly with the cell's
-	// existing SGR via one open/close pair — no width change, no glyph substitution.
-	on, off := "\x1b[7m", "\x1b[27m"
-	if !focused {
-		on, off = "\x1b[4m", "\x1b[24m"
-	}
-	w := ansi.StringWidth(row)
-	if col >= w {
-		// At/over the end of the printable content → append the block (end-of-line cursor).
-		// NOTE: if the row is already innerW-wide, the appended cell makes it innerW+1 and
-		// truncDisplay later drops the last cell, so a last-column cursor can visually
-		// vanish. Cosmetic, width-safe (no corruption) — accepted as a known minor.
-		return row + on + cell + off
-	}
-	// left = columns [0,col); right = columns [col+cellWidth, end) so the block spans the
-	// FULL (possibly 2-wide) cursor cell. ansi.Cut is display-aware and preserves the SGR
-	// state of each segment, so styling around the cursor survives.
-	left := ansi.Cut(row, 0, col)
-	right := ansi.Cut(row, col+cellWidth, w)
-	return left + on + cell + off + right
-}
-
-// terminalCursorActive reports whether the cursor overlay should be drawn this frame:
-// a live (not errored / nil / finished) session, the remote wants a visible cursor
-// (?25 on), AND — on the normal screen — we are pinned to the live bottom (termFollow).
-// The cursor belongs to the live prompt, so it is suppressed while the user reads
-// scrollback. On the alt screen follow does not apply (the app owns the screen), so only
-// visibility gates it.
-//
-// BLINK is focus-aware: when the host window is FOCUSED the cursor is gated on the blink
-// half (drawn only while termBlinkOn) so it blinks; when UNFOCUSED the blink gate is
-// skipped so the cursor is STEADY (real terminals stop blinking when unfocused — the
-// drawn-vs-hidden choice is the only blink mechanism, so unfocused = always drawn).
+// terminalCursorActive reports whether a cursor should be shown this frame: a live
+// (not errored / nil / finished) session, the remote wants a visible cursor (?25 on),
+// AND — on the normal screen — we are pinned to the live bottom (termFollow). The
+// cursor belongs to the live prompt, so it is suppressed while the user reads
+// scrollback. On the alt screen follow does not apply (the app owns the screen), so
+// only visibility gates it.
 func (m model) terminalCursorActive() bool {
 	if m.termErr != "" || m.term == nil {
 		return false
@@ -628,36 +627,8 @@ func (m model) terminalCursorActive() bool {
 	if !m.term.cursorShown() {
 		return false
 	}
-	if m.focused && !m.termBlinkOn {
-		return false // focused: hide on the blink-off half (so it blinks)
-	}
 	if m.term.altScreen() {
 		return true
 	}
 	return m.termFollow
-}
-
-// applyCursorOverlay returns body with the reverse-video cursor block spliced into the
-// row under the emulator cursor, mapping the cursor against the SAME snapshot used to
-// build body (so the row index can't drift from a concurrent drain — the TOCTOU the
-// separate-reads version had). A no-op (returns body unchanged) when the model gating
-// (terminalCursorActive) forbids it, the snapshot's cursor is hidden, or the cursor maps
-// outside body. body is copied before mutation so the un-overlaid slice (scroll math) is
-// untouched.
-func (m model) applyCursorOverlay(body []string, snap termSnapshot) []string {
-	if !m.terminalCursorActive() || !snap.cursorVisible {
-		return body
-	}
-	scrollbackLen := 0
-	if !snap.alt {
-		scrollbackLen = snap.scrollbackLen
-	}
-	row := cursorBodyRow(scrollbackLen, snap.cursorY, snap.alt)
-	if row < 0 || row >= len(body) {
-		return body
-	}
-	out := make([]string, len(body))
-	copy(out, body)
-	out[row] = spliceCursorBlock(out[row], snap.cursorX, snap.cursorCell, snap.cursorWidth, m.focused)
-	return out
 }

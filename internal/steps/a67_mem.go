@@ -33,9 +33,9 @@ fi
 `
 	}
 
-	script := `export DEBIAN_FRONTEND=noninteractive
-stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y systemd-zram-generator earlyoom
-` + putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +
+	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+		aptInstall("systemd-zram-generator earlyoom") +
+		putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +
 		putFile("/etc/sysctl.d/99-zram.conf", zramSysctl, "0644") +
 		disableDiskSwap +
 		`systemctl daemon-reload

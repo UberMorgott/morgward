@@ -18,7 +18,7 @@ func (Precond) Title() string { return "§1 Preconditions (apt index, admin user
 func (Precond) Run(ctx *Context) (Status, string, error) {
 	// apt index refresh — HARD gate before the first apt-install (A1).
 	ctx.Log.Detail("apt-get update (apt index gate)…")
-	upd := ctx.Cli.Sudo("export DEBIAN_FRONTEND=noninteractive; stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 update")
+	upd := ctx.Cli.Sudo("export DEBIAN_FRONTEND=noninteractive; stdbuf -oL -eL " + aptGet + " update")
 	if upd.RC != 0 {
 		return StatusFail, "apt-get update failed: " + firstLine(upd.Stderr), fmt.Errorf("apt index refresh failed")
 	}
@@ -72,14 +72,12 @@ unset ADMIN_PW`, admin, sshx.SecretMarkerPrefix)
 		ctx.Log.Warn("could not set/extract console password (continuing)")
 	}
 
-	ctx.State.AdminUser = admin
-	ctx.State.Save()
 	return StatusOK, fmt.Sprintf("admin user %q ready, sshusers group set, apt index fresh", admin), nil
 }
 
 // putAuthorizedKey writes the key line into the user's authorized_keys via base64.
 func putAuthorizedKey(user, line string) string {
-	return appendLineIfMissing(fmt.Sprintf("/home/%s/.ssh/authorized_keys", user), line)
+	return AppendLineIfMissing(fmt.Sprintf("/home/%s/.ssh/authorized_keys", user), line)
 }
 
 func extractMarker(out, marker string) string {

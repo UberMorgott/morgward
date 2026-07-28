@@ -115,10 +115,8 @@ iptables-save  > /root/iptables-backup.v4
 ip6tables-save > /root/iptables-backup.v6
 %s
 chmod +x /usr/local/sbin/fw-rollback.sh
-systemctl stop fw-rollback.timer 2>/dev/null || true
-systemctl reset-failed 'fw-rollback.*' 2>/dev/null || true
-systemd-run --on-active=300 --unit=fw-rollback /usr/local/sbin/fw-rollback.sh
-`, putFile("/usr/local/sbin/fw-rollback.sh", fwRollbackScript, "0755"))
+%s`, putFile("/usr/local/sbin/fw-rollback.sh", fwRollbackScript, "0755"),
+		armTimer("fw-rollback", "/usr/local/sbin/fw-rollback.sh"))
 	if r := ctx.Cli.Sudo(arm); r.RC != 0 {
 		return StatusFail, "failed to arm fail-safe: " + firstLine(r.Stderr), fmt.Errorf("arm fail-safe failed")
 	}
@@ -141,8 +139,7 @@ systemd-run --on-active=300 --unit=fw-rollback /usr/local/sbin/fw-rollback.sh
 	persistInstall := `export DEBIAN_FRONTEND=noninteractive
 echo 'iptables-persistent iptables-persistent/autosave_v4 boolean false' | debconf-set-selections
 echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debconf-set-selections
-stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y iptables-persistent
-`
+` + aptInstall("iptables-persistent")
 	persistInstallFailed := false
 	if r := ctx.Cli.Sudo(persistInstall); r.RC != 0 {
 		persistInstallFailed = true
@@ -157,11 +154,7 @@ stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y iptables-persistent
 	}
 
 	// 5. Disarm timer + persist.
-	disarm := `systemctl stop fw-rollback.timer 2>/dev/null || true
-systemctl reset-failed fw-rollback.timer fw-rollback.service 2>/dev/null || true
-netfilter-persistent save >/dev/null 2>&1
-`
-	ctx.Cli.Sudo(disarm)
+	ctx.Cli.Sudo(disarmTimer("fw-rollback") + "netfilter-persistent save >/dev/null 2>&1\n")
 
 	// Confirm disarmed + persisted opens the SSH port.
 	timers := ctx.Cli.Sudo("systemctl list-timers --all 2>/dev/null | grep fw-rollback || true").Out()
@@ -291,25 +284,10 @@ func countServicePorts(port int, tcp, udp []int) int {
 }
 
 // greenfieldRuleset is the deterministic fresh build: SSH-only INPUT, INPUT and
-// FORWARD DROP, v4 + v6 mirror. Byte-identical to the original A1 ruleset.
+// FORWARD DROP, v4 + v6 mirror. Byte-identical to the original A1 ruleset —
+// pinned by TestGreenfieldRulesetGolden.
 func greenfieldRuleset(port int) string {
-	return fmt.Sprintf(`set -e
-# --- IPv4 ---
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A INPUT -p tcp --dport %[1]d -m conntrack --ctstate NEW -j ACCEPT
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-# --- IPv6 mirror (ICMPv6 NDP before INVALID drop) ---
-ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
-ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
-ip6tables -A INPUT -p tcp --dport %[1]d -m conntrack --ctstate NEW -j ACCEPT
-ip6tables -P INPUT DROP
-ip6tables -P FORWARD DROP
-`, port)
+	return inputRuleset(port, nil, nil, true)
 }
 
 // coexistRuleset is the brownfield service-preserving build. Same base hygiene as
@@ -323,48 +301,72 @@ ip6tables -P FORWARD DROP
 // DOCKER/DOCKER-USER chains and the nat table are never flushed. The port slices
 // are integers from detect, so the interpolation is injection-safe.
 func coexistRuleset(port int, tcp, udp []int) string {
+	return inputRuleset(port, tcp, udp, false)
+}
+
+// ipFamily is one address family's fixed part of the INPUT ruleset: the binary,
+// the section comment (greenfield vs coexistence wording), and the base-hygiene
+// prologue. The prologue ORDER differs between families on purpose — v6 accepts
+// ICMPv6 NDP before the INVALID drop — so it is spelled out per family rather
+// than generated.
+type ipFamily struct{ bin, header, coexistHeader, prologue string }
+
+var ipFamilies = []ipFamily{
+	{
+		bin:           "iptables",
+		header:        "# --- IPv4 ---",
+		coexistHeader: "# --- IPv4 (coexistence) ---",
+		prologue: `iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+`,
+	},
+	{
+		bin:           "ip6tables",
+		header:        "# --- IPv6 mirror (ICMPv6 NDP before INVALID drop) ---",
+		coexistHeader: "# --- IPv6 mirror (coexistence) ---",
+		prologue: `ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
+ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
+`,
+	},
+}
+
+// inputRuleset emits the shared INPUT lockdown for both families: base hygiene,
+// the SSH ACCEPT, the detected service ACCEPTs (deduped against the SSH port),
+// and `-P INPUT DROP`. greenfield ALSO sets `-P FORWARD DROP` per family;
+// brownfield emits no FORWARD line at all (see coexistRuleset's doc for why).
+// Both callers' output is pinned byte-for-byte by the goldens in
+// a1_firewall_test.go — comment text included.
+func inputRuleset(port int, tcp, udp []int, greenfield bool) string {
 	var b strings.Builder
 	b.WriteString("set -e\n")
-	// --- IPv4 ---
-	b.WriteString("# --- IPv4 (coexistence) ---\n")
-	b.WriteString("iptables -A INPUT -i lo -j ACCEPT\n")
-	b.WriteString("iptables -A INPUT -m conntrack --ctstate INVALID -j DROP\n")
-	b.WriteString("iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
-	fmt.Fprintf(&b, "iptables -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", port)
-	for _, p := range tcp {
-		if p == port {
-			continue // SSH port already opened above
+	for _, f := range ipFamilies {
+		header := f.coexistHeader
+		if greenfield {
+			header = f.header
 		}
-		fmt.Fprintf(&b, "iptables -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", p)
-	}
-	for _, p := range udp {
-		if p == port {
-			continue
+		b.WriteString(header + "\n")
+		b.WriteString(f.prologue)
+		fmt.Fprintf(&b, "%s -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", f.bin, port)
+		for _, p := range tcp {
+			if p == port {
+				continue // SSH port already opened above
+			}
+			fmt.Fprintf(&b, "%s -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", f.bin, p)
 		}
-		fmt.Fprintf(&b, "iptables -A INPUT -p udp --dport %d -j ACCEPT\n", p)
-	}
-	b.WriteString("iptables -P INPUT DROP\n")
-	// FORWARD policy/chains deliberately left untouched (see func doc).
-	// --- IPv6 mirror (ICMPv6 NDP before INVALID drop) ---
-	b.WriteString("# --- IPv6 mirror (coexistence) ---\n")
-	b.WriteString("ip6tables -A INPUT -i lo -j ACCEPT\n")
-	b.WriteString("ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
-	b.WriteString("for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done\n")
-	b.WriteString("ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP\n")
-	fmt.Fprintf(&b, "ip6tables -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", port)
-	for _, p := range tcp {
-		if p == port {
-			continue
+		for _, p := range udp {
+			if p == port {
+				continue
+			}
+			fmt.Fprintf(&b, "%s -A INPUT -p udp --dport %d -j ACCEPT\n", f.bin, p)
 		}
-		fmt.Fprintf(&b, "ip6tables -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", p)
-	}
-	for _, p := range udp {
-		if p == port {
-			continue
+		fmt.Fprintf(&b, "%s -P INPUT DROP\n", f.bin)
+		if greenfield {
+			fmt.Fprintf(&b, "%s -P FORWARD DROP\n", f.bin)
 		}
-		fmt.Fprintf(&b, "ip6tables -A INPUT -p udp --dport %d -j ACCEPT\n", p)
+		// Brownfield: FORWARD policy/chains deliberately left untouched.
 	}
-	b.WriteString("ip6tables -P INPUT DROP\n")
-	// FORWARD policy/chains deliberately left untouched (see func doc).
 	return b.String()
 }

@@ -488,12 +488,6 @@ func (s *termSession) resize(cols, rows int) {
 	}
 }
 
-// view returns the ANSI-styled full screen for rendering into the Terminal screen's
-// content area. The SafeEmulator serializes this against the drain goroutine's writes.
-func (s *termSession) view() string {
-	return s.emuNow().Render()
-}
-
 // altScreen reports whether the remote app is currently on the alternate screen
 // (vim/top/less). Read under mu (the callback writes it on the drain goroutine).
 func (s *termSession) altScreen() bool {
@@ -512,81 +506,82 @@ func (s *termSession) cursorShown() bool {
 	return s.cursorVisible
 }
 
-// screenLines is the live screen split into physical rows (ANSI-styled), trailing
-// blank rows trimmed so the join is exactly the visible content. The SafeEmulator
-// serializes Render against the drain goroutine.
-func (s *termSession) screenLines() []string {
-	return strings.Split(strings.TrimRight(s.emuNow().Render(), "\n"), "\n")
-}
-
-// scrollbackLines renders the off-screen scrollback buffer (oldest→newest) as
-// ANSI-styled rows. Empty when nothing has scrolled off yet. Each uv.Line renders
-// itself; SafeEmulator's Scrollback accessor is serialized against the drain.
-func (s *termSession) scrollbackLines() []string {
-	sb := s.emuNow().Scrollback()
-	if sb == nil {
-		return nil
-	}
-	lines := sb.Lines()
-	out := make([]string, 0, len(lines))
-	for _, ln := range lines {
-		out = append(out, ln.Render())
-	}
-	return out
-}
-
 // termSnapshot is a CONSISTENT, single-locked view of everything the terminal view +
-// cursor overlay need for one frame: the live screen rows, the scrollback rows (and its
-// length, so the overlay's body-row math can't drift from the body it splices), the
-// alt-screen flag, cursor visibility, the cursor cell position, and the grapheme +
-// display width under the cursor. Taken atomically so the overlay maps the cursor
-// against EXACTLY the body it overlays (no TOCTOU between separate locked reads racing
+// native cursor need for one frame: the live screen rows, the scrollback rows (and its
+// length, so the cursor's body-row math can't drift from the body it is placed over),
+// the clamped scroll offset the frame will be drawn at, the alt-screen flag, cursor
+// visibility and the cursor cell position. Taken atomically so the cursor maps against
+// EXACTLY the body it is placed over (no TOCTOU between separate locked reads racing
 // the drain).
 type termSnapshot struct {
-	screen        []string
+	screen []string
+	// scrollback holds ONE entry per scrollback row — len(scrollback) == scrollbackLen
+	// always — so body indices, the scroll clamp and the scrollbar's total stay exact.
+	// But only the rows the scroll region will actually DRAW ([off, off+rows), see
+	// cursorSnapshot) are RENDERED; every other entry is "". Nothing may read a row
+	// outside that window: renderScrollRegion reads only the window, and the cursor math
+	// uses lengths alone.
 	scrollback    []string
 	scrollbackLen int
+	off           int // clamped scroll offset the window was rendered for
 	alt           bool
 	cursorVisible bool
 	cursorX       int
 	cursorY       int
-	cursorCell    string // grapheme under the cursor ("" = blank cell)
-	cursorWidth   int    // display width of that grapheme (1 or 2; 0 for a blank cell)
 }
 
-// cursorSnapshot returns a consistent one-frame view (see termSnapshot). It holds out.mu
-// for the WHOLE read — out.mu serializes the drain (the only writer), so every field
-// reflects the same emulator state with no interleaved write. s.mu is taken (nested
-// under out.mu) only to read the callback-written alt/cursorVisible bits; the lock order
-// out.mu→s.mu is safe because no path takes s.mu then out.mu (reflowNow releases s.mu
-// before acquiring out.mu). Does NO heavy work beyond the reads and never calls reflow.
-func (s *termSession) cursorSnapshot() termSnapshot {
+// cursorSnapshot returns a consistent one-frame view (see termSnapshot) for a scroll
+// region `rows` tall at scroll offset `scroll`. It holds out.mu for the WHOLE read —
+// out.mu serializes the drain (the only writer), so every field reflects the same
+// emulator state with no interleaved write. s.mu is taken (nested under out.mu) only to
+// read the callback-written alt/cursorVisible bits; the lock order out.mu→s.mu is safe
+// because no path takes s.mu then out.mu (reflowNow releases s.mu before acquiring
+// out.mu). Never calls reflow.
+//
+// The window is what keeps a repaint CHEAP. Rendering the whole retained scrollback
+// (termScrollback = 5000 lines) measured ~10 ms and ~1.3 MB per call — and a tick takes
+// two calls (the follow-mode pin and the frame), i.e. ~18 ms against a 25 ms repaint
+// tick on a session with a full buffer. Only `rows` lines are ever visible, so only
+// those are rendered; the offset is clamped HERE so the caller cannot draw a window the
+// snapshot did not render.
+func (s *termSession) cursorSnapshot(scroll, rows int) termSnapshot {
+	rows = max(rows, 1)
+
 	s.out.mu.Lock()
 	defer s.out.mu.Unlock()
 	emu := s.out.emu
 
 	var snap termSnapshot
 	snap.screen = strings.Split(strings.TrimRight(emu.Render(), "\n"), "\n")
-	if sb := emu.Scrollback(); sb != nil {
-		lines := sb.Lines()
-		snap.scrollback = make([]string, 0, len(lines))
-		for _, ln := range lines {
-			snap.scrollback = append(snap.scrollback, ln.Render())
-		}
-	}
-	snap.scrollbackLen = len(snap.scrollback)
 
 	p := emu.CursorPosition()
 	snap.cursorX, snap.cursorY = p.X, p.Y
-	if c := emu.CellAt(p.X, p.Y); c != nil {
-		snap.cursorCell = c.Content
-		snap.cursorWidth = c.Width
-	}
 
 	s.mu.Lock()
 	snap.alt = s.alt
 	snap.cursorVisible = s.cursorVisible
 	s.mu.Unlock()
+
+	sb := emu.Scrollback()
+	snap.scrollbackLen = sb.Len() // nil-safe
+	// The body the caller will assemble (see liveBodyFromSnapshot): screen-only on the
+	// alt screen, scrollback ++ screen otherwise. Clamping against it here is what makes
+	// snap.off authoritative.
+	total := len(snap.screen)
+	if !snap.alt {
+		total += snap.scrollbackLen
+	}
+	snap.off = clampScroll(scroll, total, rows)
+
+	// One full-length slice (so indices/lengths stay exact) with only the visible rows
+	// rendered. On the alt screen the body is screen-only, so no scrollback row is drawn
+	// and none is rendered.
+	snap.scrollback = make([]string, snap.scrollbackLen)
+	if !snap.alt {
+		for i := snap.off; i < min(snap.off+rows, snap.scrollbackLen); i++ {
+			snap.scrollback[i] = sb.Line(i).Render()
+		}
+	}
 	return snap
 }
 
@@ -596,14 +591,6 @@ func (s *termSession) finished() (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.done, s.exitErr
-}
-
-// windowTitle returns the latest OSC-set terminal title (empty until the remote sets
-// one). Read under mu.
-func (s *termSession) windowTitle() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.title
 }
 
 // close tears the session down: cancel ctx (Shell returns at its select), then close

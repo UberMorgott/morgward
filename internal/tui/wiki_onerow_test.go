@@ -113,7 +113,7 @@ func TestWikiBackClickStillNavigates(t *testing.T) {
 	if !ok {
 		t.Fatalf("no back pill X")
 	}
-	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: m.wikiBackRow(), Button: tea.MouseLeft})
+	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: m.wikiButtonsRowY(), Button: tea.MouseLeft})
 	mm := next.(model)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("back click → phase %v, want phaseDashboard (wikiReturn)", mm.phase)

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/UberMorgott/morgward/internal/version"
 )
 
 // populateSecurityState derives the three access-state card fields from the audit
@@ -60,45 +59,26 @@ func (m *model) populateSecurityState() {
 // against the SAME ordered body slice the renderer iterates (securityBodyLines), so
 // the hit-test geometry can never drift.
 func (m model) securityView() string {
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
-
-	body := m.securityBodyLines(innerW)
-
-	var sb strings.Builder
-	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
-	sb.WriteByte('\n')
-	sb.WriteString(m.switcherLine(b, innerW))
-	sb.WriteByte('\n')
-
-	viewH := m.secBodyViewH()
-	off := clampScroll(m.dashScroll, len(body), viewH)
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
-
 	// Pinned action-pill row (one fixed row reserved below the scroll region so the footer
 	// never moves). Normally it carries the clickable "← Назад" pill; while the danger
 	// confirm is armed it instead carries the clickable [подтвердить]/[отмена] pills so the
 	// lockout can be confirmed/cancelled by mouse (keyboard Enter/Esc still works). secBackRow
 	// / secBackAtClick and secConfirmRow / secConfirm*AtClick share this row's geometry.
-	if m.secDangerConfirm {
-		sb.WriteString(contentLine(b, confirmPillsLine(m.lang), innerW))
-	} else {
-		sb.WriteString(contentLine(b, pillStyle.Render(t(m.lang, kWikiBack)), innerW))
-	}
-	sb.WriteByte('\n')
-
+	pinned := pillStyle.Render(t(m.lang, kWikiBack))
 	hint := t(m.lang, kSecHint)
 	if m.secDangerConfirm {
+		pinned = confirmPillsLine(m.lang)
 		hint = t(m.lang, kSecDangerConfirm)
 	}
-	sb.WriteString(contentLine(b, helpStyle.Render(hint), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+	return m.framedScrollView(frame{
+		title:  frameTitle(),
+		nav:    m.switcherLine,
+		body:   m.securityBodyLines(innerWidth(m.boxWidth())),
+		viewH:  m.secBodyViewH(),
+		scroll: m.dashScroll,
+		pinned: []string{pinned},
+		hint:   helpStyle.Render(hint),
+	})
 }
 
 // securitySafeButtonNames is the ordered SAFE-section button labels (Create admin,
@@ -218,17 +198,7 @@ const (
 // otherwise the bottom DANGER/SAFE buttons clip unreachable on a short terminal.
 func (m model) secRowYToBodyIdx(y int) (int, bool) {
 	body := m.securityBodyLines(innerWidth(m.boxWidth()))
-	viewH := m.secBodyViewH()
-	off := clampScroll(m.dashScroll, len(body), viewH)
-	rowInRegion := y - summaryBodyTopRow
-	if rowInRegion < 0 || rowInRegion >= viewH {
-		return 0, false
-	}
-	idx := off + rowInRegion
-	if idx < 0 || idx >= len(body) {
-		return 0, false
-	}
-	return idx, true
+	return scrollRowToBodyIdx(y, summaryBodyTopRow, len(body), m.secBodyViewH(), m.dashScroll)
 }
 
 // secButtonAtClick maps a click at (x,y) to one of the Security-menu buttons, using
@@ -290,11 +260,10 @@ func (m model) launchKeyOnlyDanger() (tea.Model, tea.Cmd) {
 	return m.startSteps([]string{"A2-danger", "A2.5"})
 }
 
-// secBodyViewH is the height of the scrollable Security-menu region: the shared
-// bodyViewH minus the one fixed row reserved for the pinned "← Назад" pill, floored at
-// 1. Used by BOTH securityView's render and secRowYToBodyIdx so the button geometry
-// never drifts.
-func (m model) secBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+// secBodyViewH is the height of the scrollable Security-menu region: the shared chrome
+// minus the one fixed row reserved for the pinned "← Назад" pill. Used by BOTH
+// securityView's render and secRowYToBodyIdx so the button geometry never drifts.
+func (m model) secBodyViewH() int { return m.chromeViewH(0, 1) }
 
 // secBackRow is the FIXED screen Y of the pinned "← Назад" pill: it follows the 2 chrome
 // rows and the scroll region, so it never moves with the scroll offset.
@@ -316,18 +285,6 @@ func (m model) secConfirmRow() int { return m.secBackRow() }
 // secConfirmContentX0 is the absolute X where the danger-confirm pills begin: 2 (left
 // border + the leading content space contentLine adds).
 const secConfirmContentX0 = 2
-
-// secConfirmPillX returns a click X inside the confirm (or cancel) danger pill, from the
-// SAME geometry confirmPillsLine renders. Exposed for the hit-test tests.
-func (m model) secConfirmPillX(confirm bool) int {
-	ranges := confirmPillRanges(m.lang, secConfirmContentX0)
-	idx := 0
-	if !confirm {
-		idx = 1
-	}
-	r := ranges[idx]
-	return (r[0] + r[1]) / 2
-}
 
 // secConfirmConfirmAtClick / secConfirmCancelAtClick report whether (x,y) hit the confirm
 // / cancel danger pill. Valid only while secDangerConfirm is armed on the Security menu.

@@ -6,9 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/UberMorgott/morgward/internal/engine"
-	"github.com/UberMorgott/morgward/internal/version"
 	"github.com/UberMorgott/morgward/internal/wiki"
 )
 
@@ -217,9 +215,6 @@ func (m model) wikiActionRowY(kind wikiActionKind) (int, bool) {
 	return 0, false
 }
 
-// wikiBackRow is the screen Y of the buttons row (the back pill always lives there).
-func (m model) wikiBackRow() int { return m.wikiButtonsRowY() }
-
 // wikiConfirmRow is the screen Y of the A8-reboot confirm pill row — the SAME buttons row
 // (the armed state swaps the action pills for confirm/cancel).
 func (m model) wikiConfirmRow() int { return m.wikiButtonsRowY() }
@@ -227,18 +222,6 @@ func (m model) wikiConfirmRow() int { return m.wikiButtonsRowY() }
 // wikiConfirmContentX0 is the absolute X where the wiki confirm pills begin: 2 (left
 // border + the leading content space contentLine adds), matching wikiBackStartCol.
 const wikiConfirmContentX0 = wikiBackStartCol
-
-// wikiConfirmPillX returns a click X inside the confirm (or cancel) update pill, from the
-// SAME geometry confirmPillsLine renders. Exposed for the hit-test tests.
-func (m model) wikiConfirmPillX(confirm bool) int {
-	ranges := confirmPillRanges(m.lang, wikiConfirmContentX0)
-	idx := 0
-	if !confirm {
-		idx = 1
-	}
-	r := ranges[idx]
-	return (r[0] + r[1]) / 2
-}
 
 // wikiUpdateConfirmConfirmAtClick / wikiUpdateConfirmCancelAtClick report whether (x,y)
 // hit the confirm / cancel pill of the armed A8-reboot confirm. Valid only while
@@ -350,54 +333,35 @@ func (m model) startRevert(ids []string) (tea.Model, tea.Cmd) {
 // monitor footer stays alive (sampler still running). Text reads m.lang every frame,
 // so the RU|EN toggle re-renders the description in the other language.
 func (m model) wikiView() string {
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
-
-	body := m.wikiBodyLines(innerW)
-
-	var sb strings.Builder
-	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
-	sb.WriteByte('\n')
-	sb.WriteString(m.switcherLine(b, innerW))
-	sb.WriteByte('\n')
-
-	// Same fixed-chrome layout as summaryView: a scrollable middle region of exactly
-	// bodyViewH rows (scrollbar drawn on overflow), then the hint + bottom border +
-	// the 3-row monitor box, so the footer stays pinned at any terminal size.
-	viewH := m.wikiBodyViewH()
-	off := clampScroll(m.wikiScroll, len(body), viewH)
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
-
 	// Fixed-chrome action rows pinned just above the hint line (FEATURE B): an optional
 	// update WARNING text line, then a SINGLE row carrying every present action button
 	// pill side by side. wikiButtonsLine + wikiHasUpdateWarn are the SAME sources the
 	// hit-tests use (wikiButtonsRowY / wikiButtonLabels), so render and click geometry
-	// can never drift.
+	// can never drift — and len(pinned) == wikiActionRowCount() by construction.
+	var pinned []string
 	if m.wikiHasUpdateWarn() {
-		sb.WriteString(contentLine(b, errStyle.Render(t(m.lang, kWikiUpdateWarn)), innerW))
-		sb.WriteByte('\n')
+		pinned = append(pinned, errStyle.Render(t(m.lang, kWikiUpdateWarn)))
 	}
 	// While the A8 reboot confirm is armed the buttons row carries the clickable
 	// [подтвердить]/[отмена] pills (confirm launches A8, cancel clears it) instead of the
 	// normal action pills; the row Y is unchanged so geometry never drifts. Keyboard
 	// Enter/Esc still resolves it.
-	if m.wikiUpdateConfirm {
-		sb.WriteString(contentLine(b, confirmPillsLine(m.lang), innerW))
-	} else {
-		sb.WriteString(contentLine(b, m.wikiButtonsLine(), innerW))
-	}
-	sb.WriteByte('\n')
 	hintKey := kWikiHint
 	if m.wikiUpdateConfirm {
+		pinned = append(pinned, confirmPillsLine(m.lang))
 		hintKey = kWikiUpdateConfirm
+	} else {
+		pinned = append(pinned, m.wikiButtonsLine())
 	}
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, hintKey)), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+	return m.framedScrollView(frame{
+		title:  frameTitle(),
+		nav:    m.switcherLine,
+		body:   m.wikiBodyLines(innerWidth(m.boxWidth())),
+		viewH:  m.wikiBodyViewH(),
+		scroll: m.wikiScroll,
+		pinned: pinned,
+		hint:   helpStyle.Render(t(m.lang, hintKey)),
+	})
 }
 
 // wikiBodyLines builds the wiki page body: the "[ID] Title" header then the three
@@ -493,13 +457,12 @@ func (m model) stepStatusWord(stepID string) (string, bool) {
 	}
 }
 
-// wikiBodyViewH is bodyViewH minus the fixed-chrome action rows the wiki screen
-// carries above the hint: the always-present "← Назад" pill plus, on the per-PROBE
-// path, the optional update-warning / update-button / apply-button rows (see
-// wikiActionRows). Reserving EXACTLY len(wikiActionRows) rows keeps the footer
-// pinned and the action-row screen Ys correct. Used for BOTH the wiki render and
-// every wiki scroll clamp so geometry never drifts.
-func (m model) wikiBodyViewH() int { return max(m.bodyViewH()-m.wikiActionRowCount(), 1) }
+// wikiBodyViewH is the shared chrome minus the fixed-chrome action rows the wiki screen
+// pins above the hint: the always-present buttons row plus, on the per-PROBE path, the
+// optional update-warning row (see wikiActionRowCount). Reserving EXACTLY that many rows
+// keeps the footer pinned and the action-row screen Ys correct. Used for BOTH the wiki
+// render and every wiki scroll clamp so geometry never drifts.
+func (m model) wikiBodyViewH() int { return m.chromeViewH(0, m.wikiActionRowCount()) }
 
 // auditConnected reports whether we are post-connect: an audit has completed and
 // carried results. Gates the wiki live-status column (a step's status word is only

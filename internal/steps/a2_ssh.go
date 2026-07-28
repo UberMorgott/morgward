@@ -3,6 +3,8 @@ package steps
 import (
 	"fmt"
 	"strings"
+
+	"github.com/UberMorgott/morgward/internal/detect"
 )
 
 // A2SSH implements §A2: SSH crypto hardening via drop-ins, version-conditional
@@ -36,38 +38,56 @@ func conf00(keyOnly bool) string {
 }
 
 func (a A2SSH) Run(ctx *Context) (Status, string, error) {
-	admin := ctx.Cfg.AdminUser
-
-	conf99 := build99(ctx)
-
-	// 1. Write drop-ins. mkdir the cloud-init dir FIRST so any putFile targeting it
-	// (and its chmod) succeeds even on a box without cloud-init pre-provisioned.
-	// Crypto-only: password login stays enabled (conf00(false) emits
-	// PasswordAuthentication yes and cloudInitPwAuthOn re-enables the stock
-	// 50-cloud-init override) so the default run can never lock the operator out.
+	// mkdir the cloud-init dir FIRST so any putFile targeting it (and its chmod)
+	// succeeds even on a box without cloud-init pre-provisioned. Crypto-only:
+	// password login stays enabled (conf00(false) emits PasswordAuthentication yes
+	// and cloudInitPwAuthOn re-enables the stock 50-cloud-init override) so the
+	// default run can never lock the operator out.
 	write := "mkdir -p /etc/cloud/cloud.cfg.d\n" +
 		putFile("/etc/ssh/sshd_config.d/00-hardening.conf", conf00(false), "0644") +
-		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", conf99, "0644") +
+		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", build99(ctx), "0644") +
 		cloudInitPwAuthOn()
+
+	// Handoff: switch the controller to admin + key + sudo. Access policy is
+	// unchanged (root SSH stays at the image default), so this just normalizes the
+	// executor path.
+	return applyCryptoHardening(ctx, write, true,
+		"SSH hardened, admin key verified; ")
+}
+
+// applyCryptoHardening is the SHARED A2 crypto sequence used by A2SSH and A2Safe:
+// write drop-ins → `sshd -t` gate → minimal host-key path → arm ssh-revert → ONE
+// restart → fresh-session key verify as admin → disarm. Every failure detail and
+// the lockout-capable error contract are identical for both callers, so they live
+// here once.
+//
+// SECURITY: the `write` script is deliberately NOT built here. A2SSH and A2Safe
+// have DIFFERENT security contracts (A2SSH forces PasswordAuthentication yes +
+// cloudInitPwAuthOn; A2Safe writes 99-hardening only and keeps the image default)
+// and must never be collapsed into one writer. handoff also stays a parameter:
+// only A2SSH switches the executor to the admin user.
+func applyCryptoHardening(ctx *Context, write string, handoff bool, okDetail string) (Status, string, error) {
+	admin := ctx.Cfg.AdminUser
+
 	if r := ctx.Cli.Sudo(write); r.RC != 0 {
 		return StatusFail, "writing sshd drop-ins failed: " + firstLine(r.Stderr), fmt.Errorf("sshd config write failed")
 	}
 
-	// 2. Syntax gate BEFORE any destructive key step.
+	// Syntax gate BEFORE any destructive key step / restart.
 	if status, detail, err := syntaxGate(ctx); err != nil {
 		return status, detail, err
 	}
 
-	// 3. Minimal host-key path (drop surplus ecdsa, trim moduli) — skip-if clean.
+	// Minimal host-key path (drop surplus ecdsa, trim moduli) — skip-if clean.
 	ctx.Cli.Sudo(hostKeyScript)
 
-	// 4. Arm ssh-revert fail-safe, then ONE restart (applies config + host keys).
+	// Arm ssh-revert fail-safe, then ONE restart (applies config + host keys).
 	armSSHRevert(ctx)
 	if r := ctx.Cli.Sudo("systemctl restart ssh"); r.RC != 0 {
 		return StatusFail, "ssh restart failed: " + firstLine(r.Stderr), fmt.Errorf("ssh restart failed")
 	}
 
-	// 5. Second-session key verify as the admin user (AllowGroups active).
+	// Second-session key verify as the admin user.
 	ctx.Log.Detail("verifying key login as %s in a fresh session…", admin)
 	if err := freshLogin(ctx, admin); err != nil {
 		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh hardening locked out admin")
@@ -76,17 +96,14 @@ func (a A2SSH) Run(ctx *Context) (Status, string, error) {
 	// Verify succeeded — disarm ssh-revert.
 	disarmSSHRevert(ctx)
 
-	// 6. Executor handoff: switch the controller to admin + key + sudo. Access
-	// policy is unchanged (root SSH stays at the image default), so this just
-	// normalizes the executor path.
-	if ctx.Cli.User == "root" {
+	if handoff && ctx.Cli.User == "root" {
 		if err := ctx.Cli.SwitchUser(admin); err != nil {
 			return StatusFail, "executor handoff to admin failed: " + err.Error(), fmt.Errorf("handoff failed")
 		}
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
 	}
 
-	return StatusOK, "SSH hardened, admin key verified; " + effectivePolicy(ctx), nil
+	return StatusOK, okDetail + effectivePolicy(ctx), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -113,44 +130,18 @@ func (A2Safe) ID() string    { return "A2-safe" }
 func (A2Safe) Title() string { return "SSH crypto only + install admin key" }
 
 func (A2Safe) Run(ctx *Context) (Status, string, error) {
-	admin := ctx.Cfg.AdminUser
-
-	// 0. Idempotently (re)install the admin authorized_keys line so the fresh-session
+	// Idempotently (re)install the admin authorized_keys line so the fresh-session
 	// verify can succeed even if PRE's append was skipped (the user must already
 	// exist — created by PRE; this only tops up the key, never creates the user).
 	if ctx.AuthLine != "" {
-		ctx.Cli.Sudo(installAdminKey(admin, ctx.AuthLine))
+		ctx.Cli.Sudo(putAuthorizedKey(ctx.Cfg.AdminUser, ctx.AuthLine))
 	}
 
-	// 1. Write the crypto drop-ins. 00-hardening is NOT written (no
-	// PasswordAuthentication line — image default kept). 99-hardening carries
-	// crypto only (no AllowGroups, no PermitRootLogin override).
-	if r := ctx.Cli.Sudo(buildSafeWrite(ctx)); r.RC != 0 {
-		return StatusFail, "writing sshd drop-ins failed: " + firstLine(r.Stderr), fmt.Errorf("sshd config write failed")
-	}
-
-	// 2. Syntax gate BEFORE any restart.
-	if status, detail, err := syntaxGate(ctx); err != nil {
-		return status, detail, err
-	}
-
-	// 3. Minimal host-key path.
-	ctx.Cli.Sudo(hostKeyScript)
-
-	// 4. Arm ssh-revert, then ONE restart.
-	armSSHRevert(ctx)
-	if r := ctx.Cli.Sudo("systemctl restart ssh"); r.RC != 0 {
-		return StatusFail, "ssh restart failed: " + firstLine(r.Stderr), fmt.Errorf("ssh restart failed")
-	}
-
-	// 5. Fresh-session key verify (admin login still open — no AllowGroups gate).
-	ctx.Log.Detail("verifying key login as %s in a fresh session…", admin)
-	if err := freshLogin(ctx, admin); err != nil {
-		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh hardening locked out admin")
-	}
-	disarmSSHRevert(ctx)
-
-	return StatusOK, "SSH crypto hardened (access policy unchanged); " + effectivePolicy(ctx), nil
+	// buildSafeWrite does NOT write 00-hardening (no PasswordAuthentication line —
+	// image default kept); 99-hardening carries crypto only. No handoff: the safe
+	// path leaves the executor identity alone.
+	return applyCryptoHardening(ctx, buildSafeWrite(ctx), false,
+		"SSH crypto hardened (access policy unchanged); ")
 }
 
 // A2Danger applies the opt-in access lockdown (AllowGroups + key-only + root lock).
@@ -164,7 +155,7 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 
 	// 0. Ensure the admin key is present before we cut off password / root login.
 	if ctx.AuthLine != "" {
-		ctx.Cli.Sudo(installAdminKey(admin, ctx.AuthLine))
+		ctx.Cli.Sudo(putAuthorizedKey(admin, ctx.AuthLine))
 	}
 
 	// 0b. Precondition guard (F04): the lockdown writes `AllowGroups sshusers` +
@@ -190,7 +181,7 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	// 1. Write the DANGER drop-in: AllowGroups + PermitRootLogin no + key-only.
 	// Also neutralize cloud-init's password override so it can't re-enable
 	// PasswordAuthentication on the next boot.
-	if r := ctx.Cli.Sudo(buildDangerWrite(ctx)); r.RC != 0 {
+	if r := ctx.Cli.Sudo(buildDangerWrite()); r.RC != 0 {
 		return StatusFail, "writing sshd lockdown drop-in failed: " + firstLine(r.Stderr), fmt.Errorf("sshd config write failed")
 	}
 
@@ -263,13 +254,6 @@ fi
 `
 }
 
-// installAdminKey appends the admin authorized_keys line idempotently (the user
-// must already exist). Mirrors precond.putAuthorizedKey; used by the split steps
-// so a stand-alone A2-safe/A2-danger run still has a working key.
-func installAdminKey(admin, line string) string {
-	return putAuthorizedKey(admin, line)
-}
-
 // preserveKeyUsers adds every existing key user (except root) to the sshusers
 // group so the AllowGroups sshusers lockdown does not lock out users that already
 // have a working key. Purely additive (only GRANTS access — never lockout-capable)
@@ -284,16 +268,10 @@ func preserveKeyUsers(users []string) (string, []string) {
 		if u == "" || u == "root" {
 			continue
 		}
-		fmt.Fprintf(&b, "usermod -aG sshusers %s 2>/dev/null || true\n", shellQuote(u))
+		fmt.Fprintf(&b, "usermod -aG sshusers %s 2>/dev/null || true\n", detect.ShQuote(u))
 		added = append(added, u)
 	}
 	return b.String(), added
-}
-
-// shellQuote wraps s in single quotes, escaping any embedded single quote, so an
-// arbitrary username can be interpolated into a shell command safely.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // buildSafeWrite is the pure SAFE drop-in writer: crypto-only 99-hardening.conf,
@@ -301,14 +279,13 @@ func shellQuote(s string) string {
 // PermitRootLogin override. Image-default access policy is preserved.
 func buildSafeWrite(ctx *Context) string {
 	return "mkdir -p /etc/ssh/sshd_config.d\n" +
-		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", safe99(ctx), "0644")
+		putFile("/etc/ssh/sshd_config.d/99-hardening.conf", build99(ctx), "0644")
 }
 
 // buildDangerWrite is the pure DANGER drop-in writer: the access lockdown
 // (AllowGroups + PermitRootLogin no + PasswordAuthentication no) plus the
 // cloud-init password-off neutralization so a reboot can't re-open password auth.
-func buildDangerWrite(ctx *Context) string {
-	_ = ctx
+func buildDangerWrite() string {
 	return "mkdir -p /etc/ssh/sshd_config.d /etc/cloud/cloud.cfg.d\n" +
 		putFile("/etc/ssh/sshd_config.d/00-hardening.conf", conf00(true), "0644") +
 		putFile("/etc/ssh/sshd_config.d/98-access.conf", danger99(), "0644") +
@@ -350,23 +327,30 @@ func assertAdminLoginable(ctx *Context, admin string) (Status, string, error) {
 	// a box that places homes elsewhere) would otherwise wrongly fail the key check.
 	// Fall back to /home/<user> when getent yields nothing. The admin name is
 	// charset-validated in config.Validate, but quote it anyway for completeness.
-	q := shellQuote(admin)
+	q := detect.ShQuote(admin)
 	home := ctx.Cli.Sudo(fmt.Sprintf("getent passwd %s | cut -d: -f6", q)).Out()
 	if home == "" {
 		home = "/home/" + admin
 	}
-	if r := ctx.Cli.Sudo(fmt.Sprintf("test -s %s/.ssh/authorized_keys", shellQuote(home))); r.RC != 0 {
+	if r := ctx.Cli.Sudo(fmt.Sprintf("test -s %s/.ssh/authorized_keys", detect.ShQuote(home))); r.RC != 0 {
 		return StatusFail, fmt.Sprintf("admin %q has no authorized_keys — run the PRE step first (key-only login would fail)", admin),
 			fmt.Errorf("admin precondition: empty authorized_keys")
 	}
 	return StatusOK, "", nil
 }
 
+// RmSSHDropIns is the `rm -f` of EVERY sshd drop-in this package writes — the
+// single list of files morgward owns under /etc/ssh/sshd_config.d. It is the
+// shared head of three payloads that must never drift apart: the syntaxGate
+// rollback, the armSSHRevert fail-safe timer, and the engine's A2 revert (which
+// adds the F07 cloud-init/root-unlock actions on top). Exported for the engine.
+const RmSSHDropIns = "rm -f /etc/ssh/sshd_config.d/00-hardening.conf /etc/ssh/sshd_config.d/98-access.conf /etc/ssh/sshd_config.d/99-hardening.conf"
+
 // syntaxGate runs `sshd -t`; on failure it removes the drop-ins this package
 // writes and returns a hard error so the caller aborts before any restart.
 func syntaxGate(ctx *Context) (Status, string, error) {
 	if r := ctx.Cli.Sudo("sshd -t"); r.RC != 0 {
-		ctx.Cli.Sudo("rm -f /etc/ssh/sshd_config.d/00-hardening.conf /etc/ssh/sshd_config.d/98-access.conf /etc/ssh/sshd_config.d/99-hardening.conf")
+		ctx.Cli.Sudo(RmSSHDropIns)
 		return StatusFail, "sshd -t rejected config (removed drop-ins): " + firstLine(r.Stderr), fmt.Errorf("sshd -t failed")
 	}
 	return StatusOK, "", nil
@@ -375,15 +359,13 @@ func syntaxGate(ctx *Context) (Status, string, error) {
 // armSSHRevert installs a 300s self-healing timer that strips the morgward
 // drop-ins and reloads sshd if it is not disarmed first.
 func armSSHRevert(ctx *Context) {
-	ctx.Cli.Sudo(`systemctl stop ssh-revert.timer 2>/dev/null || true
-systemctl reset-failed 'ssh-revert.*' 2>/dev/null || true
-systemd-run --on-active=300 --unit=ssh-revert sh -c 'rm -f /etc/ssh/sshd_config.d/00-hardening.conf /etc/ssh/sshd_config.d/98-access.conf /etc/ssh/sshd_config.d/99-hardening.conf; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh'`)
+	ctx.Cli.Sudo(armTimer("ssh-revert",
+		`sh -c '`+RmSSHDropIns+`; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh'`))
 }
 
 // disarmSSHRevert cancels the ssh-revert fail-safe after a verified key login.
 func disarmSSHRevert(ctx *Context) {
-	ctx.Cli.Sudo(`systemctl stop ssh-revert.timer 2>/dev/null || true
-systemctl reset-failed 'ssh-revert.*' 2>/dev/null || true`)
+	ctx.Cli.Sudo(disarmTimer("ssh-revert"))
 }
 
 // effectivePolicy reports the live PermitRootLogin / PasswordAuthentication for
@@ -392,40 +374,23 @@ func effectivePolicy(ctx *Context) string {
 	return ctx.Cli.Sudo(`sshd -T 2>/dev/null | grep -Ei 'permitrootlogin|passwordauthentication' | tr '\n' ' '`).Out()
 }
 
-// build99 assembles 99-hardening.conf with version-conditional tokens for A2SSH.
-//
-// It emits crypto + session knobs ONLY, leaving the image-default access policy
-// intact (NO AllowGroups, NO PermitRootLogin override) — so the default `run` can
-// never lock the operator out. The opt-in lockdown lives in A2Danger (danger99).
+// build99 assembles 99-hardening.conf: the session knobs plus the
+// version-conditional cryptoBlock. It emits crypto + session knobs ONLY, leaving
+// the image-default access policy intact (NO AllowGroups, NO PermitRootLogin
+// override) — so the default `run` can never lock the operator out. The opt-in
+// lockdown lives in A2Danger (danger99). Shared verbatim by A2SSH and A2Safe:
+// the session knobs don't gate access, so both paths write the same file.
 func build99(ctx *Context) string {
-	var b strings.Builder
-	b.WriteString(`MaxAuthTries 3
+	return `MaxAuthTries 3
 LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
-`)
-	b.WriteString(cryptoBlock(ctx))
-	return b.String()
-}
-
-// safe99 is the crypto-only 99-hardening.conf for the default path: the shared
-// cryptoBlock WITHOUT any AllowGroups or PermitRootLogin line (image default
-// access policy preserved). It still carries the session knobs the crypto block
-// owns (MaxAuthTries/timeouts/forwarding off) — those don't gate access.
-func safe99(ctx *Context) string {
-	var b strings.Builder
-	b.WriteString(`MaxAuthTries 3
-LoginGraceTime 30
-ClientAliveInterval 300
-ClientAliveCountMax 2
-`)
-	b.WriteString(cryptoBlock(ctx))
-	return b.String()
+` + cryptoBlock(ctx)
 }
 
 // cryptoBlock is the version-conditional cipher/KEX/MAC/host-key/forwarding body
-// shared by build99 (legacy) and safe99 (split). It contains NO access-policy
-// directives (no AllowGroups, no PermitRootLogin, no PasswordAuthentication).
+// of build99. It contains NO access-policy directives (no AllowGroups, no
+// PermitRootLogin, no PasswordAuthentication).
 func cryptoBlock(ctx *Context) string {
 	var b strings.Builder
 	// KexAlgorithms: mlkem first on 26.04 (OpenSSH 10.x); dropped on 24.04 (9.6p1).

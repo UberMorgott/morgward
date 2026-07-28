@@ -98,19 +98,15 @@ func parseMemKB(out string) int64 { return freeKB(out, "Mem:") }
 // parseSwapKB returns total swap KB from a `free -k` Swap line (col 2).
 func parseSwapKB(out string) int64 { return freeKB(out, "Swap:") }
 
-// parsePorts extracts listening local ports from `ss -tlnH` output (no header).
-// Each line's local address is field 4 (State Recv-Q Send-Q Local Peer …); the
-// port is the substring after the final ':'. Results are deduped and returned in
-// first-seen order.
-func parsePorts(out string) []string {
+// parsePorts extracts listening ports from the PORTS marker: the space-separated
+// list of local addresses the snapshot script emits (`ss -tlnH | awk '{print $4}'`),
+// e.g. "0.0.0.0:22 127.0.0.53%lo:53 [::]:80". Each port is the substring after the
+// address's final ':'. Non-numeric and malformed entries are skipped; results are
+// deduped and returned in first-seen order.
+func parsePorts(addrs string) []string {
 	seen := make(map[string]bool)
 	var ports []string
-	for _, l := range strings.Split(out, "\n") {
-		f := strings.Fields(l)
-		if len(f) < 4 {
-			continue
-		}
-		local := f[3]
+	for _, local := range strings.Fields(addrs) {
 		i := strings.LastIndex(local, ":")
 		if i < 0 || i == len(local)-1 {
 			continue
@@ -153,13 +149,7 @@ func parseSnapshot(raw string) *Snapshot {
 		case "ZRAM":
 			s.ZramActive = val == "yes"
 		case "PORTS":
-			// Re-emit each space-separated local address on its own ss-shaped line
-			// so parsePorts (field 4) can extract the port.
-			var b strings.Builder
-			for _, tok := range strings.Fields(val) {
-				b.WriteString("LISTEN 0 0 " + tok + " *:*\n")
-			}
-			s.OpenPorts = parsePorts(b.String())
+			s.OpenPorts = parsePorts(val)
 		case "SSHD":
 			sshdLines.WriteString(val)
 			sshdLines.WriteByte('\n')

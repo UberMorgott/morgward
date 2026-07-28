@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/UberMorgott/morgward/internal/state"
 	"github.com/UberMorgott/morgward/internal/steps"
 	"github.com/UberMorgott/morgward/internal/ui"
 )
@@ -34,9 +33,9 @@ func TestRunStepListCancelBeforeFirstStep(t *testing.T) {
 	var ran bool
 	s := &session{
 		log: ui.New(""),
-		ctx: &steps.Context{Ctx: ctx, State: state.Load("")},
+		ctx: &steps.Context{Ctx: ctx},
 	}
-	_, err := runStepList(ctx, s, []steps.Step{fakeStep{id: "A1", ran: &ran}}, false, Hooks{})
+	_, err := runStepList(ctx, s, []steps.Step{fakeStep{id: "A1", ran: &ran}}, Hooks{})
 
 	if !errors.Is(err, ErrCanceled) {
 		t.Fatalf("err = %v, want ErrCanceled", err)
@@ -61,9 +60,9 @@ func TestRunStepListCancelBetweenSteps(t *testing.T) {
 
 	s := &session{
 		log: ui.New(""),
-		ctx: &steps.Context{Ctx: ctx, State: state.Load("")},
+		ctx: &steps.Context{Ctx: ctx},
 	}
-	c, err := runStepList(ctx, s, []steps.Step{step1, step2}, false, Hooks{})
+	c, err := runStepList(ctx, s, []steps.Step{step1, step2}, Hooks{})
 
 	if !errors.Is(err, ErrCanceled) {
 		t.Fatalf("err = %v, want ErrCanceled", err)

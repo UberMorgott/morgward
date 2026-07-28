@@ -16,7 +16,6 @@ import (
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/sshx"
-	"github.com/UberMorgott/morgward/internal/state"
 	"github.com/UberMorgott/morgward/internal/stats"
 	"github.com/UberMorgott/morgward/internal/steps"
 	"github.com/UberMorgott/morgward/internal/tweaks"
@@ -306,7 +305,7 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 		}
 
 		push := "mkdir -p /root/.ssh && chmod 700 /root/.ssh\n" +
-			pushAuthLine("/root/.ssh/authorized_keys", authLine) +
+			steps.AppendLineIfMissing("/root/.ssh/authorized_keys", authLine) +
 			"chmod 600 /root/.ssh/authorized_keys\n"
 		if r := cli.Sudo(push); r.RC != 0 {
 			return nil, cleanup, fmt.Errorf("push key to root: %s", r.Stderr)
@@ -382,18 +381,9 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 		}
 	}
 
-	chk := state.Load("")
-	chk.Host = cfg.Host
-	chk.Greenfield = facts.Greenfield
-	// Read-only audit does not persist a checkpoint (it applies no steps), so the
-	// state file is left untouched.
-	if !readOnly {
-		chk.Save()
-	}
-
 	sctx := &steps.Context{
 		Ctx: ctx,
-		Cli: cli, Log: log, Cfg: cfg, State: chk, Facts: facts,
+		Cli: cli, Log: log, Cfg: cfg, Facts: facts,
 		AuthLine: authLine, KeyPEM: keyPEM,
 	}
 	return &session{log: log, cli: cli, ctx: sctx, before: before}, cleanup, nil
@@ -427,7 +417,7 @@ func Run(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error
 	if err != nil {
 		return err
 	}
-	cnt, err := runStepList(ctx, s, orderedSteps(), true, h)
+	cnt, err := runStepList(ctx, s, orderedSteps(), h)
 	if err != nil {
 		return err
 	}
@@ -484,7 +474,7 @@ func RunSteps(ctx context.Context, cfg *config.Config, log *ui.Logger, ids []str
 		return fmt.Errorf("no steps selected; valid ids: %v", allStepIDs())
 	}
 	s.log.Info("running selected steps: %v", ids)
-	cnt, err := runStepList(ctx, s, selected, false, h)
+	cnt, err := runStepList(ctx, s, selected, h)
 	if err != nil {
 		return err
 	}
@@ -673,11 +663,10 @@ func emitDone(h Hooks, sum Summary) {
 	h.OnProgress(Progress{Done: true, Summary: sum})
 }
 
-// runStepList runs steps in order; honorCheckpoint skips already-completed steps.
-// It emits a per-step Progress (running, then final status) when h.OnProgress is
-// set, and returns the OK/SKIP/FAIL tally so the caller can build a Summary.
-func runStepList(ctx context.Context, s *session, list []steps.Step, honorCheckpoint bool, h Hooks) (counts, error) {
-	chk := s.ctx.State
+// runStepList runs steps in order. It emits a per-step Progress (running, then
+// final status) when h.OnProgress is set, and returns the OK/SKIP/FAIL tally so
+// the caller can build a Summary.
+func runStepList(ctx context.Context, s *session, list []steps.Step, h Hooks) (counts, error) {
 	var c counts
 	total := len(list)
 	emit := func(st steps.Step, i int, status string) {
@@ -699,18 +688,6 @@ func runStepList(ctx context.Context, s *session, list []steps.Step, honorCheckp
 			s.log.Warn("run canceled before %s — stopping at step boundary (%d/%d done)", st.ID(), i, total)
 			return c, ErrCanceled
 		}
-		if honorCheckpoint && chk.Done(st.ID()) {
-			s.log.Skip("%s — already completed (checkpoint)", st.ID())
-			c.skip++
-			c.skips = append(c.skips, SkipReason{ID: st.ID(), Reason: "already completed (checkpoint)"})
-			c.results = append(c.results, StepResult{
-				ID: st.ID(), Title: st.Title(), Status: steps.StatusSkip,
-				Detail: "already completed (checkpoint)",
-			})
-			// Checkpoint-skipped steps still emit with their final status.
-			emit(st, i, steps.StatusSkip.String())
-			continue
-		}
 		emit(st, i, "running")
 		s.log.Step(st.ID(), st.Title())
 		start := time.Now()
@@ -731,7 +708,6 @@ func runStepList(ctx context.Context, s *session, list []steps.Step, honorCheckp
 			c.fail++
 			s.log.Fail("%s — %s", st.ID(), detail)
 		}
-		chk.Mark(st.ID(), status.String())
 		emit(st, i, status.String())
 		if herr != nil {
 			s.log.Fail("ABORT: lockout-capable failure in %s: %v", st.ID(), herr)
@@ -770,13 +746,6 @@ func allStepIDs() []string {
 		ids = append(ids, st.ID())
 	}
 	return ids
-}
-
-func pushAuthLine(file, line string) string {
-	// Mirror of steps.appendLineIfMissing for the engine's pre-step bootstrap.
-	return fmt.Sprintf(
-		"__L=%q; grep -qxF \"$__L\" '%s' 2>/dev/null || printf '%%s\\n' \"$__L\" >> '%s'\n",
-		line, file, file)
 }
 
 func writeInventory(inv string) string {

@@ -68,7 +68,7 @@ func TestWikiApplyAndUpdateHitTest(t *testing.T) {
 	// Back pill still resolves (also on the shared row), and the apply X must NOT
 	// resolve as update (separate pills, separate X ranges).
 	backX, _ := pillXForKind(m, wikiRowBack)
-	if !m.wikiBackAtClick(backX, m.wikiBackRow()) {
+	if !m.wikiBackAtClick(backX, m.wikiButtonsRowY()) {
 		t.Fatalf("back hit-test missed")
 	}
 	if m.wikiUpdateAtClick(applyX, btnY) {
@@ -101,10 +101,10 @@ func TestWikiApplyAndUpdateHitTest(t *testing.T) {
 		t.Fatalf("applied + revertable + no-pending action rows = %v, want [revert, back]", got)
 	}
 	// Hit-tests for the hidden pills must always miss.
-	if ma.wikiApplyAtClick(4, ma.wikiBackRow()) {
+	if ma.wikiApplyAtClick(4, ma.wikiButtonsRowY()) {
 		t.Fatalf("hidden apply pill hit-test must miss")
 	}
-	if ma.wikiUpdateAtClick(4, ma.wikiBackRow()) {
+	if ma.wikiUpdateAtClick(4, ma.wikiButtonsRowY()) {
 		t.Fatalf("hidden update pill hit-test must miss")
 	}
 }

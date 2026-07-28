@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -35,12 +36,10 @@ func GenerateKeyPair(comment string) (*KeyPair, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssh public key: %w", err)
 	}
-	authLine := string(ssh.MarshalAuthorizedKey(sshPub))
-	// MarshalAuthorizedKey appends a newline; append the comment, trim later.
+	// MarshalAuthorizedKey appends a newline; drop it before adding the comment.
+	authLine := strings.TrimRight(string(ssh.MarshalAuthorizedKey(sshPub)), "\r\n")
 	if comment != "" {
-		authLine = trimNL(authLine) + " " + comment
-	} else {
-		authLine = trimNL(authLine)
+		authLine += " " + comment
 	}
 
 	return &KeyPair{PrivatePEM: privPEM, AuthorizedLine: authLine}, nil
@@ -53,16 +52,9 @@ func PublicLineFromPEM(pemBytes []byte, comment string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse private key: %w", err)
 	}
-	line := trimNL(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+	line := strings.TrimRight(string(ssh.MarshalAuthorizedKey(signer.PublicKey())), "\r\n")
 	if comment != "" {
 		line += " " + comment
 	}
 	return line, nil
-}
-
-func trimNL(s string) string {
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s
 }

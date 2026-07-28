@@ -21,8 +21,9 @@ and leaves the FORWARD policy untouched; A5 uses `rp_filter=2` when routing; A6.
 disk swap; A2 adds existing key users to `sshusers`). Coexistence is automatic, driven by
 `detect.Facts` — no new flag. See [`BROWNFIELD.md`](BROWNFIELD.md) for the full
 detection set + per-step decision table. Read-only commands (`detect`/`verify`/`step`/
-`audit`) pass through. State is **in-memory per run** — no cross-invocation skip (the
-on-box configs are the durable checkpoints).
+`audit`) pass through. There is **no run state at all** — no checkpoint file, no skip
+list, nothing carried between invocations. Every run re-derives what it needs from
+`detect.Run`; the on-box configs are the only durable record.
 
 ## 2. Execution flow
 
@@ -39,12 +40,13 @@ dial (DialWithRetry, 90s/5s backoff; key wins, else password)
   └─ gates
         AlreadyHardened (≥2 markers) ─┐  refuse full `run` unless --assume-yes
         brownfield (non-greenfield)  ─┘  (read-only cmds set allowBrownfield=true → pass)
-  └─ build steps.Context {Ctx, Cli, Log, Cfg, State, Facts, AuthLine, KeyPEM}
+  └─ build steps.Context {Ctx, Cli, Log, Cfg, Facts, AuthLine, KeyPEM, Bench}
 ```
 
 Then per command:
 
-- **run** → `runStepList(orderedSteps(), honorCheckpoint=true)` → §V `verify.Run`.
+- **run** → `runStepList(ctx, s, orderedSteps(), h)` → §V `verify.Run`. Every step runs;
+  there is no skip/resume path.
   Each step writes drop-ins, runs `sshd -t` (fail-closed gate), arms a **300s ssh-revert
   systemd timer**, restarts sshd, **verifies key login in a second independent session**
   before disarming/locking root. A non-nil step error = lockout-capable ⇒ aborts the run.
@@ -67,7 +69,9 @@ passes a **cancelable** ctx plus `Sink` (stream log lines), `OnConnect` (monitor
 ## 3. Entry points
 
 ### CLI — [`cmd/morgward/main.go`](../cmd/morgward/main.go)
-Flag/env parsing (`partitionArgs` lets flags follow positional step IDs), secrets from
+Flag/env parsing (`parseArgs` re-parses around each positional so flags may follow step
+IDs; `fs` itself decides which flags take a value, so it can't drift from `bindFlags`),
+secrets from
 `VPS_PASSWORD`/`VPS_HOST`, interactive prompts when host absent, `cfg.Validate()`, then
 `engine.Execute(context.Background(), …, Hooks{OnKey: printKeyBlock})`. Also owns
 `performUpdate` (go-selfupdate: detect → anti-downgrade gate → checksum-verified `UpdateTo`
@@ -91,28 +95,36 @@ alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWi
 | [`summary.go`](../internal/tui/summary.go) | `phaseSummary`: post-finish stats + clickable fix list |
 | [`matrix.go`](../internal/tui/matrix.go) | `phaseMatrix`: per-tweak audit ("анализ") table |
 | [`keyview.go`](../internal/tui/keyview.go) | `phaseKey`: generated PEM + clipboard "Copy key" button |
-| [`terminal.go`](../internal/tui/terminal.go) + `term*.go` | `phaseTerminal` **Terminal\|Files workspace** (`wsTab`): an interactive SSH shell (PTY emulator) — `openTerminal` dials ONE `*sshx.Client` shared by both tabs; `ctrl+1`/`ctrl+2` switch tabs, `ctrl+q` exits |
+| [`terminal.go`](../internal/tui/terminal.go) + `term*.go` | `phaseTerminal` **Terminal\|Files workspace** (`wsTab`): an interactive SSH shell (PTY emulator) — `openTerminal` dials ONE `*sshx.Client` shared by both tabs; `ctrl+1`/`ctrl+2` switch tabs, `ctrl+q` exits. `terminalFrame` returns the frame AND its native `tea.Cursor` from ONE `cursorSnapshot` (no hand-spliced cursor block, no blink state) |
 | [`files_*.go`](../internal/tui/files_view.go) | **Files tab** (`wsFiles`): remote file manager over the shared client. `fileSession` (`filesession.go`) holds cwd/listing/selection/clipboard/prompt+menu state. **Listing + mutations are shell-exec** (`files_ops.go` `LC_ALL=C ls`, `files_mutate.go` mkdir/mv/rm/cp/chmod/chown/stat — every path `shQuote`'d); **byte transfer is sftp** (`files_xfer.go` async Download/Upload via `Client.SFTP()`, goroutine→`fmXferDoneMsg`). `files_view.go` renders, `files_key.go` routes keys, `files_menu.go` is the right-click/`m` context menu. Untrusted remote names are `ui.StripControlAndANSI`'d at parse |
-| [`render.go`](../internal/tui/render.go) | `sanitizeStreamLine` — thin delegate to `ui.SanitizeStreamLine` (one hardened stripper shared with CLI/log) |
+| [`render.go`](../internal/tui/render.go) | the SHARED frame builder: `frame{title,nav,fixed,body,viewH,scroll,pinned,hint}` + `framedScrollView` (8 screens), `chromeViewH(fixed,pinned)` — the single chrome-row arithmetic every screen's `*ViewH` wrapper and hit-test derives from, `clampScroll`, `scrollBy` (the one scroll entry point for every phase); `sanitizeStreamLine` — thin delegate to `ui.SanitizeStreamLine` (one hardened stripper shared with CLI/log) |
 | [`monitor_footer.go`](../internal/tui/monitor_footer.go) | CPU/RAM/DISK footer row rendering |
-| [`i18n.go`](../internal/tui/i18n.go) | `Lang` (RU default / EN) + every localized string |
+| [`i18n.go`](../internal/tui/i18n.go) | `Lang` (RU default / EN), the `stringKey` enum + every localized string. Tables are `map[K][2]string` (`[0]`=RU, `[1]`=EN) read through the generic `pick`, so RU/EN sit on one line and a missing translation is impossible to introduce silently |
 | [`styles.go`](../internal/tui/styles.go) | lipgloss styles + box chrome |
 | [`util.go`](../internal/tui/util.go) | focus helpers, host/port parsing |
+
+**Rendered output is under golden test.** [`frames_golden_test.go`](../internal/tui/frames_golden_test.go)
+pins the exact frame of all **8** `framedScrollView` screens (12 states incl. the confirm
+overlays) at 100x40 and 60x20 into
+[`testdata/frames.golden`](../internal/tui/testdata/frames.golden) (ANSI stripped, so it is
+stable across colour profiles). A pure-rendering refactor must leave it byte-identical;
+`UPDATE_GOLDEN=1 go test ./internal/tui` regenerates it and is an INTENTIONAL layout change,
+never a way to make a red test go green.
 
 ## 4. Package map
 
 | Package | Path | Responsibility | Key symbols |
 |---------|------|----------------|-------------|
-| main | [`cmd/morgward/`](../cmd/morgward/) | CLI flag/env parse, dispatch, self-update | `main`, `performUpdate`, `partitionArgs`, `newUpdater`, `printKeyBlock` |
+| main | [`cmd/morgward/`](../cmd/morgward/) | CLI flag/env parse, dispatch, self-update | `main`, `performUpdate`, `parseArgs`/`bindFlags`, `newUpdater`, `printKeyBlock` |
 | engine | [`internal/engine/`](../internal/engine/) | wires config → bootstrap → detect → ordered steps → verify; gates; revert map | `Execute`, `prepare`, `Run`, `RunSteps`, `VerifyOnly`, `DetectOnly`, `Audit`, `RunRevert`, `orderedSteps`, `Hooks`, `Progress`, `Summary`, `IsRevertable`, `ErrCanceled` |
 | config | [`internal/config/`](../internal/config/) | resolved run config + validation | `Config`, `Validate`, `adminUserRe` (`^[a-z_][a-z0-9_-]{0,31}$`), `Err*` sentinels |
 | sshx | [`internal/sshx/`](../internal/sshx/) | embedded SSH client (one-shot executor, base64 delivery), keygen; OS+protocol keepalive, in-run TOFU host-key pin | `Dial`, `DialWithRetry`, `Client.Run`/`Sudo`/`SwitchUser`/`UseKey`/`BootID`/`WaitForReboot`/`SetOutputSink`, `GenerateKeyPair`, `LoadKeyFile`, `SecretMarkerPrefix`, `ErrNoMutualAuth`, `ErrHostKeyChanged`, `ErrRebootAuthFailed` |
-| steps | [`internal/steps/`](../internal/steps/) | one Step per runbook block; stateless | `Step`, `Context`, `Status`, `BenchResult`, `putFile`/`appendLineIfMissing`/`freshLogin`, `A1Firewall` … `A10Detection` |
-| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`; round 3: `ManagesIPTables()` — true on Greenfield or `FirewallMgr` ∈ {iptables,none,""}, false on ufw/firewalld/nftables), `portFromLocal` |
+| steps | [`internal/steps/`](../internal/steps/) | one Step per runbook block; stateless | `Step`, `Context`, `Status`, `BenchResult`, `putFile`/`pipeToBash`/`freshLogin`, `AppendLineIfMissing`, `RmSSHDropIns`, `aptGet`/`aptInstall`, `armTimer`/`disarmTimer`, `applyCryptoHardening`, `A1Firewall` … `A10Detection` |
+| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`; round 3: `ManagesIPTables()` — true on Greenfield or `FirewallMgr` ∈ {iptables,none,""}, false on ufw/firewalld/nftables), `portFromLocal`, `ShQuote` (the ONE shell-quoting guard — steps and the TUI file manager both call it) |
 | verify | [`internal/verify/`](../internal/verify/) | §V verification matrix (effective behavior, not config text); firewall rows manager-aware via `*detect.Facts` | `Run(c, log, port, *detect.Facts)`, `firewallChecks`, `Result`, `Status` (`StatusPass`/`Warn`/`Fail`/`Skip`/`StatusUnknown`) |
 | tweaks | [`internal/tweaks/`](../internal/tweaks/) | per-tweak audit registry (one privileged round-trip); view-only | `Run`, `Probe`, `Result` |
 | monitor | [`internal/monitor/`](../internal/monitor/) | live CPU/RAM/DISK over its **OWN** SSH session; reconnects | `ConnInfo`, `Sample`, sampler loop |
-| state | [`internal/state/`](../internal/state/) | in-memory per-run checkpoint (no disk, no cross-run skip) | `Checkpoint`, `Load`, `Done`, `Mark`, `Save` (no-op) |
+| termsize | [`internal/termsize/`](../internal/termsize/) | terminal-size trust boundary: Windows conhost reports the SCREEN BUFFER height (e.g. 3000) in a `WindowSizeMsg`, so every reported size is re-read from the console viewport. Filter only — `tui.resizeTick` is still the delivery mechanism (no SIGWINCH on Windows) | `TrueSize`, `Viewport` (var, stubbable) |
 | stats | [`internal/stats/`](../internal/stats/) | best-effort before/after snapshot (cosmetic) | `Capture`, `Snapshot`, `parse.go` parsers |
 | ui | [`internal/ui/`](../internal/ui/) | colored terminal + file logger; `SetSink` redirects to TUI; owns remote-output sanitizer (CLI print + log file + TUI all delegate) | `Logger`, `New`, `Step`/`OK`/`Skip`/`Fail`/`Stream`, `SetSink`, `SanitizeStreamLine`, `StripControlAndANSI` |
 | wiki | [`internal/wiki/`](../internal/wiki/) | localized what/why/risk/OnBox/Revert per fix (no TUI import) | `Doc`, `FixDoc`, `Lang` |
@@ -176,9 +188,9 @@ access, **never locks anyone out** (default path); `A2-danger` (`A2Danger`) = op
 - **Self-update**: `ChecksumValidator{UniqueFilename: "checksums.txt"}` gates every download
   (F01) — a release without `checksums.txt` **fails closed** (`ErrValidationAssetNotFound`)
   rather than applying an unverified binary; plus an anti-downgrade `GreaterThan` gate (F08).
-- **In-memory state**: `state.Load` ignores its path and returns a fresh checkpoint; `Save`
-  is a no-op. Every run starts clean — no cross-invocation skip; on-box configs are the
-  durable checkpoints.
+- **No persisted state**: there is no checkpoint/resume machinery (the `internal/state`
+  package was removed as provably dead). Every run starts clean and re-derives everything
+  from `detect.Run`; the on-box configs are the only durable record.
 - **Transport liveness + host-key pin (v0.7.4)**: every `Client` runs OS keepalive + a
   `keepalive@openssh.com` probe every 30s; 3 consecutive misses `Close()` the conn so a
   blocked command/dead NAT surfaces a transport error instead of hanging the run. The

@@ -1,7 +1,9 @@
 package detect
 
 import (
+	"maps"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -30,14 +32,19 @@ func TestPortFromLocal(t *testing.T) {
 	}
 }
 
-func TestSortedKeys(t *testing.T) {
-	if got := sortedKeys(nil); got != nil {
-		t.Errorf("sortedKeys(nil) = %v, want nil", got)
+// TestSortedPortKeys pins the contract parseListeners relies on for its port
+// sets: ascending order, and NIL (not an empty slice) for an empty/absent map.
+func TestSortedPortKeys(t *testing.T) {
+	if got := slices.Sorted(maps.Keys(map[int]bool(nil))); got != nil {
+		t.Errorf("sorted keys of nil map = %v, want nil", got)
 	}
-	got := sortedKeys(map[int]bool{8443: true, 22: true, 9099: true})
+	if got := slices.Sorted(maps.Keys(map[int]bool{})); got != nil {
+		t.Errorf("sorted keys of empty map = %v, want nil", got)
+	}
+	got := slices.Sorted(maps.Keys(map[int]bool{8443: true, 22: true, 9099: true}))
 	want := []int{22, 8443, 9099}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("sortedKeys = %v, want %v", got, want)
+		t.Errorf("sorted keys = %v, want %v", got, want)
 	}
 }
 

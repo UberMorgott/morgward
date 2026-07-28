@@ -68,22 +68,6 @@ func TestVisibleEntriesHidesDotfiles(t *testing.T) {
 	}
 }
 
-// navigateTo does the pure path-math + sel/scroll reset (the reload is a separate step),
-// so the cwd mutation on entering a directory is unit-testable without SSH.
-func TestNavigateToDir(t *testing.T) {
-	f := newFileSession(nil, "/etc", langRU)
-	f.sel = 4
-	f.scroll = 3
-	f.navigateTo("nginx")
-	if f.cwd != "/etc/nginx" || f.sel != 0 || f.scroll != 0 {
-		t.Fatalf("navigateTo(dir): cwd=%q sel=%d scroll=%d", f.cwd, f.sel, f.scroll)
-	}
-	f.navigateTo("..")
-	if f.cwd != "/etc" {
-		t.Fatalf("navigateTo(..): cwd=%q want /etc", f.cwd)
-	}
-}
-
 // navigateAndReload restores the previous cwd when the reload fails, so a bad typed path
 // (or any unreachable dir) never leaves cwd pointing at a non-existent directory with a
 // stale listing. A nil-cli session makes reload fail deterministically without SSH.

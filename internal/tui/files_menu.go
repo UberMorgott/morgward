@@ -78,7 +78,7 @@ func (f *fileSession) menuMove(delta int) {
 		return
 	}
 	i := f.menuSel
-	for step := 0; step < n; step++ {
+	for range n {
 		i += delta
 		if i < 0 {
 			i = 0
@@ -165,6 +165,6 @@ func (m model) filesMenuView() string {
 	rows = append(rows, helpStyle.Render(t(m.lang, kFmMenuHint)))
 
 	box := modalBoxStyle.Render(strings.Join(rows, "\n"))
-	cw, ch := m.boxWidth(), maxi(m.h, 1)
+	cw, ch := m.boxWidth(), max(m.h, 1)
 	return lipgloss.Place(cw, ch, lipgloss.Center, lipgloss.Center, box)
 }

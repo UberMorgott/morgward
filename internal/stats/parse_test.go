@@ -81,16 +81,12 @@ func TestParseMemSwapMissing(t *testing.T) {
 	}
 }
 
-// ss -tlnH (no header) sample: State Recv-Q Send-Q Local:Port Peer:Port ...
-const ssFixture = `LISTEN 0      4096         0.0.0.0:22         0.0.0.0:*
-LISTEN 0      4096      127.0.0.53%lo:53         0.0.0.0:*
-LISTEN 0      511          0.0.0.0:80         0.0.0.0:*
-LISTEN 0      4096            [::]:22            [::]:*
-LISTEN 0      511             [::]:80            [::]:*
-`
+// PORTS marker payload: the space-separated `ss -tlnH | awk '{print $4}'` column,
+// including the v4/v6 duplicates and a %scope-suffixed loopback address.
+const portsFixture = `0.0.0.0:22 127.0.0.53%lo:53 0.0.0.0:80 [::]:22 [::]:80`
 
 func TestParsePorts(t *testing.T) {
-	got := parsePorts(ssFixture)
+	got := parsePorts(portsFixture)
 	want := []string{"22", "53", "80"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
@@ -100,6 +96,17 @@ func TestParsePorts(t *testing.T) {
 func TestParsePortsEmpty(t *testing.T) {
 	if got := parsePorts(""); len(got) != 0 {
 		t.Fatalf("got %v want empty", got)
+	}
+}
+
+// TestParsePortsMalformed covers the skip paths: an address with no ':', one that
+// ends in ':', and a non-numeric port must all be dropped without affecting the
+// valid entries around them.
+func TestParsePortsMalformed(t *testing.T) {
+	got := parsePorts("garbage 0.0.0.0: 0.0.0.0:http [::]:443")
+	want := []string{"443"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
 	}
 }
 

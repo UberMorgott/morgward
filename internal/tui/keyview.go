@@ -79,35 +79,23 @@ func (m model) keyBodyLines(innerW int) (lines []string, buttonIdx int) {
 //	rows 2..2+viewH-1  : scrollable body (warning, PEM, connect hint, button, status)
 //	...                : hint, bottom border, then the 3-row monitor box (pinned)
 func (m model) keyView() string {
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
-
-	body, _ := m.keyBodyLines(innerW)
-
-	var sb strings.Builder
-	sb.WriteString(titledTop(b, " "+t(m.lang, kKeyTitle)+" ", bw))
-	sb.WriteByte('\n')
-	sb.WriteString(m.switcherLine(b, innerW))
-	sb.WriteByte('\n')
-
-	// Same fixed-chrome layout as summaryView/wikiView: a scrollable middle region of
-	// exactly bodyViewH rows (no scroll state here — the PEM almost always fits, but
-	// renderScrollRegion keeps the footer pinned regardless), then hint + bottom
-	// border + the 3-row monitor box.
-	viewH := m.bodyViewH()
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, 0)
-
+	body, _ := m.keyBodyLines(innerWidth(m.boxWidth()))
 	hintKey := kKeyHint
 	if m.keyPreRun {
 		hintKey = kKeyPreRunHint
 	}
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, hintKey)), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+	// The shared frame with nothing fixed or pinned: the scroll region is the full
+	// middle (bodyViewH). A PEM is ~10 lines (ed25519) to ~40 (RSA), so on a short
+	// window the body overflows and keyScroll windows it — the same offset ↑↓/k/j, the
+	// wheel and the scrollbar drag move (scrollBy / scrollGeom).
+	return m.framedScrollView(frame{
+		title:  " " + t(m.lang, kKeyTitle) + " ",
+		nav:    m.switcherLine,
+		body:   body,
+		viewH:  m.bodyViewH(),
+		scroll: m.keyScroll,
+		hint:   helpStyle.Render(t(m.lang, hintKey)),
+	})
 }
 
 // copyKey copies the private-key PEM to the system clipboard, recording success or
@@ -123,123 +111,50 @@ func (m model) copyKey() model {
 	return m
 }
 
-// keyCopyAtClick reports whether the click at (x,y) hit the "Copy key" button. It
-// derives the button's screen row from the SAME body layout keyView renders
-// (keyBodyTopRow + buttonIdx) and the X range from the rendered button width, so
-// the hit-test matches the draw exactly.
-func (m model) keyCopyAtClick(x, y int) bool {
-	if m.phase != phaseKey {
-		return false
+// keyLayers returns the phaseKey click targets: the "Copy key" button plus, by mode,
+// the START/CANCEL halves of the pre-run "[Enter] … [Esc] …" pill or the post-run
+// "← Назад" pill. Rows come from the SAME keyBodyLines layout keyView renders.
+//
+// keyView windows the body at the CLAMPED keyScroll, so a target's screen row is its
+// body index MINUS that offset and only rows [0, viewH) are on screen: a row scrolled
+// off (above or below the fold) gets NO layer and is unhittable — without that clamp a
+// click on the chrome of a short window could trigger copyKey.
+func (m model) keyLayers() []*lipgloss.Layer {
+	lines, buttonIdx := m.keyBodyLines(innerWidth(m.boxWidth()))
+	viewH := m.bodyViewH()
+	off := clampScroll(m.keyScroll, len(lines), viewH)
+	var ls []*lipgloss.Layer
+	add := func(id string, idx, x, w int) {
+		if row := idx - off; row >= 0 && row < viewH {
+			ls = append(ls, hitLayer(id, x, keyBodyTopRow+row, w, 1))
+		}
 	}
-	_, buttonIdx := m.keyBodyLines(innerWidth(m.boxWidth()))
-	// keyView renders the body at a fixed offset 0, so only body indices [0, viewH)
-	// are on screen. A button clipped below the fold (buttonIdx >= viewH) is not
-	// drawn, so a click at its absolute Y must NOT register — without this clamp a
-	// click on the chrome of a short window could spuriously trigger copyKey.
-	if buttonIdx >= m.bodyViewH() {
-		return false
-	}
-	if y != keyBodyTopRow+buttonIdx {
-		return false
-	}
-	const contentX0 = 2 // borderLeft(1) + space(1)
-	w := lipgloss.Width(m.keyButtonLabel())
-	return x >= contentX0 && x < contentX0+w
-}
+	add(idKeyCopy, buttonIdx, contentX0, lipgloss.Width(m.keyButtonLabel()))
 
-// keyPreRunButtonsIdx returns the body-slice index of the pre-run "[Enter]…[Esc]…" pill
-// (the last body line on the pre-run modal), or -1 when not on the pre-run modal.
-func (m model) keyPreRunButtonsIdx() int {
+	last := len(lines) - 1 // both modes render their pill as the LAST body line
 	if !m.keyPreRun {
-		return -1
+		// Same pillRanges geometry pillLayer would build (pillStyle's Padding(0,1)
+		// included), but routed through add() so the below-the-fold clamp applies here
+		// too: on a short window the pill is clipped and its row shows the hint / border
+		// / monitor box instead, which must not dismiss the screen.
+		r := pillRanges([]string{t(m.lang, kWikiBack)}, wikiBackStartCol)[0]
+		add(idKeyBack, last, r[0], r[1]-r[0])
+		return ls
 	}
-	lines, _ := m.keyBodyLines(innerWidth(m.boxWidth()))
-	return len(lines) - 1
-}
-
-// keyPreRunHalfAtClick reports whether (x,y) hit the pre-run pill, and whether the click
-// landed on the START half ("[Enter] …") or the CANCEL half ("[Esc] …"). The pill is one
-// pillOnStyle band; the split is the X where the "[Esc" token begins within the rendered
-// pill (content X 2 + one cell of pillStyle left padding). Returns ok=false when off the
-// pill / off its row / clipped below the fold (mirrors keyCopyAtClick's clamp).
-func (m model) keyPreRunHalfAtClick(x, y int) (start, cancel bool) {
-	idx := m.keyPreRunButtonsIdx()
-	if m.phase != phaseKey || idx < 0 || idx >= m.bodyViewH() {
-		return false, false
-	}
-	if y != keyBodyTopRow+idx {
-		return false, false
-	}
-	const contentX0 = 2
+	// The pre-run pill is ONE pillOnStyle band split in two: START spans from the pill's
+	// left edge to the column where the "[Esc" token begins, CANCEL from there to the
+	// pill's right edge. strings.Index gives a BYTE offset and the prefix ("[Enter] начать
+	// применение   ") is Cyrillic, so it is converted to display cells via lipgloss.Width.
+	const pillPad = 1 // pillOnStyle's Padding(0,1)
 	full := t(m.lang, kKeyPreRunButtons)
-	// pillOnStyle adds Padding(0,1): one cell of left padding before the text, one after.
-	const pillPad = 1
-	pillStart := contentX0
-	textStart := pillStart + pillPad
 	pillW := lipgloss.Width(full) + 2*pillPad
-	if x < pillStart || x >= pillStart+pillW {
-		return false, false
+	// No cancel token ⇒ the whole pill starts the run (defensive; the localized text
+	// always contains "[Esc"), leaving CANCEL zero-width and thus unhittable.
+	splitX := contentX0 + pillW
+	if esc := strings.Index(full, "[Esc"); esc >= 0 {
+		splitX = contentX0 + pillPad + lipgloss.Width(full[:esc])
 	}
-	// Split at the "[Esc" token's COLUMN within the rendered text. strings.Index gives a
-	// BYTE offset; the prefix "[Enter] начать применение   " is Cyrillic, so convert it
-	// to display cells via lipgloss.Width (byte offset would mis-split a multibyte line).
-	escByte := strings.Index(full, "[Esc")
-	if escByte < 0 {
-		// No cancel token — treat the whole pill as start (defensive; the localized text
-		// always contains "[Esc").
-		return true, false
-	}
-	cancelX0 := textStart + lipgloss.Width(full[:escByte])
-	if x < cancelX0 {
-		return true, false
-	}
-	return false, true
-}
-
-// keyStartAtClick reports whether (x,y) hit the START ("[Enter] …") half of the pre-run
-// pill.
-func (m model) keyStartAtClick(x, y int) bool {
-	start, _ := m.keyPreRunHalfAtClick(x, y)
-	return start
-}
-
-// keyCancelAtClick reports whether (x,y) hit the CANCEL ("[Esc] …") half of the pre-run
-// pill.
-func (m model) keyCancelAtClick(x, y int) bool {
-	_, cancel := m.keyPreRunHalfAtClick(x, y)
-	return cancel
-}
-
-// keyBackBodyIdx returns the body-slice index of the post-run "← Назад" pill (the last
-// body line on the read-only viewer), or -1 on the pre-run modal.
-func (m model) keyBackBodyIdx() int {
-	if m.keyPreRun {
-		return -1
-	}
-	lines, _ := m.keyBodyLines(innerWidth(m.boxWidth()))
-	return len(lines) - 1
-}
-
-// keyBackRow is the screen Y of the post-run "← Назад" pill (keyView renders the body at
-// offset 0, so the row is keyBodyTopRow + its body index).
-func (m model) keyBackRow() int {
-	idx := m.keyBackBodyIdx()
-	if idx < 0 {
-		return -1
-	}
-	return keyBodyTopRow + idx
-}
-
-// keyBackAtClick reports whether (x,y) hit the post-run "← Назад" pill, using the same
-// pillRanges geometry the render path draws. Clipped below the fold ⇒ no hit (mirrors
-// keyCopyAtClick's clamp).
-func (m model) keyBackAtClick(x, y int) bool {
-	idx := m.keyBackBodyIdx()
-	if m.phase != phaseKey || idx < 0 || idx >= m.bodyViewH() {
-		return false
-	}
-	if y != keyBodyTopRow+idx {
-		return false
-	}
-	return pillIndexAt([]string{t(m.lang, kWikiBack)}, wikiBackStartCol, x) == 0
+	add(idKeyStart, last, contentX0, splitX-contentX0)
+	add(idKeyCancel, last, splitX, contentX0+pillW-splitX)
+	return ls
 }

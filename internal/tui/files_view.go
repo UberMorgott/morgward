@@ -20,19 +20,22 @@ import (
 //	rows 4..4+viewH-1    : scrollable listing region  ← filesListTopRow
 //	then                : action-bar pills, hint, bottom border, monitor footer (3)
 //
+// filesFixedRows / filesPinnedRows are the Files screen's own chrome rows either side of
+// the listing, on top of the shared frame chrome: the address bar + column header above
+// it, and the action bar below it (the status line fills the frame's hint slot).
+const (
+	filesFixedRows  = 2
+	filesPinnedRows = 1
+)
+
 // filesListTopRow is the FIXED screen Y of the first listing row; the row hit-test
 // (filesRowAtClick) recovers an entry index from it + the scroll offset, exactly like
 // dashAuditRowAtClick does off dashScrollTopRow.
-const filesListTopRow = 4
+const filesListTopRow = summaryBodyTopRow + filesFixedRows
 
-// filesChromeRows is the number of NON-listing rows the Files frame spends: the 4 header
-// rows above the listing (border, tab strip, address bar, column header) + the action
-// bar (1) + hint (1) + bottom border (1) + the pinned 3-row monitor box = 10.
-const filesChromeRows = filesListTopRow + 1 + 1 + 1 + 3
-
-// filesListViewH is the height (rows) of the scrollable listing region: the terminal
-// height minus the fixed chrome, floored at 1 so the region never vanishes.
-func (m model) filesListViewH() int { return maxi(m.h-filesChromeRows, 1) }
+// filesListViewH is the height (rows) of the scrollable listing region, off the shared
+// chrome arithmetic. Used by BOTH filesView's render and filesRowAtClick.
+func (m model) filesListViewH() int { return m.chromeViewH(filesFixedRows, filesPinnedRows) }
 
 // fileColWidths returns the fixed column widths (size / perms / mtime) for the listing;
 // the name column takes the remaining inner width. Sizes are conservative so the columns
@@ -53,51 +56,26 @@ func (m model) filesView() string {
 	if m.files != nil && m.files.menuOpen {
 		return m.filesMenuView()
 	}
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
-	viewH := m.filesListViewH()
-
-	var sb strings.Builder
-	title := " " + version.Name + " · " + t(m.lang, kFmTabFiles) + " "
-	sb.WriteString(titledTop(b, title, bw))
-	sb.WriteByte('\n')
-
-	// Global nav bar on the switcher row, with the RU|EN switcher right-aligned on the same
-	// line (mirrors switcherLine's right-alignment so the two never collide on width).
-	sb.WriteString(m.navTabStripLine(b, innerW))
-	sb.WriteByte('\n')
-
-	// Address bar (cwd) and column header — fixed chrome above the listing. Size the
-	// editable input to the content area minus the "◂ " prefix so its cursor view fits the
-	// frame (contentLine still truncates as a backstop). SetWidth is deterministic +
-	// idempotent, so doing it at render time keeps the geometry self-consistent.
+	innerW := innerWidth(m.boxWidth())
+	// Size the editable address input to the content area minus the "◂ " prefix so its
+	// cursor view fits the frame (contentLine still truncates as a backstop). SetWidth is
+	// deterministic + idempotent, so doing it at render time keeps the geometry
+	// self-consistent.
 	if m.files != nil {
-		m.files.addr.SetWidth(maxi(innerW-2, 8))
+		m.files.addr.SetWidth(max(innerW-2, 8))
 	}
-	sb.WriteString(contentLine(b, m.filesAddressText(), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(contentLine(b, helpStyle.Render(m.filesColHeader(innerW)), innerW))
-	sb.WriteByte('\n')
-
-	// Listing region (scroll-windowed, scrollbar in the right border on overflow).
-	body := m.filesBody()
-	off := clampScroll(m.filesScrollOff(), len(body), viewH)
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
-
-	// Action bar (pills) + status/prompt line + bottom border. The status line shows (in
-	// priority order): an open prompt/confirm, else the last op notice/error (f.err), else
-	// the ops shortcut hint.
-	sb.WriteString(contentLine(b, m.filesActionBar(), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(contentLine(b, m.filesStatusLine(innerW), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-
-	// Pinned monitor footer (same as terminalView/summaryView).
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+	// The status line fills the frame's hint slot; it shows (in priority order) an open
+	// prompt/confirm, else the last op notice/error (f.err), else the ops shortcut hint.
+	return m.framedScrollView(frame{
+		title:  " " + version.Name + " · " + t(m.lang, kFmTabFiles) + " ",
+		nav:    m.navTabStripLine,
+		fixed:  []string{m.filesAddressText(), helpStyle.Render(m.filesColHeader(innerW))},
+		body:   m.filesBody(),
+		viewH:  m.filesListViewH(),
+		scroll: m.filesScrollOff(),
+		pinned: []string{m.filesActionBar()},
+		hint:   m.filesStatusLine(innerW),
+	})
 }
 
 // filesScrollOff clamps the file session's scroll offset so the selected row stays in
@@ -141,7 +119,7 @@ func (m model) filesColHeader(innerW int) string {
 // fixed columns + gaps, floored so it never goes negative on a narrow box.
 func (m model) fileNameColW(innerW int) int {
 	fixed := fileSizeColW + filePermsColW + fileMTimeColW + 3*fileColGap
-	return maxi(innerW-fixed, 8)
+	return max(innerW-fixed, 8)
 }
 
 // filesBody assembles the (un-windowed) listing lines for the scroll region: one styled
@@ -202,7 +180,7 @@ func (m model) filesStatusLine(innerW int) string {
 		if f.isConfirm() {
 			return tipStyle.Render(f.promptMsg) + "  " + helpStyle.Render(t(m.lang, kFmConfirmYesNo))
 		}
-		f.prompt.SetWidth(maxi(innerW-lipgloss.Width(f.promptMsg)-2, 8))
+		f.prompt.SetWidth(max(innerW-lipgloss.Width(f.promptMsg)-2, 8))
 		return tipStyle.Render(f.promptMsg) + " " + f.prompt.View()
 	}
 	if f != nil && f.err != "" {
@@ -296,7 +274,7 @@ func (m model) navTabStripLine(b lipgloss.Border, innerW int) string {
 	strip := m.navTabStripText()
 	styledSw, _, _, _, _ := m.switcherText()
 	const swWidth = 7 // "RU | EN"
-	pad := maxi(innerW-lipgloss.Width(strip)-swWidth, 0)
+	pad := max(innerW-lipgloss.Width(strip)-swWidth, 0)
 	content := strip + strings.Repeat(" ", pad) + styledSw
 	return contentLine(b, content, innerW)
 }

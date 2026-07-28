@@ -237,6 +237,14 @@ type model struct {
 	sumScroll  int
 	wikiScroll int
 	matScroll  int // анализ matrix scroll offset, clamped like sumScroll
+	keyScroll  int // phaseKey PEM viewer offset (a ~40-line RSA PEM overflows a short window)
+
+	// Scrollbar drag state (plain scalars — the model is copied by value every Update,
+	// exactly like termScroll). dragging is armed by a press on the bar and cleared by
+	// ANY release; dragGrab is the row offset INSIDE the thumb where it was grabbed, so
+	// the thumb tracks the pointer instead of snapping its top under it.
+	dragging bool
+	dragGrab int
 
 	// Dashboard state (phaseDashboard). All value-copyable: bools/ints, a plain
 	// []tweaks.Result (slice of plain structs), and a *detect.Facts (read-only after
@@ -311,18 +319,10 @@ type model struct {
 	// scroll-up gesture clears it to hold position, a forwarded keystroke re-arms it.
 	// Plain bool — value-copy safe.
 	termFollow bool
-	// termBlinkOn / termBlinkTicks drive the cursor blink. The render tick increments
-	// termBlinkTicks; at the ~530ms boundary (termBlinkPeriod) termBlinkOn flips and the
-	// counter resets. termBlinkOn=true is the SOLID half (cursor drawn). A forwarded
-	// keystroke snaps it solid (true,0) for a standard terminal feel. Both plain values —
-	// copy-safe, so they stay on the value-type model (never a pointer/timer).
-	termBlinkOn    bool
-	termBlinkTicks int
-	// focused tracks host-terminal window focus via DEC ?1004 (tea.FocusMsg/BlurMsg).
-	// Real terminals stop blinking the cursor when unfocused; we draw a STEADY hollow
-	// cursor instead. Initialized true (apps launch focused; ?1004 only reports CHANGES).
-	// Plain bool — value-copy safe.
-	focused bool
+	// No cursor state lives here: the terminal's cursor is the host terminal's OWN
+	// hardware cursor, placed per-frame via tea.View.Cursor (see terminalCursor), so
+	// the host owns blink/shape/unfocused behavior.
+	//
 	// Files tab of the terminal workspace (2b). wsTab selects the shown tab; files holds
 	// the FM state behind a POINTER (non-copyable sftp client). nil until the Files tab is
 	// first entered. The terminal keeps draining while Files is shown.
@@ -361,7 +361,6 @@ func newModel() model {
 		progCh:  make(chan engine.Progress, 256),
 		lang:    defaultLang,
 		titleK:  titleIdle,
-		focused: true, // apps launch focused; ?1004 reports CHANGES only
 		// wsTab (zero = wsTerminal) and files (nil until the Files tab is first entered)
 		// default correctly, so they are intentionally omitted from this literal.
 	}
@@ -441,7 +440,8 @@ func checkUpdateCmd() tea.Cmd {
 // View renders the UI as a tea.View (v2: View returns a value, not a string),
 // with alt-screen + cell-motion mouse + window title set per-frame.
 func (m model) View() tea.View {
-	v := tea.NewView(m.viewString())
+	content, cur := m.viewFrame()
+	v := tea.NewView(content)
 	// Per-View frame fields: set on EVERY returned View in BOTH phases so
 	// alt-screen + mouse + title never drop for a frame. The title is built from
 	// m.lang here (not stashed as a string) so the terminal chrome follows a live
@@ -449,13 +449,21 @@ func (m model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = m.windowTitle()
-	// Enable DEC ?1004 focus reporting so Update receives tea.FocusMsg/BlurMsg; the
-	// terminal cursor uses focus to decide blink vs. steady-hollow. ONLY the embedded
-	// terminal (phaseTerminal) consumes m.focused, so request ?1004 only there —
-	// leaving it on app-wide is the prime suspect for breaking mouse clicks/wheel on
-	// legacy consoles. Other phases leave it false (the runtime stops emitting ?1004).
-	v.ReportFocus = m.phase == phaseTerminal
+	// The host terminal's own cursor, placed at the embedded shell's cursor cell (nil
+	// on every other screen, which hides it). The host therefore owns blink + shape +
+	// the unfocused hollow look, so no ?1004 focus reporting is needed for it.
+	v.Cursor = cur
 	return v
+}
+
+// viewFrame builds the screen content plus the frame's native cursor position. Only
+// the embedded terminal has a cursor, and it must come from the SAME emulator snapshot
+// the body was rendered from — hence one call producing both (see terminalFrame).
+func (m model) viewFrame() (string, *tea.Cursor) {
+	if m.phase == phaseTerminal && m.wsTab != wsFiles {
+		return m.terminalFrame()
+	}
+	return m.viewString(), nil
 }
 
 // windowTitle builds the terminal-title-bar text for the current frame, localized

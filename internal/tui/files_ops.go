@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/UberMorgott/morgward/internal/detect"
 )
 
 // Deferred FM features (intentionally NOT implemented in 2b — absent by design, not bugs):
@@ -15,15 +17,13 @@ import (
 //   - in-TUI Open (local-edit-and-sync) — this is the separate 2c task; the menu's "Open"
 //     item is present-but-disabled until then.
 //
-// shQuote wraps s in single quotes for safe shell interpolation, replacing each embedded
-// single quote with the standard POSIX escape sequence: close-quote, a backslash-escaped
-// quote, then re-open (see the ReplaceAll below for the exact bytes). EVERY remote
-// path/name MUST go through this before it is spliced into a command string, so a name
-// containing spaces, quotes, dollar signs, semicolons, or other metacharacters cannot
-// break out of its quoting.
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+// shQuote wraps s in single quotes for safe shell interpolation. EVERY remote path/name
+// MUST go through this before it is spliced into a command string, so a name containing
+// spaces, quotes, dollar signs, semicolons, or other metacharacters cannot break out of
+// its quoting. The implementation is detect.ShQuote — the ONE shell-injection guard for
+// the whole codebase; this thin wrapper only keeps the package-local name the FM callers
+// already use (a second copy is how the two drift apart).
+func shQuote(s string) string { return detect.ShQuote(s) }
 
 // listCmd builds the machine-friendly directory listing command: C locale (stable field
 // formatting), long-iso timestamps (date + " " + time, parseListing's expected shape),
@@ -140,18 +140,6 @@ func (f *fileSession) reload() error {
 	f.err = ""
 	f.applyListing(r.Stdout)
 	return nil
-}
-
-// navigateTo changes cwd to the directory entry `name` (joinPath for a normal entry, the
-// parent for ".."), resetting sel/scroll to the top. PURE path math — the caller runs
-// reload() afterwards. Unit-testable without SSH.
-func (f *fileSession) navigateTo(name string) {
-	if name == ".." {
-		f.cwd = parentPath(f.cwd)
-	} else {
-		f.cwd = joinPath(f.cwd, name)
-	}
-	f.sel, f.scroll = 0, 0
 }
 
 // navigateAndReload changes cwd to dest, resets sel/scroll, and reloads the listing —

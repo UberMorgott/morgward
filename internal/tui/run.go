@@ -214,7 +214,7 @@ func (m model) barLine(innerW int) string {
 	if barW < minBarW {
 		// Too tight for a bar — drop it, keep counter + percent + truncated name.
 		nameW := innerW - lipgloss.Width(left) - gapBeforePct - lipgloss.Width(pctStr) - gapBeforeName
-		name := truncDisplay(title, maxi(nameW, 0))
+		name := truncDisplay(title, max(nameW, 0))
 		line := left + pctStr
 		if name != "" {
 			line += "  " + name

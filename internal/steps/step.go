@@ -11,7 +11,6 @@ import (
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/sshx"
-	"github.com/UberMorgott/morgward/internal/state"
 	"github.com/UberMorgott/morgward/internal/ui"
 )
 
@@ -60,7 +59,6 @@ type Context struct {
 	Cli      *sshx.Client
 	Log      *ui.Logger
 	Cfg      *config.Config
-	State    *state.Checkpoint
 	Facts    *detect.Facts
 	AuthLine string // public key authorized_keys line to install for the admin user
 	KeyPEM   []byte // private key PEM (for [LOCAL] second-session verify)
@@ -77,6 +75,37 @@ type Step interface {
 	// Run returns a status, a short human detail line, and a hard error only for
 	// lockout-capable failures that must abort the whole run.
 	Run(ctx *Context) (Status, string, error)
+}
+
+// aptGet is `apt-get` carrying the dpkg lock timeout EVERY lock-acquiring call
+// must have (v0.7.3): unattended-upgrades holding the dpkg lock on a fresh-boot
+// box then waits up to 5 min instead of aborting the step. Build every apt-get
+// invocation from this const (or from aptInstall) so the flag cannot be forgotten.
+const aptGet = "apt-get -o DPkg::Lock::Timeout=300"
+
+// aptInstall returns the streamed non-interactive install line for pkgs (a
+// space-separated package list), terminated by a newline. stdbuf keeps apt's
+// progress line-buffered so it streams live.
+func aptInstall(pkgs string) string {
+	return "stdbuf -oL -eL " + aptGet + " install -y " + pkgs + "\n"
+}
+
+// armTimer returns the fragment that arms a 300s systemd-run fail-safe: it first
+// clears any previously-armed instance of the unit (stop + reset-failed on the
+// unit glob, both best-effort) so a re-run cannot inherit a stale/failed timer,
+// then schedules cmd. This is the lockout-safety primitive shared by A1
+// (fw-rollback), A2 (ssh-revert) and A5 (rpf-revert) — one copy, not three.
+func armTimer(unit, cmd string) string {
+	return disarmTimer(unit) +
+		fmt.Sprintf("systemd-run --on-active=300 --unit=%s %s\n", unit, cmd)
+}
+
+// disarmTimer returns the fragment that cancels an armed fail-safe timer: stop
+// the timer and reset any failed unit matching the glob (covering both the
+// .timer and the .service). Best-effort — a missing unit is not an error.
+func disarmTimer(unit string) string {
+	return fmt.Sprintf("systemctl stop %[1]s.timer 2>/dev/null || true\n"+
+		"systemctl reset-failed '%[1]s.*' 2>/dev/null || true\n", unit)
 }
 
 // putFile returns a shell fragment that writes content to path with mode, using
@@ -98,10 +127,12 @@ func pipeToBash(script string) string {
 	return fmt.Sprintf("echo '%s' | base64 -d | bash\n", b64)
 }
 
-// appendLineIfMissing returns a fragment that appends line to file only if an
+// AppendLineIfMissing returns a fragment that appends line to file only if an
 // exact line match is absent (idempotent edit of a shared/non-owned file). The
-// line is delivered via base64 so it needs no shell quoting.
-func appendLineIfMissing(file, line string) string {
+// line is delivered via base64 so it needs no shell quoting — the §A1 stdin-safe
+// form. Exported because the engine's pre-step key bootstrap needs the SAME
+// primitive; it previously carried its own %q-quoting copy that had drifted.
+func AppendLineIfMissing(file, line string) string {
 	b64 := base64.StdEncoding.EncodeToString([]byte(line))
 	return fmt.Sprintf(
 		"__L=$(echo '%s' | base64 -d); grep -qxF \"$__L\" '%s' 2>/dev/null || printf '%%s\\n' \"$__L\" >> '%s'\n",

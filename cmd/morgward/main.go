@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -104,7 +105,23 @@ Examples:
   morgward run --host 1.2.3.4 --user root --password XXX --assume-yes
 `
 
+// restoreOnPanic turns an unrecovered panic into a readable crash report instead
+// of a wrecked console: the TUI runs in the alt-screen with the cursor hidden and
+// mouse reporting on, and a bare panic would leave the terminal in that state.
+// The escape sequences are no-ops on a terminal that never entered those modes.
+func restoreOnPanic() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	fmt.Print("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m")
+	fmt.Fprintf(os.Stderr, "panic: %v\n\n%s", r, debug.Stack())
+	os.Exit(2)
+}
+
 func main() {
+	defer restoreOnPanic()
+
 	// Set the console window title up front so the taskbar/title bar shows the
 	// program name rather than the launch command path (Windows; no-op elsewhere).
 	setConsoleTitle(version.Name + " — " + version.Tagline)
@@ -180,11 +197,10 @@ func main() {
 	fs := flag.NewFlagSet("morgward", flag.ExitOnError)
 	fs.Usage = func() { fmt.Print(usage) }
 	bindFlags(fs, cfg)
-	// Go's flag package stops at the first non-flag arg, so flags placed after
-	// positional step IDs (e.g. `step A4 A6.5 --host X`) would never be parsed.
-	// Partition args into flags and positionals first so flag order is irrelevant.
-	flagArgs, stepIDs := partitionArgs(args)
-	_ = fs.Parse(flagArgs)
+	// Flags may precede, follow or be interleaved with the positional step IDs;
+	// parseArgs handles every order. fs is ExitOnError, so a bad flag exits inside
+	// Parse and the returned error is always nil here.
+	stepIDs, _ := parseArgs(fs, args)
 
 	// Secrets via env (no leak into shell history / process args / transcripts).
 	if cfg.Password == "" {
@@ -352,45 +368,25 @@ func printKeyBlock(pem string) {
 	fmt.Println("----- END KEY -----")
 }
 
-// valueFlags lists the value-taking flag names bound in bindFlags (everything
-// except the sole bool flag --assume-yes).
-var valueFlags = map[string]bool{
-	"host":             true,
-	"port":             true,
-	"user":             true,
-	"password":         true,
-	"key":              true,
-	"admin-user":       true,
-	"log-file":         true,
-	"known-hosts":      true,
-	"host-fingerprint": true,
-}
-
-// partitionArgs splits args into flag tokens (and their values) and positional
-// tokens (step IDs), independent of order. A value-taking flag in space form
-// (`--host X`) consumes the following token as its value; `--name=value` and the
-// bool `--assume-yes` consume no separate token.
-func partitionArgs(args []string) (flagArgs, positional []string) {
-	for i := 0; i < len(args); i++ {
-		tok := args[i]
-		if len(tok) > 1 && tok[0] == '-' {
-			name := strings.TrimLeft(tok, "-")
-			if strings.IndexByte(name, '=') >= 0 {
-				// --name=value form: self-contained flag token.
-				flagArgs = append(flagArgs, tok)
-				continue
-			}
-			flagArgs = append(flagArgs, tok)
-			if valueFlags[name] && i+1 < len(args) {
-				// Space form: next token is this flag's value.
-				i++
-				flagArgs = append(flagArgs, args[i])
-			}
-			continue
+// parseArgs parses flags and positional step IDs in ANY order into fs, returning
+// the positionals. Go's flag package stops at the first non-flag argument, so a
+// single Parse would miss flags placed after step IDs (`step A4 A6.5 --host X`);
+// re-parsing what follows each positional handles both orders. fs itself decides
+// which flags take a value, so — unlike a hand-kept list of value-taking flag
+// names — this cannot drift out of sync with bindFlags when a flag is added.
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for len(args) > 0 {
+		if err := fs.Parse(args); err != nil {
+			return positional, err
 		}
-		positional = append(positional, tok)
+		if fs.NArg() == 0 {
+			break
+		}
+		positional = append(positional, fs.Arg(0))
+		args = fs.Args()[1:]
 	}
-	return flagArgs, positional
+	return positional, nil
 }
 
 func bindFlags(fs *flag.FlagSet, cfg *config.Config) {

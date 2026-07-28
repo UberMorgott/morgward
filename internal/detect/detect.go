@@ -4,9 +4,11 @@
 package detect
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -132,7 +134,7 @@ func Run(c *sshx.Client) *Facts {
 	if f.EgressIface != "" {
 		// EgressIface comes from `ip route get` on a trusted box, but quote it for
 		// completeness so an unexpected value can't be reinterpreted by the shell.
-		iface := shQuote(f.EgressIface)
+		iface := ShQuote(f.EgressIface)
 		f.IfaceMAC = c.Run("cat /sys/class/net/" + iface + "/address 2>/dev/null").Out()
 		f.ServerIPv4 = c.Run(`ip -4 addr show ` + iface + ` | awk '/inet /{print $2}' | cut -d/ -f1 | head -1`).Out()
 		v6 := c.Run(`ip -6 addr show ` + iface + ` scope global | awk '/inet6 /{print $2}' | cut -d/ -f1 | head -1`).Out()
@@ -302,8 +304,10 @@ func parseListeners(ssOut string) (tcp, udp []int, services []ListenService, lis
 		}
 		listeners = append(listeners, line)
 	}
+	// Deterministic port order for the ruleset and for tests. slices.Sorted returns
+	// nil for an empty map, preserving the "no ports ⇒ nil slice" contract.
 	sortServices(services)
-	return sortedKeys(tcpSet), sortedKeys(udpSet), services, listeners
+	return slices.Sorted(maps.Keys(tcpSet)), slices.Sorted(maps.Keys(udpSet)), services, listeners
 }
 
 // processFromSS extracts the program name from an ss line's process column, i.e.
@@ -348,11 +352,8 @@ func pidFromSS(line string) int {
 // sortServices orders service records by proto then port for deterministic
 // inventory output and stable tests.
 func sortServices(s []ListenService) {
-	sort.Slice(s, func(i, j int) bool {
-		if s[i].Proto != s[j].Proto {
-			return s[i].Proto < s[j].Proto
-		}
-		return s[i].Port < s[j].Port
+	slices.SortFunc(s, func(a, b ListenService) int {
+		return cmp.Or(cmp.Compare(a.Proto, b.Proto), cmp.Compare(a.Port, b.Port))
 	})
 }
 
@@ -382,11 +383,7 @@ func classifyServiceOrigins(c *sshx.Client, f *Facts) {
 	}
 	cgroups := map[int]string{}
 	if len(pidSet) > 0 {
-		pids := make([]int, 0, len(pidSet))
-		for p := range pidSet {
-			pids = append(pids, p)
-		}
-		sort.Ints(pids)
+		pids := slices.Sorted(maps.Keys(pidSet))
 		var sb strings.Builder
 		sb.WriteString("for p in")
 		for _, p := range pids {
@@ -626,10 +623,11 @@ func iptablesEffectivelyEmpty(iptablesS string) bool {
 	return true
 }
 
-// shQuote wraps s in single quotes, escaping any embedded single quote, so an
+// ShQuote wraps s in single quotes, escaping any embedded single quote, so an
 // arbitrary value can be interpolated into a shell command without being
-// reinterpreted by the shell.
-func shQuote(s string) string {
+// reinterpreted by the shell. Exported as the ONE shell-injection guard for the
+// whole codebase — a second local copy is how the two drift apart.
+func ShQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
@@ -647,20 +645,6 @@ func portFromLocal(local string) (int, bool) {
 		return 0, false
 	}
 	return p, true
-}
-
-// sortedKeys returns the map keys as an ascending-sorted slice (deterministic
-// port order for the ruleset and for tests).
-func sortedKeys(m map[int]bool) []int {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make([]int, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Ints(out)
-	return out
 }
 
 // buildInventory dumps the full §0.5 read-only probe set for the on-box record,

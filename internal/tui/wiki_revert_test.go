@@ -56,7 +56,7 @@ func TestWikiRevertButtonHiddenWhenNotApplied(t *testing.T) {
 		t.Fatalf("apply row should show for a not-applied non-informational probe")
 	}
 	// Hidden revert hit-test must always miss.
-	if m.wikiRevertAtClick(4, m.wikiBackRow()) {
+	if m.wikiRevertAtClick(4, m.wikiButtonsRowY()) {
 		t.Fatalf("hidden revert pill hit-test must miss")
 	}
 }
@@ -208,7 +208,7 @@ func TestWikiUpdateFirstClickArmsConfirm(t *testing.T) {
 	// confirm (harmless): the update-pill hit-test misses, so the confirm-swallow
 	// branch fires and clears it.
 	backX, _ := pillXForKind(m1, wikiRowBack)
-	n2, _ := m1.Update(tea.MouseClickMsg{X: backX, Y: m1.wikiBackRow(), Button: tea.MouseLeft})
+	n2, _ := m1.Update(tea.MouseClickMsg{X: backX, Y: m1.wikiButtonsRowY(), Button: tea.MouseLeft})
 	if m2 := n2.(model); m2.wikiUpdateConfirm {
 		t.Fatalf("a second click did not cancel the pending confirm")
 	}

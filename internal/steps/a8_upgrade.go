@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/UberMorgott/morgward/internal/detect"
 )
 
 // A8Upgrade implements §A8: full upgrade then reboot, sequenced right after A1.
@@ -24,7 +26,7 @@ func (a A8Upgrade) Run(ctx *Context) (Status, string, error) {
 	// A1 wrote /etc/iptables/rules.v4). On a ufw/firewalld/nftables brownfield box
 	// that file legitimately does not exist (A1 added `ufw allow` rules or deferred
 	// entirely), so asserting it would falsely abort the whole run.
-	ctx.Cli.Sudo("systemctl stop fw-rollback.timer 2>/dev/null || true; systemctl reset-failed 'fw-rollback.*' 2>/dev/null || true")
+	ctx.Cli.Sudo(disarmTimer("fw-rollback"))
 
 	if ctx.Facts.ManagesIPTables() {
 		gate := fmt.Sprintf(`V4=$(wc -l < /etc/iptables/rules.v4 2>/dev/null || echo 0)
@@ -82,8 +84,8 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
 	up := ctx.Cli.Sudo(`export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
-` + putFile(dpkgWrapper, wrapperBody, "0755") + `stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 update
-stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 full-upgrade -y -o Dir::Bin::dpkg=` + dpkgWrapper + ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+` + putFile(dpkgWrapper, wrapperBody, "0755") + `stdbuf -oL -eL ` + aptGet + ` update
+stdbuf -oL -eL ` + aptGet + ` full-upgrade -y -o Dir::Bin::dpkg=` + dpkgWrapper + ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
 __rc=$?
 rm -f ` + dpkgWrapper + `
 exit $__rc`)
@@ -130,8 +132,6 @@ exit $__rc`)
 	if err != nil {
 		return StatusFail, err.Error(), err
 	}
-	ctx.State.BootID = newID
-	ctx.State.Save()
 
 	// Post-reboot health + firewall re-check. The iptables assertion (INPUT DROP +
 	// SSH dport reloaded) is only meaningful where morgward owns the ruleset; on a
@@ -174,29 +174,29 @@ func (A8Upgrade) restoreServices(ctx *Context, containers, units []string) (rest
 	// call, then re-inspect to see which actually came up.
 	var down []string
 	for _, id := range containers {
-		if ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s 2>/dev/null", shellQuote(id))).Out() != "true" {
+		if ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s 2>/dev/null", detect.ShQuote(id))).Out() != "true" {
 			down = append(down, id)
 		}
 	}
 	if len(down) > 0 {
 		ctx.Cli.Sudo(dockerStartScript(down))
 		for _, id := range down {
-			if ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s 2>/dev/null", shellQuote(id))).Out() == "true" {
+			if ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s 2>/dev/null", detect.ShQuote(id))).Out() == "true" {
 				restored++
 				continue
 			}
-			name := ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.Name}}' %s 2>/dev/null", shellQuote(id))).Out()
+			name := ctx.Cli.Sudo(fmt.Sprintf("docker inspect -f '{{.Name}}' %s 2>/dev/null", detect.ShQuote(id))).Out()
 			failed = append(failed, "container "+strings.TrimPrefix(name, "/"))
 		}
 	}
 
 	// systemd: start each snapshot unit that is no longer active, then re-check.
 	for _, unit := range units {
-		if ctx.Cli.Sudo(fmt.Sprintf("systemctl is-active %s 2>/dev/null", shellQuote(unit))).Out() == "active" {
+		if ctx.Cli.Sudo(fmt.Sprintf("systemctl is-active %s 2>/dev/null", detect.ShQuote(unit))).Out() == "active" {
 			continue
 		}
-		ctx.Cli.Sudo(fmt.Sprintf("systemctl start %s 2>/dev/null || true", shellQuote(unit)))
-		if ctx.Cli.Sudo(fmt.Sprintf("systemctl is-active %s 2>/dev/null", shellQuote(unit))).Out() == "active" {
+		ctx.Cli.Sudo(fmt.Sprintf("systemctl start %s 2>/dev/null || true", detect.ShQuote(unit)))
+		if ctx.Cli.Sudo(fmt.Sprintf("systemctl is-active %s 2>/dev/null", detect.ShQuote(unit))).Out() == "active" {
 			restored++
 		} else {
 			failed = append(failed, "unit "+unit)
@@ -241,7 +241,7 @@ func dockerStartScript(ids []string) string {
 	}
 	quoted := make([]string, len(ids))
 	for i, id := range ids {
-		quoted[i] = shellQuote(id)
+		quoted[i] = detect.ShQuote(id)
 	}
 	return "docker start " + strings.Join(quoted, " ") + " >/dev/null 2>&1 || true"
 }
@@ -256,9 +256,5 @@ func fields(s string) []string {
 	return f
 }
 
-func short(s string) string {
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
-}
+// short truncates a boot_id to its first 8 chars for log lines.
+func short(s string) string { return s[:min(8, len(s))] }

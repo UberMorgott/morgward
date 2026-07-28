@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -93,12 +94,7 @@ func (f *fileSession) selectedEntry() (fileEntry, bool) {
 // hasEntry reports whether the CURRENT (full) listing already contains an entry named name
 // — used to gate an overwrite-on-paste behind a confirm.
 func (f *fileSession) hasEntry(name string) bool {
-	for _, e := range f.entry {
-		if e.name == name {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(f.entry, func(e fileEntry) bool { return e.name == name })
 }
 
 // --- operation runners --------------------------------------------------------

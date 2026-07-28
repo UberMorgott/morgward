@@ -25,7 +25,7 @@ func seedLines(t *testing.T, m model, n, wantScrollback int) {
 		// Read scrollback length through cursorSnapshot() so it holds out.mu — the same
 		// lock the fake-shell drain (termOut.Write) takes when appending to scrollback.
 		// Reading m.term.emu.Scrollback().Len() directly races that drain goroutine.
-		return m.term.cursorSnapshot().scrollbackLen >= wantScrollback
+		return termSnap(m).scrollbackLen >= wantScrollback
 	}, "emulator to accumulate scrollback")
 }
 
@@ -39,8 +39,8 @@ func TestTerminalBodyScrollbackPlusScreen(t *testing.T) {
 
 	seedLines(t, m, 20, 1) // 20 lines into a `rows`-tall screen → many scroll off
 
-	sbLines := m.term.scrollbackLines()
-	screen := m.term.screenLines()
+	snap := termSnap(m)
+	sbLines, screen := snap.scrollback, snap.screen
 	body := m.terminalBody()
 
 	if len(body) != len(sbLines)+len(screen) {
@@ -65,6 +65,71 @@ func TestTerminalBodyScrollbackPlusScreen(t *testing.T) {
 	_ = rows
 }
 
+// fullScrollback renders EVERY retained scrollback line — what cursorSnapshot used to
+// do on every repaint (measured ~10 ms / ~1.3 MB at a full 5000-line buffer). The
+// reference the windowed snapshot must agree with wherever it is drawn.
+func fullScrollback(m model) []string {
+	sb := m.term.emuNow().Scrollback()
+	out := make([]string, sb.Len())
+	for i := range out {
+		out[i] = sb.Line(i).Render()
+	}
+	return out
+}
+
+// TestTerminalWindowedScrollbackFrameIdentical is the regression net for the windowed
+// snapshot: cursorSnapshot renders only the scrollback rows the scroll region will draw,
+// so the FRAME must stay byte-identical to one drawn from a fully-rendered body, at
+// every scroll offset. It also pins the two invariants the windowing rests on — the
+// scrollback slice keeps ONE entry per row (offsets/scrollbar totals stay exact), and
+// every row inside the window is really rendered (a silently-empty window would render
+// a blank screen and pass a length-only check).
+func TestTerminalWindowedScrollbackFrameIdentical(t *testing.T) {
+	m, _ := termModel(t, 60, 20)
+	defer m.term.close()
+	seedLines(t, m, 200, 30)
+
+	_, rows := m.termContentSize()
+	full := fullScrollback(m)
+	if len(full) < rows*2 {
+		t.Fatalf("test needs a scrollback deeper than two screens: %d lines, rows=%d", len(full), rows)
+	}
+	total := m.termBodyLen()
+
+	for _, off := range []int{0, 1, rows, rows + 3, total / 2, total - rows, total} {
+		m.termScroll = clampScroll(off, total, rows)
+		m.termFollow = false
+
+		snap := termSnap(m)
+		if len(snap.scrollback) != snap.scrollbackLen {
+			t.Fatalf("off=%d: scrollback slice len %d != scrollbackLen %d — body offsets would shift",
+				m.termScroll, len(snap.scrollback), snap.scrollbackLen)
+		}
+		// Every row the region draws must match the full render...
+		drawn := 0
+		for i := snap.off; i < min(snap.off+rows, snap.scrollbackLen); i++ {
+			if snap.scrollback[i] != full[i] {
+				t.Fatalf("off=%d: windowed scrollback[%d]=%q, full render=%q",
+					m.termScroll, i, snap.scrollback[i], full[i])
+			}
+			if full[i] != "" {
+				drawn++
+			}
+		}
+		if snap.off < snap.scrollbackLen && drawn == 0 {
+			t.Fatalf("off=%d: window rendered nothing — a blank window would silently blank the screen", m.termScroll)
+		}
+		// ...and the whole frame must be byte-identical to one built from the full body.
+		fullBody := append(append([]string{}, full...), snap.screen...)
+		got, _ := m.terminalFrame()
+		want := m.terminalFrameOf(fullBody, rows, clampScroll(m.termScroll, len(fullBody), rows))
+		if got != want {
+			t.Fatalf("off=%d: windowed frame differs from the fully-rendered frame\n got:\n%s\nwant:\n%s",
+				m.termScroll, got, want)
+		}
+	}
+}
+
 // TestTerminalBodyAltScreenIsScreenOnly proves that on the alternate screen the body is
 // JUST the screen (no scrollback), and scrolling is disabled.
 func TestTerminalBodyAltScreenIsScreenOnly(t *testing.T) {
@@ -82,7 +147,7 @@ func TestTerminalBodyAltScreenIsScreenOnly(t *testing.T) {
 		t.Fatal("terminalScrollable must be false on the alternate screen")
 	}
 	body := m.terminalBody()
-	screen := m.term.screenLines()
+	screen := termSnap(m).screen
 	if len(body) != len(screen) {
 		t.Fatalf("alt-screen body len = %d, want screen-only = %d", len(body), len(screen))
 	}
@@ -187,7 +252,7 @@ func TestTerminalPlainPgUpForwardsAndFollows(t *testing.T) {
 		t.Fatal("a forwarded keystroke (plain pgup) must re-arm follow mode")
 	}
 	_, rows := mm.termContentSize()
-	wantBottom := maxi(mm.termBodyLen()-rows, 0)
+	wantBottom := max(mm.termBodyLen()-rows, 0)
 	if mm.termScroll != wantBottom {
 		t.Fatalf("forwarded key should snap to bottom=%d, got %d", wantBottom, mm.termScroll)
 	}
@@ -225,7 +290,7 @@ func TestTerminalFollowPinOnTick(t *testing.T) {
 	m.termFollow = true
 	next, _ := m.Update(termTickMsg{gen: m.termGen})
 	mm := next.(model)
-	wantBottom := maxi(mm.termBodyLen()-rows, 0)
+	wantBottom := max(mm.termBodyLen()-rows, 0)
 	if mm.termScroll != wantBottom {
 		t.Fatalf("follow tick: termScroll=%d, want bottom=%d", mm.termScroll, wantBottom)
 	}

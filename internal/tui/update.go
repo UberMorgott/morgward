@@ -15,6 +15,7 @@ import (
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/sshx"
+	"github.com/UberMorgott/morgward/internal/termsize"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -34,23 +35,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg = gm.msg
 	}
 	switch msg := msg.(type) {
-	case tea.FocusMsg:
-		// Host-terminal window gained focus (DEC ?1004) → resume cursor blinking.
-		m.focused = true
-		return m, nil
-	case tea.BlurMsg:
-		// Host-terminal window lost focus → draw a steady hollow cursor (no blink).
-		m.focused = false
-		return m, nil
-
 	case tea.WindowSizeMsg:
+		// SINGLE assignment site for m.w/m.h, so every layout dimension passes the
+		// size trust boundary: on Windows an unsolicited WindowSizeMsg carries the
+		// console SCREEN BUFFER size (Height=3000 on conhost), not the viewport, and
+		// a layout honoring it pins the footer ~2970 rows off-screen. termsize.TrueSize
+		// substitutes the console's own viewport rect when it can be read. See
+		// internal/termsize for the full derivation.
+		w, h := termsize.TrueSize(msg.Width, msg.Height)
 		// The resize poll (resizeTickMsg) delivers this every ~0.5s even when the
 		// size is unchanged; rebuilding the viewport each time would needlessly
 		// reset the scroll position. Only react when the size actually changed.
-		if msg.Width == m.w && msg.Height == m.h {
+		if w == m.w && h == m.h {
 			return m, nil
 		}
-		m.w, m.h = msg.Width, msg.Height
+		m.w, m.h = w, h
 		m.vp = viewport.New(viewport.WithWidth(m.vpWidth()), viewport.WithHeight(m.vpHeight()))
 		m.vp.SetContent(m.wrapped())
 		m.vp.GotoBottom()
@@ -63,10 +62,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
-		// Manual rectangle hit-test (lipgloss/v2 has no hit-test API). Handle press
-		// (MouseClickMsg), not release; left button only. All zone fns share geometry
-		// with the render path (formRows/pillRanges/runView line order) so they cannot
-		// drift. The RU/EN switcher is handled first in both phases.
+		// Handle press (MouseClickMsg), not release; left button only. phaseKey and
+		// phaseMatrix resolve through lipgloss/v2's Compositor.Hit (see hittest.go); the
+		// other phases still use manual rectangle zone fns, which share geometry with the
+		// render path (formRows/pillRanges/runView line order) so they cannot drift. The
+		// RU/EN switcher is handled first in both phases.
 		mc := msg.Mouse()
 		// RIGHT-click on a Files-tab listing row: select that row, then open the context menu
 		// anchored at the click. Handled BEFORE the left-only guard below (which drops every
@@ -93,6 +93,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toggleLang()
 			}
 			return m, nil
+		}
+		// A press on the scrollbar (the box's last column, inside the scroll region) grabs
+		// the thumb or jumps the track. Resolved BEFORE the per-phase zone fns: the bar
+		// lives in the border cell, which no other target claims, but several screens'
+		// row hit-tests ignore X and would otherwise swallow it.
+		if mm, ok := m.scrollbarClick(mc.X, mc.Y); ok {
+			return mm, nil
 		}
 		switch m.phase {
 		case phaseForm:
@@ -155,6 +162,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.wikiUpdateConfirm = false
 					return m.startSteps([]string{"A8"})
 				}
+				// The cancel pill is resolved EXPLICITLY (like the dashboard/security
+				// confirms) rather than falling through to the stray-click branch, so the
+				// drawn [отмена] pill is a deliberate hit and not a hit by accident: if its
+				// geometry ever drifted off the pill, the stray-click fallback would still
+				// clear the confirm and hide the regression.
+				if m.wikiUpdateConfirmCancelAtClick(mc.X, mc.Y) {
+					m.wikiUpdateConfirm = false
+					return m, nil
+				}
 				m.wikiUpdateConfirm = false
 				return m, nil
 			}
@@ -191,6 +207,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.summaryKeyShowAtClick(mc.X, mc.Y) {
 				m.keyPreRun = false
 				m.keyReturn = phaseSummary
+				m.keyScroll = 0 // fresh viewer starts at the top
 				m.phase = phaseKey
 				return m, nil
 			}
@@ -219,101 +236,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The "Copy key" button copies the PEM. On the PRE-RUN modal the pill splits
 			// into a START half (Enter → confirmPreRunKey, launch the run) and a CANCEL half
 			// (Esc → clear the staged key + go home); on the post-run / read-only viewer the
-			// "← Назад" pill dismisses to keyReturn.
-			if m.keyCopyAtClick(mc.X, mc.Y) {
+			// "← Назад" pill dismisses to keyReturn. keyLayers only emits the pills for the
+			// current mode, so the mode branch lives in the layer build, not here.
+			switch m.hit(mc.X, mc.Y) {
+			case idKeyCopy:
 				m = m.copyKey()
-				return m, nil
-			}
-			if m.keyPreRun {
-				if m.keyStartAtClick(mc.X, mc.Y) {
-					return m.confirmPreRunKey()
-				}
-				if m.keyCancelAtClick(mc.X, mc.Y) {
-					// Abort before the run even starts: clear the staged key and go home
-					// (the same path as Esc in the key handler).
-					m.keyPreRun = false
-					m.pendingKey = nil
-					return m.goBack()
-				}
-				return m, nil
-			}
-			if m.keyBackAtClick(mc.X, mc.Y) {
+			case idKeyStart:
+				return m.confirmPreRunKey()
+			case idKeyCancel:
+				// Abort before the run even starts: clear the staged key and go home
+				// (the same path as Esc in the key handler).
+				m.keyPreRun = false
+				m.pendingKey = nil
+				return m.goBack()
+			case idKeyBack:
 				m = m.dismissKeyViewer()
 			}
 			return m, nil
 		}
 		return m, nil
 
+	case tea.MouseMotionMsg:
+		// Scrollbar drag. MouseModeCellMotion (tui.go View) already reports motion while a
+		// button is held, so no mode change was needed. The DRAG STATE decides, not the
+		// event: motion with no drag armed is ignored, which also makes this correct on
+		// terminals whose encoding differs (Windows Terminal can flag a motion as a
+		// release — the decoder tests isMotion first, so it still arrives here).
+		if !m.dragging {
+			return m, nil
+		}
+		return m.scrollbarDragTo(msg.Mouse().Y), nil
+
+	case tea.MouseReleaseMsg:
+		// End the drag on ANY release, deliberately NOT gated on Button == MouseLeft:
+		// bubbletea falls back to the X10 encoding when the terminal refuses SGR, and an
+		// X10 release carries Button: MouseNone — gating on the button would leave the
+		// drag armed forever on those terminals.
+		m.dragging = false
+		return m, nil
+
 	case tea.MouseWheelMsg:
-		// Mouse-wheel scrolls the scrollable region of the current screen: the run
-		// log viewport in phaseRun, the directly-rendered body in phaseSummary/phaseWiki
-		// (the form has no scrollable region). v2 delivers wheel events as MouseWheelMsg
-		// with a MouseWheelUp/Down button (mouse.go), distinct from MouseClickMsg.
+		// Mouse-wheel scrolls the scrollable region of the current screen (the form has
+		// none) — scrollBy owns the per-phase geometry. v2 delivers wheel events as
+		// MouseWheelMsg with a MouseWheelUp/Down button (mouse.go), distinct from
+		// MouseClickMsg.
 		const wheelStep = 3
-		up := msg.Mouse().Button == tea.MouseWheelUp
-		down := msg.Mouse().Button == tea.MouseWheelDown
-		switch m.phase {
-		case phaseRun:
-			if up {
-				m.vp.ScrollUp(wheelStep)
-			} else if down {
-				m.vp.ScrollDown(wheelStep)
-			}
-		case phaseSummary:
-			d := 0
-			if up {
-				d = -wheelStep
-			} else if down {
-				d = wheelStep
-			}
-			m.sumScroll = clampScroll(m.sumScroll+d, len(m.summaryBodyLines()), m.summaryBodyViewH())
-		case phaseWiki:
-			d := 0
-			if up {
-				d = -wheelStep
-			} else if down {
-				d = wheelStep
-			}
-			m.wikiScroll = clampScroll(m.wikiScroll+d, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
-		case phaseMatrix:
-			d := 0
-			if up {
-				d = -wheelStep
-			} else if down {
-				d = wheelStep
-			}
-			m.matScroll = clampScroll(m.matScroll+d, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.matrixBodyViewH())
-		case phaseDashboard:
-			d := 0
-			if up {
-				d = -wheelStep
-			} else if down {
-				d = wheelStep
-			}
-			iw := innerWidth(m.boxWidth())
-			m.dashScroll = clampScroll(m.dashScroll+d, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
-		case phaseSecurity:
-			d := 0
-			if up {
-				d = -wheelStep
-			} else if down {
-				d = wheelStep
-			}
-			iw := innerWidth(m.boxWidth())
-			m.dashScroll = clampScroll(m.dashScroll+d, len(m.securityBodyLines(iw)), m.secBodyViewH())
-		case phaseTerminal:
-			// Wheel scrolls LOCAL scrollback (not forwarded to the remote app). Disabled
-			// while on the alternate screen (vim/top own the screen) — see terminalScrollable.
-			// Mouse click/drag forwarding to the remote app is still DEFERRED for 2a.
-			if m.terminalScrollable() {
-				d := 0
-				if up {
-					d = -wheelStep
-				} else if down {
-					d = wheelStep
-				}
-				m.termScrollBy(d)
-			}
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			m = m.scrollBy(-wheelStep)
+		case tea.MouseWheelDown:
+			m = m.scrollBy(wheelStep)
 		}
 		return m, nil
 
@@ -388,9 +360,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.wikiUpdateConfirm = true
 				}
 			case "up", "k":
-				m.wikiScroll = clampScroll(m.wikiScroll-1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
+				m = m.scrollBy(-1)
 			case "down", "j":
-				m.wikiScroll = clampScroll(m.wikiScroll+1, len(m.wikiBodyLines(innerWidth(m.boxWidth()))), m.wikiBodyViewH())
+				m = m.scrollBy(1)
 			}
 			return m, nil
 		case phaseSummary:
@@ -401,9 +373,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc", "b":
 				return m.summaryGoHome()
 			case "up", "k":
-				m.sumScroll = clampScroll(m.sumScroll-1, len(m.summaryBodyLines()), m.summaryBodyViewH())
+				m = m.scrollBy(-1)
 			case "down", "j":
-				m.sumScroll = clampScroll(m.sumScroll+1, len(m.summaryBodyLines()), m.summaryBodyViewH())
+				m = m.scrollBy(1)
 			}
 			return m, nil
 		case phaseMatrix:
@@ -413,9 +385,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc", "b":
 				return m.goBack()
 			case "up", "k":
-				m.matScroll = clampScroll(m.matScroll-1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.matrixBodyViewH())
+				m = m.scrollBy(-1)
 			case "down", "j":
-				m.matScroll = clampScroll(m.matScroll+1, len(m.matrixBodyLines(innerWidth(m.boxWidth()))), m.matrixBodyViewH())
+				m = m.scrollBy(1)
 			}
 			return m, nil
 		case phaseDashboard:
@@ -462,11 +434,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.goBack()
 			case "up", "k":
-				iw := innerWidth(m.boxWidth())
-				m.dashScroll = clampScroll(m.dashScroll-1, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
+				m = m.scrollBy(-1)
 			case "down", "j":
-				iw := innerWidth(m.boxWidth())
-				m.dashScroll = clampScroll(m.dashScroll+1, len(m.dashBodyLines(iw)), m.dashScrollViewH(iw))
+				m = m.scrollBy(1)
 			}
 			return m, nil
 		case phaseSecurity:
@@ -497,16 +467,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseDashboard
 				return m, nil
 			case "up", "k":
-				m.dashScroll = clampScroll(m.dashScroll-1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.secBodyViewH())
+				m = m.scrollBy(-1)
 			case "down", "j":
-				m.dashScroll = clampScroll(m.dashScroll+1, len(m.securityBodyLines(innerWidth(m.boxWidth()))), m.secBodyViewH())
+				m = m.scrollBy(1)
 			}
 			return m, nil
 		case phaseKey:
 			// 'c' copies the key to the system clipboard. On the PRE-RUN key modal
 			// (CHANGE 2) Enter STARTS the run with the prepared key, while Esc/b aborts
 			// back to the form; on the post-run/read-only key viewer, any "back" key
-			// returns to wherever the screen was opened from.
+			// returns to wherever the screen was opened from. ↑↓/k/j scroll the PEM when
+			// it overflows the region (a short window clips it below the fold).
 			switch s {
 			case "c":
 				m = m.copyKey()
@@ -526,6 +497,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m = m.dismissKeyViewer()
 				return m, nil
+			case "up", "k":
+				m = m.scrollBy(-1)
+			case "down", "j":
+				m = m.scrollBy(1)
 			}
 			return m, nil
 		}
@@ -550,9 +525,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.goBack()
 			}
 		case "up", "k":
-			m.vp.ScrollUp(1)
+			m = m.scrollBy(-1)
 		case "down", "j":
-			m.vp.ScrollDown(1)
+			m = m.scrollBy(1)
 		}
 		return m, nil
 
@@ -736,13 +711,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.termGen || m.phase != phaseTerminal || m.term == nil {
 			return m, nil
 		}
-		// Advance the cursor blink: flip on/off at the ~530ms boundary and reset the
-		// counter. termTickInterval (25ms) divides termBlinkPeriod into ~21 ticks/flip.
-		m.termBlinkTicks++
-		if m.termBlinkTicks*int(termTickInterval) >= int(termBlinkPeriod) {
-			m.termBlinkOn = !m.termBlinkOn
-			m.termBlinkTicks = 0
-		}
+		// No blink bookkeeping here: the cursor is the terminal's OWN hardware cursor
+		// (tea.View.Cursor), so the host terminal blinks it — and stops blinking it when
+		// its window loses focus — for free.
 		// Follow mode: re-pin to the bottom each tick so newly-arrived output stays
 		// visible. When the user has scrolled up (termFollow=false) the offset is held.
 		m.termPinIfFollowing()
@@ -1024,6 +995,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.keyPEM = ""
 	m.keyCopied = false
 	m.keyCopyFailed = false
+	m.keyScroll = 0
 	m.elapsed = 0
 	m.spin = 0
 	m.vp.SetContent("")
@@ -1169,6 +1141,7 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		m.host = strings.TrimSpace(m.inputs[fHost].Value())
 		m.keyReturn = phaseForm // Esc on the pre-run modal aborts back to the form
 		m.keyPreRun = true
+		m.keyScroll = 0 // fresh modal starts at the top
 		m.phase = phaseKey
 		return m, nil
 	}

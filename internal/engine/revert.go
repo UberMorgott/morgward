@@ -26,8 +26,12 @@ import (
 // LOCKOUT NOTE: A2's revert REMOVES the SSH hardening drop-ins and re-runs
 // `ssh-keygen -A` if host keys are missing, then reloads sshd. This OPENS access
 // (restores the image-default policy) — it never tightens it — so it cannot lock
-// the operator out. It reuses the exact body of the a2_ssh.go ssh-revert payload
-// (armSSHRevert), run immediately instead of via a systemd-run timer.
+// the operator out. It is a SUPERSET of the a2_ssh.go ssh-revert timer payload
+// (armSSHRevert): the same drop-in removal + `ssh-keygen -A`, run immediately
+// instead of via systemd-run, PLUS the F07 additions below and an sshd-unit-name
+// fallback. The SHARED head — the list of sshd drop-ins morgward owns — is the
+// single steps.RmSSHDropIns const, so adding a drop-in cannot leave one payload
+// behind; everything after it is deliberately revert-only.
 //
 // F07: the revert is now FAITHFUL to the A2Danger lockdown apply — it also rm's the
 // cloud-init 99-disable-passwords.cfg, restores 50-cloud-init.conf's
@@ -38,7 +42,7 @@ import (
 // state, and SSH access is already restored by the drop-in removal above.
 var revertScript = map[string]string{
 	"A1":   `iptables -F INPUT 2>/dev/null; iptables -P INPUT ACCEPT 2>/dev/null; ip6tables -F INPUT 2>/dev/null; ip6tables -P INPUT ACCEPT 2>/dev/null; rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6 /usr/local/sbin/fw-rollback.sh /root/iptables-backup.v4 /root/iptables-backup.v6; systemctl stop fw-rollback.timer 2>/dev/null || true`,
-	"A2":   `rm -f /etc/ssh/sshd_config.d/00-hardening.conf /etc/ssh/sshd_config.d/98-access.conf /etc/ssh/sshd_config.d/99-hardening.conf /etc/cloud/cloud.cfg.d/99-disable-passwords.cfg; [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ] && sed -ri 's/^\s*PasswordAuthentication\s+no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf 2>/dev/null || true; passwd -u root 2>/dev/null || true; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`,
+	"A2":   steps.RmSSHDropIns + ` /etc/cloud/cloud.cfg.d/99-disable-passwords.cfg; [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ] && sed -ri 's/^\s*PasswordAuthentication\s+no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf 2>/dev/null || true; passwd -u root 2>/dev/null || true; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`,
 	"A3":   `rm -f /etc/fail2ban/jail.local; systemctl restart fail2ban 2>/dev/null || systemctl stop fail2ban 2>/dev/null || true`,
 	"A4":   `rm -f /etc/sysctl.d/99-net-tune.conf /etc/sysctl.d/99-bbr.conf /etc/modules-load.d/bbr.conf /etc/udev/rules.d/60-io-scheduler.rules; sysctl --system >/dev/null 2>&1 || true`,
 	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf; sysctl --system >/dev/null 2>&1 || true`,

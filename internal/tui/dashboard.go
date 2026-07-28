@@ -2,14 +2,14 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/tweaks"
-	"github.com/UberMorgott/morgward/internal/version"
 )
 
 // --- Dashboard (phaseDashboard) -----------------------------------------------
@@ -40,42 +40,21 @@ func (m model) dashboardView() string {
 	if m.dashApplyConfirm {
 		return m.applyConfirmModalView()
 	}
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
-
-	fixed := m.dashFixedLines(innerW)
-	body := m.dashBodyLines(innerW)
-
-	var sb strings.Builder
-	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
-	sb.WriteByte('\n')
-	// Global nav bar (Главная · Терминал · Файлы) on the switcher row — same render +
-	// hit-test geometry as the terminal and files frames. Replaces the former plain RU|EN
-	// switcher line and the removed Terminal/Files dashboard buttons.
-	sb.WriteString(m.navTabStripLine(b, innerW))
-	sb.WriteByte('\n')
-
-	// FIXED prefix — plain content rows, never scrolled.
-	for _, line := range fixed {
-		sb.WriteString(contentLine(b, line, innerW))
-		sb.WriteByte('\n')
-	}
-
-	// SCROLL region — only the audit grid, sized to fill the remaining middle.
-	viewH := m.dashScrollViewH(innerW)
-	off := clampScroll(m.dashScroll, len(body), viewH)
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
-
-	// dashApplyConfirm is handled by applyConfirmModalView (returned early above), so
-	// the normal dashboard always shows the plain navigation hint here.
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kDashHint)), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+	innerW := innerWidth(m.boxWidth())
+	// nav: the global bar (Главная · Терминал · Файлы) on the switcher row — same render
+	// + hit-test geometry as the terminal and files frames. Replaces the former plain
+	// RU|EN switcher line and the removed Terminal/Files dashboard buttons.
+	// dashApplyConfirm is handled by applyConfirmModalView (returned early above), so the
+	// normal dashboard always shows the plain navigation hint.
+	return m.framedScrollView(frame{
+		title:  frameTitle(),
+		nav:    m.navTabStripLine,
+		fixed:  m.dashFixedLines(innerW), // card + buttons + status, never scrolled
+		body:   m.dashBodyLines(innerW),  // the audit grid, the only scrollable part
+		viewH:  m.dashScrollViewH(innerW),
+		scroll: m.dashScroll,
+		hint:   helpStyle.Render(t(m.lang, kDashHint)),
+	})
 }
 
 // modalBoxStyle is the bordered frame for a centered confirm modal (CHANGE 1): an
@@ -162,20 +141,6 @@ func (m model) applyConfirmGeom() (buttonsY, buttonsX0 int) {
 	return buttonsY, buttonsX0
 }
 
-// applyConfirmPillPoint returns a click point inside the confirm (or cancel) pill of the
-// centered apply-modal, using the SAME geometry the render path draws. Exposed for the
-// hit-test tests so they don't hard-code the centered-box math.
-func (m model) applyConfirmPillPoint(confirm bool) (x, y int) {
-	buttonsY, buttonsX0 := m.applyConfirmGeom()
-	ranges := applyModalPillRanges(m.lang, buttonsX0)
-	idx := 0
-	if !confirm {
-		idx = 1
-	}
-	r := ranges[idx]
-	return (r[0] + r[1]) / 2, buttonsY
-}
-
 // confirmPillsGap is the plain-space separator drawn between the confirm and cancel
 // pills on every confirm row (the centered apply-modal AND the pinned security/wiki rows),
 // matching applyModalParts' "   " (BUG 2 — keep the two pills visually distinct).
@@ -208,11 +173,6 @@ func confirmPillRanges(lang Lang, startCol int) [][2]int {
 	}
 }
 
-// applyModalPillRanges is confirmPillRanges keyed at the centered modal's buttons column.
-func applyModalPillRanges(lang Lang, buttonsX0 int) [][2]int {
-	return confirmPillRanges(lang, buttonsX0)
-}
-
 // applyConfirmConfirmAtClick / applyConfirmCancelAtClick report whether (x,y) hit the
 // confirm / cancel pill of the centered apply-modal. Only valid while dashApplyConfirm
 // is armed on the Dashboard.
@@ -224,7 +184,7 @@ func (m model) applyConfirmConfirmAtClick(x, y int) bool {
 	if y != buttonsY {
 		return false
 	}
-	r := applyModalPillRanges(m.lang, buttonsX0)[0]
+	r := confirmPillRanges(m.lang, buttonsX0)[0]
 	return x >= r[0] && x < r[1]
 }
 
@@ -236,7 +196,7 @@ func (m model) applyConfirmCancelAtClick(x, y int) bool {
 	if y != buttonsY {
 		return false
 	}
-	r := applyModalPillRanges(m.lang, buttonsX0)[1]
+	r := confirmPillRanges(m.lang, buttonsX0)[1]
 	return x >= r[0] && x < r[1]
 }
 
@@ -314,12 +274,11 @@ func (m model) dashBodyLines(innerW int) []string {
 	return m.dashAuditGridLines(innerW)
 }
 
-// dashScrollViewH is the height (rows) of the scrollable audit-grid region: the
-// summary/matrix middle height (bodyViewH) minus the fixed prefix (card + buttons +
-// status), floored at 1 so it never goes negative or overlaps the footer on a small
-// terminal.
+// dashScrollViewH is the height (rows) of the scrollable audit-grid region: the shared
+// chrome minus the fixed prefix (card + buttons + status). The Dashboard pins nothing
+// BELOW the region, so the whole budget goes to the prefix.
 func (m model) dashScrollViewH(innerW int) int {
-	return max(m.bodyViewH()-len(m.dashFixedLines(innerW)), 1)
+	return m.chromeViewH(len(m.dashFixedLines(innerW)), 0)
 }
 
 // dashColGap is the number of spaces between the two audit columns.
@@ -471,7 +430,7 @@ func (m model) dashServerCard(innerW int) []string {
 		if n == 0 {
 			n = 1
 		}
-		for i := 0; i < n; i++ {
+		for i := range n {
 			l, r := "", ""
 			if i < len(parts) {
 				l = parts[i]
@@ -550,12 +509,12 @@ func (m model) dashServiceLines() []string {
 	if f == nil || len(f.ListenServices) == 0 {
 		return nil
 	}
-	svcs := append([]detect.ListenService(nil), f.ListenServices...)
-	sort.Slice(svcs, func(i, j int) bool {
-		if svcs[i].Port != svcs[j].Port {
-			return svcs[i].Port < svcs[j].Port
+	svcs := slices.Clone(f.ListenServices)
+	slices.SortFunc(svcs, func(a, b detect.ListenService) int {
+		if a.Port != b.Port {
+			return cmp.Compare(a.Port, b.Port)
 		}
-		return svcs[i].Proto < svcs[j].Proto
+		return cmp.Compare(a.Proto, b.Proto)
 	})
 
 	lines := []string{sumHeadStyle.Render(t(m.lang, kDashServicesTitle))}
@@ -605,18 +564,8 @@ func (m model) dashScrollTopRow(innerW int) int {
 // or footer chrome rather than the scroll region.
 func (m model) dashRowYToBodyIdx(y int) (int, bool) {
 	innerW := innerWidth(m.boxWidth())
-	body := m.dashBodyLines(innerW)
-	viewH := m.dashScrollViewH(innerW)
-	off := clampScroll(m.dashScroll, len(body), viewH)
-	rowInRegion := y - m.dashScrollTopRow(innerW)
-	if rowInRegion < 0 || rowInRegion >= viewH {
-		return 0, false
-	}
-	idx := off + rowInRegion
-	if idx < 0 || idx >= len(body) {
-		return 0, false
-	}
-	return idx, true
+	return scrollRowToBodyIdx(y, m.dashScrollTopRow(innerW),
+		len(m.dashBodyLines(innerW)), m.dashScrollViewH(innerW), m.dashScroll)
 }
 
 // dashAuditRowAtClick maps a click at (x,y) to the audit Result whose cell was hit,

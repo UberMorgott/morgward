@@ -2,6 +2,7 @@ package sshx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -175,14 +176,11 @@ func runShellSession(ctx context.Context, sess ptySession, sio ShellIO, resize <
 // (nil); only a transport/setup error is surfaced. A free function so the
 // classification is unit-testable in isolation.
 func classifyShellExit(err error) error {
-	switch err.(type) {
-	case nil:
+	// A non-zero remote exit status is a normal end of an interactive session, not
+	// a transport failure. errors.As also matches a wrapped ExitError.
+	var ee *ssh.ExitError
+	if errors.As(err, &ee) {
 		return nil
-	case *ssh.ExitError:
-		// Remote shell exited with a non-zero status: still a normal end of an
-		// interactive session, not a transport failure.
-		return nil
-	default:
-		return err
 	}
+	return err
 }

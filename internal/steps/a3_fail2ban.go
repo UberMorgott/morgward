@@ -39,9 +39,9 @@ bantime  = 3600
 `, strings.Join(ignore, " "))
 
 	port := ctx.Cfg.Port
-	script := `export DEBIAN_FRONTEND=noninteractive
-stdbuf -oL -eL apt-get -o DPkg::Lock::Timeout=300 install -y fail2ban python3-systemd
-` + putFile("/etc/fail2ban/jail.local", jail, "0644")
+	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+		aptInstall("fail2ban python3-systemd") +
+		putFile("/etc/fail2ban/jail.local", jail, "0644")
 	if port != 22 {
 		// Tell fail2ban which port sshd listens on.
 		script += putFile("/etc/fail2ban/jail.d/sshd-port.local",

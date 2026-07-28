@@ -21,8 +21,8 @@ and the apply order is load-bearing.
 go build -o morgward ./cmd/morgward   # or: make build
 go vet ./...                                  # make vet
 gofmt -w .                                    # make fmt
-go test ./...                                 # only internal/monitor has tests
-go test ./internal/monitor -run TestName -v   # single test
+go test ./...                                 # 548 tests / 15 packages
+go test ./internal/tui -run TestName -v       # single test
 make release                                  # cross-compile 5 targets into dist/
 ./build.ps1                                    # same, PowerShell (Windows dev host)
 ```
@@ -102,26 +102,38 @@ path → check the other.
   registry in the same order). Verified-live: greenfield + ufw-brownfield full runs on
   Ubuntu 26.04 passed.
 
-- **apt-get lock contention (v0.7.3).** All 13 lock-acquiring `apt-get` invocations
-  across `internal/steps` (PRE, A1, A3, A6.5, A6.7, A7×3, A8×2, A9, A10) carry
-  `-o DPkg::Lock::Timeout=300`, so unattended-upgrades holding the dpkg lock on a
-  fresh-boot box waits up to 5 min instead of aborting the step. Add the flag to any NEW
-  lock-acquiring apt-get call.
+- **apt-get lock contention.** Every lock-acquiring apt call carries
+  `-o DPkg::Lock::Timeout=300` so unattended-upgrades holding the dpkg lock on a
+  fresh-boot box waits 5 min instead of aborting the step. The flag lives in ONE place —
+  the `aptGet` const / `aptInstall(pkgs)` helper (`steps/step.go`). Build new apt commands
+  from those; never re-type the string or a bare `apt-get`. `clean`/`autoremove`/`purge`
+  count — they all take `/var/cache/apt/archives/lock`. The ONE exemption is
+  `apt-get -s` (simulation: the pending-upgrade probes in `detect.go`, A7, A8), which
+  acquires no lock and stays bare.
 
 - **§A1 stdin caveat — NEVER use heredocs in remote scripts.** The script itself is
   piped to `bash` over stdin, so a heredoc would contend for that stdin. Deliver all
-  file content via nested base64: use `putFile` / `appendLineIfMissing` / `anchorSysctl`
-  in `steps/step.go`, never `cat <<EOF`. To run a multi-line script body without landing
+  file content via nested base64: use `putFile` / `AppendLineIfMissing` in
+  `steps/step.go`, never `cat <<EOF`. To run a multi-line script body without landing
   a file, use `pipeToBash(script)` (`steps/step.go`: `echo <b64> | base64 -d | bash`) —
   A6.5 DNS calibration (`a65_dns.go`) uses it instead of a predictable `/tmp` path
   (symlink/TOCTOU target for a local unprivileged user, since the script runs as root).
+  **One copy of each guard, exported:** `steps.AppendLineIfMissing` (the engine's revert
+  map calls it — the old `%q`-quoting duplicate is deleted), `steps.RmSSHDropIns` (the
+  single `rm -f` of every sshd drop-in this repo writes: add a drop-in ⇒ add it there or
+  a revert leaves it behind), and `detect.ShQuote` — the ONE shell-quoting function
+  (`tui.shQuote` is a delegate). Never hand-quote a remote path.
 
 - **TUI is Bubble Tea v2** (`charm.land/bubbletea/v2 v2.0.6` + `charm.land/bubbles/v2
   v2.1.0` + `charm.land/lipgloss/v2 v2.0.3`). The module path is **`charm.land`**, NOT
   `github.com/charmbracelet/*/v2` — the Go proxy REJECTS the github path for the v2 line.
   v2 API actually used (`internal/tui/tui.go`): `View()` returns a `tea.View` (not a
   string) and sets `AltScreen` / `MouseMode` / `WindowTitle` on the returned view EVERY
-  frame; key events are `tea.KeyPressMsg` (NOT v1 `tea.KeyMsg`); mouse is `tea.MouseClickMsg`
+  frame, and carries the terminal cursor as `tea.View.Cursor` (`*tea.Cursor` — the native
+  API; there is NO hand-spliced cursor block, no blink state and no DEC ?1004 focus
+  reporting any more. `terminalFrame()` returns frame + cursor from ONE `cursorSnapshot`,
+  so the cursor can never map against rows the frame didn't draw);
+  key events are `tea.KeyPressMsg` (NOT v1 `tea.KeyMsg`); mouse is `tea.MouseClickMsg`
   (`msg.Mouse().X/.Y`, `tea.MouseLeft`) and `tea.MouseWheelMsg` (`tea.MouseWheelUp/Down`);
   viewport is constructed `viewport.New(viewport.WithWidth(...), viewport.WithHeight(...))`
   with `Width()` / `SetHeight()` / `ScrollUp` / `ScrollDown`; text width via `textinput.SetWidth`.
@@ -150,6 +162,36 @@ path → check the other.
   VISIBLE in the grid (NOT marked Informational). The Security screen keeps A2's TRUE
   state — it reads `m.dashAuditRaw` (untouched real `Applied`), never the forced display
   set; do NOT route the force-satisfied rule into `dashAuditRaw`.
+
+- **TUI render invariants — three things a refactor must not break.** (1) **The golden
+  frame is the contract.** `internal/tui/frames_golden_test.go` pins the byte-exact render
+  of all 8 `framedScrollView` screens (12 states) at 100x40 and 60x20 in
+  `testdata/frames.golden`. A rendering refactor must leave it byte-identical;
+  `UPDATE_GOLDEN=1 go test ./internal/tui` is for an INTENTIONAL layout change you then
+  eyeball in the diff — NEVER regenerate it to turn a red test green. (2) **`chromeViewH(fixed,
+  pinned)` (`render.go`) is the SINGLE chrome-row arithmetic.** Each screen keeps one named
+  wrapper (`matrixBodyViewH`, `filesListViewH`, …) that BOTH its render and its click
+  hit-tests call, so a target can't drift from the row drawn — never re-derive a row budget
+  locally. `phaseRun` counts too: `runView` hand-draws its frame (it predates
+  `framedScrollView`) but `vpHeight` sources its budget from `chromeViewH(2, 0)` — the two
+  fixed rows being the progress line + blank spacer. phaseRun is NOT in the golden, so
+  `TestVPHeightMatchesLegacyChrome` / `TestRunViewRowsMatchChromeBudget` pin it instead.
+  Same for scrolling: `scrollBy(d)` is the one entry point for every phase's
+  ↑↓/k/j and wheel. (3) **`snap.scrollback` stays FULL-LENGTH.** `cursorSnapshot` renders
+  only the visible window (the rest of the slice is `""`), but its length must keep equaling
+  `scrollbackLen` — the cursor's body-row math (`cursorBodyRow`) indexes into it. Shrinking
+  the slice to what's rendered silently moves the cursor.
+  **Terminal size:** on Windows a `WindowSizeMsg` carries the console SCREEN-BUFFER height
+  (conhost: 3000), not the viewport — `internal/termsize.TrueSize` re-reads the real
+  viewport and is the ONE funnel `m.w`/`m.h` may be set through (`WindowSizeMsg` case in
+  `Update`). It is the FILTER only; `resizeTick` is still the delivery mechanism (Windows
+  has no SIGWINCH, so bubbletea's `listenForResize` is a no-op there).
+
+- **No run state — there is no checkpoint machinery.** `internal/state` is DELETED (its
+  `Load` always returned an empty map, `Save` was a no-op, the fields were never read) and
+  `runStepList` has no `honorCheckpoint` parameter. Every run executes every selected step
+  and re-derives everything from `detect.Run`; the on-box configs are the only durable
+  record. Don't reintroduce a resume/skip path without a real requirement.
 
 - **FM local-open-and-sync (2c).** "Open" a remote file (Enter / double-click / menu Open
   row / the Open action / the `O` op) is an async sftp-download to `openTempDir()`

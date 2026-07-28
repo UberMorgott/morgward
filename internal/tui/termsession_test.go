@@ -13,6 +13,20 @@ import (
 	"github.com/UberMorgott/morgward/internal/sshx"
 )
 
+// view and windowTitle are TEST-ONLY accessors on termSession. The app renders the
+// terminal through cursorSnapshot() — ONE locked read of screen + scrollback + cursor —
+// and never needs the bare screen string or the OSC title, so keeping these out of the
+// production build leaves that surface exactly what the app calls. The tests still
+// assert the real wiring behind them: the emulator's Render output (incl. across a
+// reflow swap) and that an OSC title reaches s.title via the Title callback.
+func (s *termSession) view() string { return s.emuNow().Render() }
+
+func (s *termSession) windowTitle() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.title
+}
+
 // TestEncodeKey covers the event→bytes mapping the terminal screen feeds to the
 // remote shell: printable text, the named control keys (Enter/Tab/Esc/Backspace/
 // Space), Ctrl+<letter> C0 bytes, arrow/nav CSI sequences, function keys, Alt

@@ -148,7 +148,7 @@ func TestWikiBackButtonHitTest(t *testing.T) {
 	m.wikiReturn = phaseDashboard
 	m.wikiStep = "A2"
 
-	row := m.wikiBackRow()
+	row := m.wikiButtonsRowY()
 	// A click inside the pill (start col + 1) hits; far-right does not.
 	if !m.wikiBackAtClick(wikiBackStartCol+1, row) {
 		t.Fatalf("click at pill start+1 did not hit the back button")

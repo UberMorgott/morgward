@@ -626,10 +626,10 @@ func (m model) formView() string {
 	// Then pad the vertical space, THEN the control hint as the last content line
 	// directly above the bottom border, pinning it to the bottom of the window.
 	// Layout budget: 1 top border + 1 switcher + len(lines) content + pad + 1 hint
-	// + 1 bottom border = m.h. So pad = m.h − 4 − len(lines), clamped ≥0 (maxi
+	// + 1 bottom border = m.h. So pad = m.h − 4 − len(lines), clamped ≥0 (max
 	// guard) so when m.h is unset/too small we simply emit content then hint.
 	hint := helpStyle.Render(t(m.lang, kFormHint))
-	pad := maxi(m.h-4-len(lines), 0)
+	pad := max(m.h-4-len(lines), 0)
 	for range pad {
 		out.WriteString(contentLine(bd, "", innerW) + "\n")
 	}

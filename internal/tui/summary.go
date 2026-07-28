@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,7 +9,6 @@ import (
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/stats"
 	"github.com/UberMorgott/morgward/internal/steps"
-	"github.com/UberMorgott/morgward/internal/version"
 	"github.com/UberMorgott/morgward/internal/wiki"
 )
 
@@ -25,11 +23,6 @@ var (
 	sumOKStyle   = monGreenStyle                                                    // OK glyph
 	sumFailStyle = monRedStyle                                                      // FAIL glyph
 )
-
-// humanKB64 renders an int64 KB value via the float helper (engine snapshots use
-// int64; the monitor footer uses float64). Empty string when total is unknown is
-// handled by the caller — this always returns a value.
-func humanKB64(kb int64) string { return humanKB(float64(kb)) }
 
 // sumRowIndent is the leading indent of every metric row under a group header, and
 // sumRowGap is the spacing between the (padded) label column and the value column.
@@ -105,97 +98,81 @@ func (m model) boolWordL(v bool) string {
 	return t(m.lang, kNoWord)
 }
 
+// sumSectionKey / sumRowKey resolve the shared stats.Section / stats.RowKey to this
+// package's localized string keys. The row SELECTION and suppression rules are
+// shared with the engine's statsLines (stats.SummaryGroups); only the label lookup
+// and the styled column layout are local.
+var (
+	sumSectionKey = [...]stringKey{
+		stats.SecPkgKernel: kSecPkgKernel,
+		stats.SecDiskMem:   kSecDiskMem,
+		stats.SecNetwork:   kSecNetwork,
+		stats.SecSecurity:  kSecSecurity,
+	}
+	sumRowKey = [...]stringKey{
+		stats.RowUpgraded:  kRowUpgraded,
+		stats.RowKernel:    kRowKernel,
+		stats.RowPurged:    kRowPurged,
+		stats.RowDiskUsed:  kRowDiskUsed,
+		stats.RowZram:      kRowZram,
+		stats.RowSpeed:     kRowSpeed,
+		stats.RowPingGW:    kRowPingGW,
+		stats.RowPingNet:   kRowPingNet,
+		stats.RowPorts:     kRowPorts,
+		stats.RowRootLogin: kRowRootLogin,
+		stats.RowKeyOnly:   kRowKeyOnly,
+		stats.RowFirewall:  kRowFirewall,
+		stats.RowFail2ban:  kRowFail2ban,
+	}
+)
+
+// statWords are the localized value tokens stats.SummaryGroups needs (yes/no
+// posture, the zram "added" marker) — values, not labels, so i18n stays out of
+// internal/stats.
+func (m model) statWords() stats.Words {
+	return stats.Words{
+		Yes:       t(m.lang, kYesWord),
+		No:        t(m.lang, kNoWord),
+		ZramAdded: t(m.lang, kZramAdded),
+	}
+}
+
 // summaryStatLines builds the four before/after metric blocks (packages/kernel,
 // disk/memory, network, security). Both snapshots may be nil — when both are nil
-// it returns nil so summaryView shows only the header + fix list. Mirrors the
-// engine's statsLines suppression: rows with unknown data are dropped.
+// it returns nil so summaryView shows only the header + fix list. Rows are selected
+// and suppressed by stats.SummaryGroups (shared with the engine's statsLines); this
+// function only localizes the labels and lays out the aligned columns. RAM
+// before→after lives ONLY in the top stats strip (so the operator sees it once).
 func (m model) summaryStatLines(innerW int) []string {
-	s := m.summary
-	if s.Before == nil && s.After == nil {
+	groups := stats.SummaryGroups(m.summary.Before, m.summary.After,
+		m.summary.UpgradedPkgs, m.summary.PurgedPkgs, m.statWords())
+	if groups == nil {
 		return nil
 	}
-	b, a := s.Before, s.After
-	empty := stats0()
-	if b == nil {
-		b = empty
-	}
-	if a == nil {
-		a = empty
-	}
 
-	// statRow is a label + already-rendered value column; empty values are dropped.
-	type statRow struct{ label, value string }
-
-	// emitGroup renders a header followed by its rows, aligning every row's value to
-	// the group's widest label (display cells, Cyrillic-aware). A group with no
-	// non-empty rows still emits its header (mirrors the prior always-on sections);
-	// the network block decides on its own whether to call this at all.
+	// Each group renders a header followed by its rows, aligning every row's value to
+	// the group's widest label (display cells, Cyrillic-aware). A group with no rows
+	// still emits its header; SummaryGroups drops the network group entirely when it
+	// has nothing to show.
 	var out []string
-	emitGroup := func(headK stringKey, rows []statRow) {
+	for _, g := range groups {
 		if len(out) > 0 {
 			out = append(out, "") // one blank line between groups
 		}
-		out = append(out, sumHeadStyle.Render(t(m.lang, headK)))
+		out = append(out, sumHeadStyle.Render(t(m.lang, sumSectionKey[g.Section])))
 		labelW := 0
-		for _, r := range rows {
-			if r.value == "" {
-				continue
-			}
-			if w := lipgloss.Width(r.label); w > labelW {
+		for _, r := range g.Rows {
+			if w := lipgloss.Width(t(m.lang, sumRowKey[r.Key])); w > labelW {
 				labelW = w
 			}
 		}
-		for _, r := range rows {
-			if line := sumRow(r.label, r.value, labelW, innerW); line != "" {
+		for _, r := range g.Rows {
+			label := t(m.lang, sumRowKey[r.Key])
+			if line := sumRow(label, sumValue(r.Before, r.After), labelW, innerW); line != "" {
 				out = append(out, line)
 			}
 		}
 	}
-
-	// ПАКЕТЫ И ЯДРО.
-	var pkg []statRow
-	if s.UpgradedPkgs > 0 {
-		pkg = append(pkg, statRow{t(m.lang, kRowUpgraded), strconv.Itoa(s.UpgradedPkgs)})
-	}
-	pkg = append(pkg, statRow{t(m.lang, kRowKernel), sumValue(b.KernelVer, a.KernelVer)})
-	if s.PurgedPkgs > 0 {
-		pkg = append(pkg, statRow{t(m.lang, kRowPurged), strconv.Itoa(s.PurgedPkgs)})
-	}
-	emitGroup(kSecPkgKernel, pkg)
-
-	// ДИСК И ПАМЯТЬ. RAM before→after lives ONLY in the top stats strip (so the
-	// operator sees it once) — do not repeat it here.
-	disk := []statRow{{t(m.lang, kRowDiskUsed), sumValue(sumDiskStr(b), sumDiskStr(a))}}
-	if !b.ZramActive && a.ZramActive {
-		disk = append(disk, statRow{t(m.lang, kRowZram), t(m.lang, kZramAdded)})
-	}
-	emitGroup(kSecDiskMem, disk)
-
-	// СЕТЬ (whole block dropped when there is no speed/ping data on either side).
-	var net []statRow
-	if b.SpeedMBs > 0 || a.SpeedMBs > 0 {
-		net = append(net, statRow{t(m.lang, kRowSpeed), sumValue(sumSpeedStr(b.SpeedMBs), sumSpeedStr(a.SpeedMBs))})
-	}
-	if b.GatewayPingMs > 0 || a.GatewayPingMs > 0 {
-		net = append(net, statRow{t(m.lang, kRowPingGW), sumValue(sumSpeedStr(b.GatewayPingMs), sumSpeedStr(a.GatewayPingMs))})
-	}
-	if b.InternetPingMs > 0 || a.InternetPingMs > 0 {
-		net = append(net, statRow{t(m.lang, kRowPingNet), sumValue(sumSpeedStr(b.InternetPingMs), sumSpeedStr(a.InternetPingMs))})
-	}
-	if len(net) > 0 {
-		emitGroup(kSecNetwork, net)
-	}
-
-	// БЕЗОПАСНОСТЬ.
-	sec := []statRow{
-		{t(m.lang, kRowPorts), sumValue(sumPortsStr(b.OpenPorts), sumPortsStr(a.OpenPorts))},
-		{t(m.lang, kRowRootLogin), sumValue(b.RootLogin, a.RootLogin)},
-		{t(m.lang, kRowKeyOnly), sumValue(m.boolWordL(b.KeyOnly), m.boolWordL(a.KeyOnly))},
-		{t(m.lang, kRowFirewall), sumValue(m.boolWordL(b.FirewallActive), m.boolWordL(a.FirewallActive))},
-		{t(m.lang, kRowFail2ban), sumValue(m.boolWordL(b.Fail2banActive), m.boolWordL(a.Fail2banActive))},
-	}
-	emitGroup(kSecSecurity, sec)
-
 	return out
 }
 
@@ -268,44 +245,23 @@ func fixGlyph(st steps.Status) string {
 // border (renderScrollRegion) and the wheel / ↑↓ scroll it; fixAtClick reproduces the
 // windowed geometry so clicks stay accurate.
 func (m model) summaryView() string {
-	bw := m.boxWidth()
-	innerW := innerWidth(bw)
-	b := lipgloss.RoundedBorder()
-
-	body := m.summaryBodyLines() // strip + header + two-column block
-
-	var sb strings.Builder
-	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
-	sb.WriteByte('\n')
-	sb.WriteString(m.switcherLine(b, innerW))
-	sb.WriteByte('\n')
-
-	// Scrollable middle region (the only resizable part). One row is reserved below
-	// it for the pinned [ На главную ] button, so the home button never scrolls away;
-	// the chrome above (2 rows) and below (button + hint + bottom + 3-row monitor) is
-	// fixed, so the footer never moves.
-	viewH := m.summaryBodyViewH()
-	off := clampScroll(m.sumScroll, len(body), viewH)
-	m.renderScrollRegion(&sb, b, body, innerW, viewH, off)
-
-	// Pinned clickable "На главную" button row (CHANGE 4), styled like the run back-pill.
-	sb.WriteString(contentLine(b, pillOnStyle.Render(t(m.lang, kSumHomeButton)), innerW))
-	sb.WriteByte('\n')
-
-	// Hint + main box bottom border.
-	sb.WriteString(contentLine(b, helpStyle.Render(t(m.lang, kSummaryHint2)), innerW))
-	sb.WriteByte('\n')
-	sb.WriteString(borderLine(b.BottomLeft, b.Bottom, b.BottomRight, bw))
-	sb.WriteByte('\n')
-
-	// Monitor box (kept alive — sampler still running on the summary screen).
-	sb.WriteString(m.monitorBox(innerW))
-	return sb.String()
+	// One row below the scroll region is reserved for the pinned clickable
+	// [ На главную ] button (CHANGE 4), styled like the run back-pill, so it never
+	// scrolls away and the monitor footer never moves.
+	return m.framedScrollView(frame{
+		title:  frameTitle(),
+		nav:    m.switcherLine,
+		body:   m.summaryBodyLines(), // strip + header + two-column block
+		viewH:  m.summaryBodyViewH(),
+		scroll: m.sumScroll,
+		pinned: []string{pillOnStyle.Render(t(m.lang, kSumHomeButton))},
+		hint:   helpStyle.Render(t(m.lang, kSummaryHint2)),
+	})
 }
 
 // summaryBodyViewH is the scrollable middle height on the summary screen: the shared
-// bodyViewH minus the one fixed row reserved for the pinned home button, floored at 1.
-func (m model) summaryBodyViewH() int { return max(m.bodyViewH()-1, 1) }
+// chrome minus the one fixed row reserved for the pinned home button.
+func (m model) summaryBodyViewH() int { return m.chromeViewH(0, 1) }
 
 // summaryHomeRow is the FIXED screen Y of the pinned [ На главную ] button: it follows
 // the 2 chrome rows and the scrollable region, so it never moves with the scroll offset.
@@ -329,13 +285,13 @@ func (m model) summaryStatStrip(innerW int) string {
 	}
 	var segs []string
 	// RAM before→after (NEW): MemKB is the total RAM; show old→new humanized.
-	if ram := sumValue(sumMemStr(b), sumMemStr(a)); ram != "" {
+	if ram := sumValue(stats.MemStr(b), stats.MemStr(a)); ram != "" {
 		segs = append(segs, t(m.lang, kSumRAM)+" "+ram)
 	}
-	if p := sumValue(sumSpeedStr(b.GatewayPingMs), sumSpeedStr(a.GatewayPingMs)); p != "" {
+	if p := sumValue(stats.Num1(b.GatewayPingMs), stats.Num1(a.GatewayPingMs)); p != "" {
 		segs = append(segs, t(m.lang, kRowPingGW)+" "+p)
 	}
-	if p := sumValue(sumSpeedStr(b.InternetPingMs), sumSpeedStr(a.InternetPingMs)); p != "" {
+	if p := sumValue(stats.Num1(b.InternetPingMs), stats.Num1(a.InternetPingMs)); p != "" {
 		segs = append(segs, t(m.lang, kRowPingNet)+" "+p)
 	}
 	// Posture token: firewall on/off after the run.
@@ -346,14 +302,6 @@ func (m model) summaryStatStrip(innerW int) string {
 		return ""
 	}
 	return truncDisplay(strings.Join(segs, "  ·  "), innerW)
-}
-
-// sumMemStr humanizes a snapshot's total RAM (MemKB), or "" when unknown.
-func sumMemStr(s *stats.Snapshot) string {
-	if s.MemKB <= 0 {
-		return ""
-	}
-	return humanKB64(s.MemKB)
 }
 
 // summaryAccessRows builds the right-column "SSH-ДОСТУП" rows from the After
@@ -465,7 +413,7 @@ func (m model) zipColumns(left, right []string, innerW int) []string {
 		}
 		return s
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		l, r := "", ""
 		if i < len(left) {
 			l = left[i]
@@ -546,18 +494,8 @@ func (m model) summaryColBlockStart() int {
 // summaryRowAtClick maps a screen Y to a body index in the scrollable region, honoring
 // the scroll offset, or ok=false when Y is in the chrome (switcher/home/hint/monitor).
 func (m model) summaryRowAtClick(y int) (int, bool) {
-	body := m.summaryBodyLines()
-	viewH := m.summaryBodyViewH()
-	off := clampScroll(m.sumScroll, len(body), viewH)
-	rowInRegion := y - summaryBodyTopRow
-	if rowInRegion < 0 || rowInRegion >= viewH {
-		return 0, false
-	}
-	idx := off + rowInRegion
-	if idx < 0 || idx >= len(body) {
-		return 0, false
-	}
-	return idx, true
+	return scrollRowToBodyIdx(y, summaryBodyTopRow,
+		len(m.summaryBodyLines()), m.summaryBodyViewH(), m.sumScroll)
 }
 
 // summaryKeyShowAtClick reports whether the click at (x,y) hit the right-column
@@ -640,24 +578,3 @@ func (m model) summaryGoHome() (tea.Model, tea.Cmd) {
 // stats0 returns a pointer to a zero Snapshot, used when one side is nil so the
 // delta helpers see "unknown" rather than dereferencing nil.
 func stats0() *stats.Snapshot { return &stats.Snapshot{} }
-
-func sumDiskStr(s *stats.Snapshot) string {
-	if s.DiskTotalKB <= 0 {
-		return ""
-	}
-	return humanKB64(s.DiskUsedKB) + "/" + humanKB64(s.DiskTotalKB)
-}
-
-func sumSpeedStr(v float64) string {
-	if v <= 0 {
-		return ""
-	}
-	return strconv.FormatFloat(v, 'f', 1, 64)
-}
-
-func sumPortsStr(p []string) string {
-	if len(p) == 0 {
-		return ""
-	}
-	return strconv.Itoa(len(p))
-}

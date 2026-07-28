@@ -3,12 +3,13 @@
 package config
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/UberMorgott/morgward/internal/sshx"
 )
 
 // Sentinel validation errors. Callers that localize their UI (the TUI) match on
@@ -30,14 +31,14 @@ var (
 	// ErrKnownHostsPath rejects a --known-hosts path that does not exist / is not
 	// readable, so a typo fails up front instead of silently degrading to TOFU.
 	ErrKnownHostsPath = errors.New("known-hosts file is not readable")
+	// ErrKnownHostsParse is the DISTINCT failure of a known_hosts file that exists
+	// and is readable but does not parse (a malformed line). Kept separate from
+	// ErrKnownHostsPath so the operator is not told to fix a path that is fine.
+	ErrKnownHostsParse = errors.New("known-hosts file could not be parsed")
 	// ErrBadFingerprint rejects a --host-fingerprint that is not a SHA256:<base64>
 	// host-key fingerprint (the form `ssh-keygen -lf` prints).
 	ErrBadFingerprint = errors.New("host-fingerprint must be a SHA256:<base64> host-key fingerprint")
 )
-
-// sha256Size is the byte length of a SHA-256 digest; a decoded host fingerprint
-// must be exactly this long.
-const sha256Size = 32
 
 // adminUserRe is the portable Linux username pattern (NAME_REGEX-style): a
 // lowercase letter or underscore, then up to 31 of [a-z0-9_-]. Excludes spaces,
@@ -95,8 +96,19 @@ func (c *Config) Validate() error {
 }
 
 // validateHostKeyPin enforces the shape of the opt-in host-key pin flags (FA-0010):
-// at most one source, an existing/readable known_hosts path, and a well-formed
+// at most one source, an existing/readable known_hosts file, and a well-formed
 // SHA256:<base64> fingerprint. Both empty is the default TOFU path and passes.
+//
+// The pin itself is built by sshx.ParseHostKeyPin on the dial path; this calls the
+// SAME function so a pin that passes Validate cannot fail later at connect time,
+// and only translates its error into the sentinel the caller matches on. (The
+// both-set case stays here because the sentinel must be distinguishable and the
+// check is two lines.)
+//
+// ParseHostKeyPin collapses "path unusable" and "file parses badly" into one error,
+// so the os.Stat is repeated here to keep those two operator-facing causes on
+// distinct sentinels: a readable-but-malformed known_hosts must not be reported as
+// a path problem.
 func (c *Config) validateHostKeyPin() error {
 	kh := strings.TrimSpace(c.KnownHostsPath)
 	fp := strings.TrimSpace(c.HostFingerprint)
@@ -108,29 +120,11 @@ func (c *Config) validateHostKeyPin() error {
 			return fmt.Errorf("%w: %q: %v", ErrKnownHostsPath, kh, err)
 		}
 	}
-	if fp != "" {
-		if err := validateFingerprint(fp); err != nil {
-			return err
+	if _, err := sshx.ParseHostKeyPin(kh, fp); err != nil {
+		if kh != "" {
+			return fmt.Errorf("%w: %q: %v", ErrKnownHostsParse, kh, err)
 		}
-	}
-	return nil
-}
-
-// validateFingerprint checks that s is a SHA256:<base64> host-key fingerprint that
-// decodes to exactly 32 bytes. The "SHA256:" prefix is optional/case-insensitive
-// and OpenSSH's unpadded standard base64 is accepted.
-func validateFingerprint(s string) error {
-	body := strings.TrimSpace(s)
-	if i := strings.IndexByte(body, ':'); i >= 0 && strings.EqualFold(body[:i], "SHA256") {
-		body = body[i+1:]
-	}
-	body = strings.TrimRight(strings.TrimSpace(body), "=")
-	raw, err := base64.RawStdEncoding.DecodeString(body)
-	if err != nil {
-		return fmt.Errorf("%w, got %q: %v", ErrBadFingerprint, s, err)
-	}
-	if len(raw) != sha256Size {
-		return fmt.Errorf("%w, got %q (decoded %d bytes, want %d)", ErrBadFingerprint, s, len(raw), sha256Size)
+		return fmt.Errorf("%w, got %q: %v", ErrBadFingerprint, fp, err)
 	}
 	return nil
 }

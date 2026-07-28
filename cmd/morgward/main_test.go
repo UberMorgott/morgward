@@ -66,73 +66,97 @@ func TestBindFlagsHostKeyPin(t *testing.T) {
 	}
 }
 
-// TestPartitionArgs proves flags work BEFORE or AFTER the step IDs, and that
-// value-taking flags correctly absorb their following token so it is not mistaken
-// for a step ID.
-func TestPartitionArgs(t *testing.T) {
+// TestParseArgs proves flags work BEFORE, AFTER or interleaved with the step IDs,
+// and that value-taking flags absorb their following token so it is never mistaken
+// for a step ID. Which flags take a value comes from the FlagSet bindFlags fills,
+// so adding a flag can no longer make its value leak into the step IDs.
+func TestParseArgs(t *testing.T) {
 	cases := []struct {
-		name     string
-		args     []string
-		wantFlag []string
-		wantPos  []string
+		name    string
+		args    []string
+		wantPos []string
+		wantCfg config.Config // only the fields a case sets are asserted
 	}{
 		{
-			name:     "flags after step ids",
-			args:     []string{"A4", "A6.5", "--host", "1.2.3.4", "--user", "root", "--assume-yes"},
-			wantFlag: []string{"--host", "1.2.3.4", "--user", "root", "--assume-yes"},
-			wantPos:  []string{"A4", "A6.5"},
+			name:    "flags after step ids",
+			args:    []string{"A4", "A6.5", "--host", "1.2.3.4", "--user", "root", "--assume-yes"},
+			wantPos: []string{"A4", "A6.5"},
+			wantCfg: config.Config{Host: "1.2.3.4", User: "root", Assume: true},
 		},
 		{
-			name:     "flags before step ids",
-			args:     []string{"--host", "1.2.3.4", "--user", "root", "--assume-yes", "A4", "A6.5"},
-			wantFlag: []string{"--host", "1.2.3.4", "--user", "root", "--assume-yes"},
-			wantPos:  []string{"A4", "A6.5"},
+			name:    "flags before step ids",
+			args:    []string{"--host", "1.2.3.4", "--user", "root", "--assume-yes", "A4", "A6.5"},
+			wantPos: []string{"A4", "A6.5"},
+			wantCfg: config.Config{Host: "1.2.3.4", User: "root", Assume: true},
 		},
 		{
-			name:     "interleaved",
-			args:     []string{"A4", "--host", "1.2.3.4", "A6.5", "--assume-yes"},
-			wantFlag: []string{"--host", "1.2.3.4", "--assume-yes"},
-			wantPos:  []string{"A4", "A6.5"},
+			name:    "interleaved",
+			args:    []string{"A4", "--host", "1.2.3.4", "A6.5", "--assume-yes"},
+			wantPos: []string{"A4", "A6.5"},
+			wantCfg: config.Config{Host: "1.2.3.4", Assume: true},
 		},
 		{
-			name:     "equals form keeps value attached",
-			args:     []string{"--host=1.2.3.4", "A4"},
-			wantFlag: []string{"--host=1.2.3.4"},
-			wantPos:  []string{"A4"},
+			name:    "equals form keeps value attached",
+			args:    []string{"--host=1.2.3.4", "A4"},
+			wantPos: []string{"A4"},
+			wantCfg: config.Config{Host: "1.2.3.4"},
 		},
 		{
-			name:     "value that looks like an id is not a step id",
-			args:     []string{"--admin-user", "A4", "A5"},
-			wantFlag: []string{"--admin-user", "A4"},
-			wantPos:  []string{"A5"},
+			name:    "value that looks like an id is not a step id",
+			args:    []string{"--admin-user", "A4", "A5"},
+			wantPos: []string{"A5"},
+			wantCfg: config.Config{AdminUser: "A4"},
 		},
 		{
-			name:     "no positionals",
-			args:     []string{"--host", "1.2.3.4", "--assume-yes"},
-			wantFlag: []string{"--host", "1.2.3.4", "--assume-yes"},
-			wantPos:  nil,
+			name:    "no positionals",
+			args:    []string{"--host", "1.2.3.4", "--assume-yes"},
+			wantPos: nil,
+			wantCfg: config.Config{Host: "1.2.3.4", Assume: true},
 		},
 		{
-			name:     "known-hosts value absorbs its token after a step id",
-			args:     []string{"A1", "--known-hosts", "kh.txt", "A5"},
-			wantFlag: []string{"--known-hosts", "kh.txt"},
-			wantPos:  []string{"A1", "A5"},
+			name:    "known-hosts value absorbs its token after a step id",
+			args:    []string{"A1", "--known-hosts", "kh.txt", "A5"},
+			wantPos: []string{"A1", "A5"},
+			wantCfg: config.Config{KnownHostsPath: "kh.txt"},
 		},
 		{
-			name:     "host-fingerprint value absorbs its token",
-			args:     []string{"--host-fingerprint", "SHA256:abc", "A1"},
-			wantFlag: []string{"--host-fingerprint", "SHA256:abc"},
-			wantPos:  []string{"A1"},
+			name:    "host-fingerprint value absorbs its token",
+			args:    []string{"--host-fingerprint", "SHA256:abc", "A1"},
+			wantPos: []string{"A1"},
+			wantCfg: config.Config{HostFingerprint: "SHA256:abc"},
+		},
+		{
+			name:    "bool flag between two step ids consumes no token",
+			args:    []string{"A4", "--assume-yes", "A5"},
+			wantPos: []string{"A4", "A5"},
+			wantCfg: config.Config{Assume: true},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotFlag, gotPos := partitionArgs(c.args)
-			if !reflect.DeepEqual(gotFlag, c.wantFlag) {
-				t.Errorf("flagArgs = %v, want %v", gotFlag, c.wantFlag)
+			cfg := &config.Config{}
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			bindFlags(fs, cfg)
+			gotPos, err := parseArgs(fs, c.args)
+			if err != nil {
+				t.Fatalf("parseArgs: %v", err)
 			}
 			if !reflect.DeepEqual(gotPos, c.wantPos) {
 				t.Errorf("positional = %v, want %v", gotPos, c.wantPos)
+			}
+			// Unset fields fall back to the bindFlags defaults.
+			want := c.wantCfg
+			if want.User == "" {
+				want.User = "root"
+			}
+			if want.AdminUser == "" {
+				want.AdminUser = "vpsadmin"
+			}
+			if cfg.Host != want.Host || cfg.User != want.User ||
+				cfg.AdminUser != want.AdminUser || cfg.Assume != want.Assume ||
+				cfg.KnownHostsPath != want.KnownHostsPath ||
+				cfg.HostFingerprint != want.HostFingerprint {
+				t.Errorf("cfg = %+v, want %+v", cfg, want)
 			}
 		})
 	}

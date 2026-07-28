@@ -90,7 +90,7 @@ func nameStart(line string) int {
 		}
 	}
 	skipSpaces() // tolerate any leading whitespace
-	for c := 0; c < 7; c++ {
+	for range 7 {
 		skipField()
 		skipSpaces()
 	}

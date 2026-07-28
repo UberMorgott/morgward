@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/UberMorgott/morgward/internal/stats"
 )
 
 // monSep is the dim vertical separator drawn BETWEEN the CPU/RAM/DISK segments,
@@ -35,7 +36,7 @@ func (m model) renderMonitor(width int) string {
 	// footer. (m.sample holds the last good sample; it is only overwritten on a
 	// Connected==true sample, so it never carries a zeroed disconnected snapshot.)
 	if !m.haveSample || m.statMiss >= statMissThreshold {
-		return monDimStyle.Render(clip(t(m.lang, kMonReconnecting), width))
+		return monDimStyle.Render(truncDisplay(t(m.lang, kMonReconnecting), width))
 	}
 
 	s := m.sample
@@ -88,7 +89,7 @@ func (m model) renderMonitor(width int) string {
 	for i, l := range labels {
 		parts = append(parts, monLabelStyle.Render(l)+" "+pctStyle(pcts[i]).Render(fmtPct(pcts[i])))
 	}
-	return clip(strings.Join(parts, monSep()), width)
+	return truncDisplay(strings.Join(parts, monSep()), width)
 }
 
 // monSegFixed returns the FIXED (non-bar) display width of a segment built by
@@ -115,18 +116,6 @@ func monitorSeg(label string, pct float64, bars int, extra string) string {
 	return seg
 }
 
-// humanKB renders a KB value (1024 base): G with 1 decimal when ≥1 GiB, else M
-// as an integer. e.g. 1468006→"1.4G", 524288→"512M".
-func humanKB(kb float64) string {
-	if kb < 0 {
-		kb = 0
-	}
-	if kb >= 1024*1024 {
-		return fmt.Sprintf("%.1fG", kb/(1024*1024))
-	}
-	return fmt.Sprintf("%.0fM", kb/1024)
-}
-
 // pairKB renders "used/total" sharing the unit suffix when both land on the same
 // unit (e.g. "1.4/2.0G"); otherwise each value keeps its own suffix. Empty when
 // total is unknown (≤0).
@@ -134,8 +123,8 @@ func pairKB(usedKB, totalKB float64) string {
 	if totalKB <= 0 {
 		return ""
 	}
-	u := humanKB(usedKB)
-	t := humanKB(totalKB)
+	u := stats.HumanKB(usedKB)
+	t := stats.HumanKB(totalKB)
 	if u[len(u)-1] == t[len(t)-1] {
 		return u[:len(u)-1] + "/" + t
 	}
@@ -183,10 +172,4 @@ func pctStyle(pct float64) lipgloss.Style {
 	default:
 		return monRedStyle
 	}
-}
-
-// clip truncates s (by display width) to at most w cells so the footer never
-// overflows the terminal width.
-func clip(s string, w int) string {
-	return lipgloss.NewStyle().MaxWidth(w).Render(s)
 }

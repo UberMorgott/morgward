@@ -24,7 +24,7 @@ func newTestCtx() *Context {
 func TestA2SafeScriptNoLockdown(t *testing.T) {
 	ctx := newTestCtx()
 	write := buildSafeWrite(ctx)
-	conf := safe99(ctx)
+	conf := build99(ctx)
 
 	all := write + "\n" + conf
 
@@ -68,8 +68,7 @@ func TestA2SafeID(t *testing.T) {
 // TestA2DangerScript asserts the DANGER drop-in writer DOES emit the lockdown
 // directives: AllowGroups sshusers, PermitRootLogin no, PasswordAuthentication no.
 func TestA2DangerScript(t *testing.T) {
-	ctx := newTestCtx()
-	write := buildDangerWrite(ctx)
+	write := buildDangerWrite()
 	conf := danger99()
 
 	all := write + "\n" + conf

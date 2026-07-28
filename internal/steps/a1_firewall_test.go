@@ -231,6 +231,75 @@ func TestDportOpen(t *testing.T) {
 	}
 }
 
+// --- Byte-identity goldens -------------------------------------------------
+//
+// A1's generated ruleset is lockout-capable and CLAUDE.md pins the greenfield
+// path as byte-identical. These two goldens are the enforcement: they are the
+// EXACT scripts the builders emitted before the v4/v6 families were folded into
+// one loop, comment text included. Any future edit that changes so much as a
+// comment fails here. Do not "fix" a golden to match new output — the golden is
+// the contract; make the builder match it.
+
+const goldenGreenfieldRuleset = `set -e
+# --- IPv4 ---
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+# --- IPv6 mirror (ICMPv6 NDP before INVALID drop) ---
+ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
+ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
+ip6tables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -P INPUT DROP
+ip6tables -P FORWARD DROP
+`
+
+// Brownfield golden: custom SSH port 2222 listed among the detected TCP ports (so
+// the dedup path is exercised mid-list), two UDP ports, and NO -P FORWARD line.
+const goldenCoexistRuleset = `set -e
+# --- IPv4 (coexistence) ---
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT
+iptables -A INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT
+iptables -A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT
+iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+iptables -A INPUT -p udp --dport 53 -j ACCEPT
+iptables -P INPUT DROP
+# --- IPv6 mirror (coexistence) ---
+ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
+ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
+ip6tables -A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -A INPUT -p udp --dport 51820 -j ACCEPT
+ip6tables -A INPUT -p udp --dport 53 -j ACCEPT
+ip6tables -P INPUT DROP
+`
+
+// TestGreenfieldRulesetGolden enforces the byte-identity invariant for the
+// greenfield build (CLAUDE.md: "Greenfield path stays byte-identical").
+func TestGreenfieldRulesetGolden(t *testing.T) {
+	if got := greenfieldRuleset(22); got != goldenGreenfieldRuleset {
+		t.Errorf("greenfield ruleset is no longer byte-identical\n--- got ---\n%s\n--- want ---\n%s", got, goldenGreenfieldRuleset)
+	}
+}
+
+// TestCoexistRulesetGolden enforces byte-identity for the brownfield build.
+func TestCoexistRulesetGolden(t *testing.T) {
+	got := coexistRuleset(2222, []int{80, 2222, 8080}, []int{51820, 53})
+	if got != goldenCoexistRuleset {
+		t.Errorf("coexist ruleset is no longer byte-identical\n--- got ---\n%s\n--- want ---\n%s", got, goldenCoexistRuleset)
+	}
+}
+
 // TestUFWAllowScript asserts the ufw path emits an idempotent allow for SSH +
 // every detected TCP/UDP service port (deduped against SSH), and NEVER touches
 // the default policy or enables/disables ufw (allow-only ⇒ cannot lock out).
