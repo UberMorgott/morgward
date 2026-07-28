@@ -46,7 +46,7 @@ run it. On macOS/Linux `chmod +x morgward-* && ./morgward-*`.
 ### Build from source
 
 ```sh
-go build -o morgward ./cmd/morgward    # Go 1.26.4
+go build -o morgward ./cmd/morgward    # Go 1.26.5
 ```
 
 ---
