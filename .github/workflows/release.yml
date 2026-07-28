@@ -27,6 +27,50 @@ jobs:
           go-version: stable
           check-latest: true
 
+      # --- Verification gates -------------------------------------------------
+      # v0.8.3 was published while ci.yml was RED on govulncheck (GO-2026-5932):
+      # this workflow fires on the tag alone and has no dependency on CI, so the
+      # artifacts shipped anyway. Publishing is effectively irreversible (a
+      # Release can be deleted, but downloads happened and installers follow
+      # `latest`), so the release re-verifies instead of trusting that CI was
+      # green for this commit. These MUST stay above `make release` — a failure
+      # aborts the job before anything is built, attested or uploaded.
+      #
+      # Mirrors ci.yml minus three steps, deliberately:
+      #   - `gofmt`: a style gate. Formatting drift can't make a shipped binary
+      #     broken or vulnerable; blocking a tagged release on whitespace is
+      #     noise. CI still enforces it on every push.
+      #   - `go test -race`: needs CGO (~2-3x slower) and is known to flake
+      #     inside the charmbracelet/x/vt dependency. A flaky gate on an
+      #     irreversible, hand-cut release is worse than no gate here; CI runs it
+      #     on every push, which is where a real data race gets caught.
+      #   - `go build ./...`: pure duplication — vet and test compile every
+      #     package, and `make release` builds all 5 targets below for real.
+      #
+      # Runner caveat: this job is ubuntu-latest/amd64 only. The gates prove the
+      # code is correct and vuln-free on linux/amd64 and that all 5 targets
+      # COMPILE (cross-compile below) — they do NOT execute a single test on
+      # darwin or windows. Acceptable because ci.yml has no matrix either (same
+      # blind spot, so the release gate is not the narrower one) and the
+      # per-OS surface is a handful of small build-tagged shims
+      # (openlocal_*, shell_resize_*, title_*, hide_*).
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      # Pinned, unlike ci.yml's @latest. Pinning the TOOL does not freeze the
+      # advisory set — govulncheck fetches the vulnerability DB from vuln.go.dev
+      # at run time — so a newly published advisory still blocks a release, which
+      # is exactly the point (GO-2026-5932 must not be shippable). What the pin
+      # removes is the scanner itself being a moving part: a fresh govulncheck
+      # release changing behaviour or breaking while a tag is being cut. CI keeps
+      # @latest so scanner updates get exercised on every push instead of being
+      # discovered mid-release. Bump this pin deliberately, like any dependency.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
       # UPX packs the linux + windows binaries in `make release` (darwin is skipped
       # — UPX can't produce a working macho). upx-ucl is Ubuntu's package name.
       - name: Install UPX
