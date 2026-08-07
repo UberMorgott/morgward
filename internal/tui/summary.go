@@ -81,12 +81,23 @@ func sumRow(label, value string, labelW, innerW int) string {
 func (m model) summaryHeader() string {
 	s := m.summary
 	verifyTotal := s.VerifyPassed + s.VerifyFailed
-	return fmt.Sprintf("%s · %s · %s · %s · %s",
+	// Real on-box probe tally, appended only when the post-run audit produced probes
+	// (never a meaningless "0/0"); reddened when some tweak is NOT confirmed.
+	probes := ""
+	if s.ProbesTotal > 0 {
+		seg := fmt.Sprintf(t(m.lang, kSumProbes), s.ProbesPassed, s.ProbesTotal)
+		if s.ProbesPassed < s.ProbesTotal {
+			seg = sumFailStyle.Render(seg)
+		}
+		probes = " · " + seg
+	}
+	return fmt.Sprintf("%s · %s · %s · %s · %s%s",
 		fmt.Sprintf(t(m.lang, kSumApplied), s.Applied(), s.Total()),
 		fmt.Sprintf(t(m.lang, kSumSkipped), s.Skip),
 		fmt.Sprintf(t(m.lang, kSumFailed), s.Fail),
 		fmt.Sprintf(t(m.lang, kSumReboots), s.Reboots),
 		fmt.Sprintf(t(m.lang, kSumVerify), s.VerifyPassed, verifyTotal),
+		probes,
 	)
 }
 

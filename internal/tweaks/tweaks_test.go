@@ -88,6 +88,24 @@ func TestRegistryVersionFiltering(t *testing.T) {
 	}
 }
 
+// An unconfirmed OS version (both Is2404 and Is2604 false — an off-target release
+// or a glitched os-release probe) must degrade to the 24.04 probe set, NOT claim the
+// 26.04-only mlkem KEX we never emitted. The engine warns about the fallback; the
+// audit must not then show a red "not applied" row for a tweak morgward
+// deliberately skipped.
+func TestRegistryUnknownVersionMatchesConservativeSet(t *testing.T) {
+	cfg := &config.Config{Port: 22}
+	unknown := ids(Registry(&detect.Facts{}, cfg))
+	if _, ok := unknown["a2.kex_mlkem"]; ok {
+		t.Error("unconfirmed version must not probe the 26.04-only mlkem KEX")
+	}
+	for id := range ids(Registry(&detect.Facts{Is2404: true}, cfg)) {
+		if _, ok := unknown[id]; !ok {
+			t.Errorf("unconfirmed version registry is missing %q from the 24.04 set", id)
+		}
+	}
+}
+
 func TestRegistryIPv6Filtering(t *testing.T) {
 	cfg := &config.Config{}
 	no6 := ids(Registry(&detect.Facts{Is2404: true, HasIPv6: false}, cfg))

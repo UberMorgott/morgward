@@ -33,8 +33,13 @@ fi
 `
 	}
 
+	// systemd-zram-generator is REQUIRED (it is what this step is for); earlyoom is a
+	// nice-to-have. Installed on separate lines so a missing/renamed earlyoom cannot
+	// take the zram install down with it — and so the failure message can name which
+	// of the two actually did not land.
 	script := "export DEBIAN_FRONTEND=noninteractive\n" +
-		aptInstall("systemd-zram-generator earlyoom") +
+		aptInstall("systemd-zram-generator") +
+		aptInstallOptional("earlyoom") +
 		putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +
 		putFile("/etc/sysctl.d/99-zram.conf", zramSysctl, "0644") +
 		disableDiskSwap +
@@ -48,12 +53,29 @@ sysctl --system >/dev/null 2>&1
 	}
 	zram := ctx.Cli.Sudo("swapon --show 2>/dev/null | grep -q zram && echo yes").Out()
 	eoom := ctx.Cli.Run("systemctl is-active earlyoom").Out()
+	gen := ctx.Cli.Sudo(pkgInstalledCheck("systemd-zram-generator")).Out()
+	detail := memVerdictDetail(zram == "yes", gen == "yes", eoom)
 	if zram != "yes" {
-		return StatusFail, "ZRAM swap not active", nil
+		return StatusFail, detail, nil
 	}
-	detail := "ZRAM zstd swap active, swappiness=180, earlyoom=" + eoom
 	if !ctx.Facts.Greenfield && len(ctx.Facts.DiskSwap) > 0 {
 		detail += " (disk swap preserved: brownfield)"
 	}
 	return StatusOK, detail, nil
+}
+
+// memVerdictDetail names WHAT did not come up, instead of a generic "not active".
+// earlyoom is deliberately not fatal (zram is the point of the step), but its
+// absence is stated plainly rather than glossed as a success.
+func memVerdictDetail(zramActive, genInstalled bool, eoom string) string {
+	if !zramActive {
+		if !genInstalled {
+			return "ZRAM swap not active: systemd-zram-generator is not installed (no install candidate for this release?)"
+		}
+		return "ZRAM swap not active: systemd-zram-generator installed but zram0 did not come up (check systemd-zram-setup@zram0.service)"
+	}
+	if eoom != "active" {
+		return "ZRAM zstd swap active, swappiness=180; earlyoom NOT active (is=" + eoom + ") — package missing or unit failed"
+	}
+	return "ZRAM zstd swap active, swappiness=180, earlyoom=active"
 }

@@ -44,6 +44,22 @@ type Result struct {
 	Informational bool
 }
 
+// Tally counts the HARD probes (Informational rows are neutral state reports, not
+// verdicts — they never inflate either side) and how many of them are applied. It is
+// the honest "what is really on the box" number for the run summary.
+func Tally(rs []Result) (passed, total int) {
+	for _, r := range rs {
+		if r.Informational {
+			continue
+		}
+		total++
+		if r.Applied {
+			passed++
+		}
+	}
+	return passed, total
+}
+
 // eq matches when the trimmed output equals want.
 func eq(want string) func(string) bool {
 	return func(o string) bool { return strings.TrimSpace(o) == want }

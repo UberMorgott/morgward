@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
@@ -88,6 +89,22 @@ const aptGet = "apt-get -o DPkg::Lock::Timeout=300"
 // progress line-buffered so it streams live.
 func aptInstall(pkgs string) string {
 	return "stdbuf -oL -eL " + aptGet + " install -y " + pkgs + "\n"
+}
+
+// aptInstallOptional is aptInstall for a package whose absence must NOT fail the
+// step — a transitional/renamed package that may not exist on every target release
+// (e.g. audispd-plugins, dropped after 24.04). Only its exit code is ignored; the
+// dpkg lock timeout and non-interactive frontend are unchanged. NEVER use it for a
+// package the step's result depends on — that one must fail loudly.
+func aptInstallOptional(pkgs string) string {
+	return strings.TrimSuffix(aptInstall(pkgs), "\n") + " || true\n"
+}
+
+// pkgInstalledCheck is the one-line "is this dpkg package installed" probe,
+// echoing "yes" when it is and nothing otherwise. Used by steps that must report
+// WHICH package failed to install rather than a generic "not active".
+func pkgInstalledCheck(pkg string) string {
+	return "dpkg-query -W -f='${Status}' " + pkg + " 2>/dev/null | grep -q 'install ok installed' && echo yes"
 }
 
 // armTimer returns the fragment that arms a 300s systemd-run fail-safe: it first

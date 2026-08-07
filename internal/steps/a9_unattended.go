@@ -1,5 +1,7 @@
 package steps
 
+import "github.com/UberMorgott/morgward/internal/verify"
+
 // A9Unattended implements §A9: unattended security updates. Uses a SEPARATE
 // drop-in (52-*) so the shipped 50unattended-upgrades Allowed-Origins survive.
 type A9Unattended struct{}
@@ -25,9 +27,12 @@ func (a A9Unattended) Run(ctx *Context) (Status, string, error) {
 	if r := ctx.Cli.Sudo(script); r.RC != 0 {
 		return StatusFail, "unattended-upgrades setup failed: " + firstLine(r.Stderr), nil
 	}
-	dry := ctx.Cli.Sudo("unattended-upgrade --dry-run --debug 2>&1 | grep -qi 'allowed origins' && echo ok").Out()
-	if dry != "ok" {
-		ctx.Log.Warn("could not confirm Allowed-Origins in dry-run (continuing)")
+	// Locale-independent confirmation, shared verbatim with the §V matrix row (see
+	// verify.AutoUpdatesCmd). A failure here means the tweak did NOT take effect, so
+	// it is reported as a failure instead of a Warn-and-claim-success. Not
+	// lockout-capable ⇒ nil error, the run continues.
+	if ctx.Cli.Sudo(verify.AutoUpdatesCmd).Out() != "ok" {
+		return StatusFail, "unattended-upgrades did not confirm as enabled (dry-run failed or APT::Periodic::Unattended-Upgrade != 1)", nil
 	}
 	return StatusOK, "unattended-upgrades enabled (auto-reboot off, agent controls reboots)", nil
 }

@@ -66,13 +66,17 @@ printf '%%s:%%s\n' %q "$ADMIN_PW" | chpasswd
 printf '%s%%s\n' "$ADMIN_PW"
 unset ADMIN_PW`, admin, sshx.SecretMarkerPrefix)
 	r := ctx.Cli.Sudo(pwScript)
+	pwNote := ""
 	if pw := extractMarker(r.Stdout, sshx.SecretMarkerPrefix); pw != "" {
 		ctx.Log.Secret(fmt.Sprintf("CONSOLE PASSWORD for %s (store now — shown once)", admin), pw)
 	} else {
+		// Not fatal (key auth is what the run relies on) but it MUST NOT read as a
+		// clean success — the operator would believe a console password exists.
 		ctx.Log.Warn("could not set/extract console password (continuing)")
+		pwNote = "; console password NOT set (no provider-console fallback)"
 	}
 
-	return StatusOK, fmt.Sprintf("admin user %q ready, sshusers group set, apt index fresh", admin), nil
+	return StatusOK, fmt.Sprintf("admin user %q ready, sshusers group set, apt index fresh%s", admin, pwNote), nil
 }
 
 // putAuthorizedKey writes the key line into the user's authorized_keys via base64.

@@ -105,6 +105,7 @@ const (
 	kSumFailed  // "%d failed"
 	kSumReboots // "reboots %d"
 	kSumVerify  // "verify %d/%d"
+	kSumProbes  // "tweaks confirmed %d/%d" (real on-box probe tally)
 
 	// section headers
 	kSecPkgKernel // ПАКЕТЫ И ЯДРО
@@ -384,11 +385,12 @@ var tr = map[stringKey][2]string{
 	kTitleFailed:   {"сбой", "failed"},
 	kTitleWarding:  {"защита", "warding"},
 
-	kSumApplied: {"применено %d/%d", "applied %d/%d"},
+	kSumApplied: {"шагов применено %d/%d", "steps applied %d/%d"},
 	kSumSkipped: {"пропущено %d", "%d skipped"},
 	kSumFailed:  {"ошибок %d", "%d failed"},
 	kSumReboots: {"перезагрузок %d", "reboots %d"},
 	kSumVerify:  {"проверка %d/%d", "verify %d/%d"},
+	kSumProbes:  {"твиков подтверждено %d/%d", "tweaks confirmed %d/%d"},
 
 	kSecPkgKernel: {"ПАКЕТЫ И ЯДРО", "PACKAGES & KERNEL"},
 	kSecDiskMem:   {"ДИСК И ПАМЯТЬ", "DISK & MEMORY"},

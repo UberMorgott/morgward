@@ -39,6 +39,17 @@ func (s Status) String() string {
 	}
 }
 
+// AutoUpdatesCmd is the ONE locale-independent probe for "unattended-upgrades is
+// installed AND actually enabled", shared by the §V matrix row and §A9's own
+// post-apply check so the two can never drift. The old form grepped the free-text
+// English string "allowed origins" out of `--dry-run --debug`, which a non-C locale
+// or an upstream wording change silently breaks (reading as "not applied"). Instead
+// it forces LC_ALL=C, requires the dry-run to EXIT CLEANLY, and reads the periodic
+// flag through apt-config — a machine-readable value, not prose. Exported so
+// internal/steps consumes the same string.
+const AutoUpdatesCmd = `LC_ALL=C unattended-upgrade --dry-run --debug >/dev/null 2>&1 && ` +
+	`LC_ALL=C apt-config shell u APT::Periodic::Unattended-Upgrade 2>/dev/null | grep -q "u='1'" && echo ok`
+
 // Check is a single verification row.
 type Check struct {
 	Name    string
@@ -159,7 +170,7 @@ func Run(c *sshx.Client, log *ui.Logger, port int, facts *detect.Facts) Result {
 		{Name: "earlyoom", Cmd: "systemctl is-active earlyoom", Want: equals("active"), Lockout: false},
 		{Name: "DNS hardening", Cmd: "resolvectl status 2>/dev/null | grep -i dnsovertls | head -1", Want: contains("opportunistic"), Lockout: false},
 		{Name: "NOFILE limit", Cmd: "systemctl show -p DefaultLimitNOFILE --value", Want: contains("524288"), Lockout: false},
-		{Name: "Auto-updates", Cmd: "unattended-upgrade --dry-run --debug 2>&1 | grep -qi 'allowed origins' && echo ok", Want: equals("ok"), Lockout: false},
+		{Name: "Auto-updates", Cmd: AutoUpdatesCmd, Want: equals("ok"), Lockout: false},
 		{
 			Name:    "auditd",
 			Cmd:     "if command -v auditctl >/dev/null 2>&1; then auditctl -l 2>/dev/null | grep -q sshd_config && echo ok; else echo __noauditd__; fi",

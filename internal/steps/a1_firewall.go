@@ -163,9 +163,14 @@ echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debco
 		ctx.Log.Warn("fw-rollback timer still listed after disarm")
 	}
 	if pchk != "ok" {
+		// Name the ACTUAL cause instead of a generic "not persisted": when the package
+		// is genuinely absent, `netfilter-persistent save` never ran, so rules.v4 does
+		// not exist and A8's pre-reboot gate would later abort with a far more cryptic
+		// message. Say it here, at the step that owns it.
 		detail := "firewall not persisted with SSH port open in rules.v4"
-		if persistInstallFailed {
-			detail += " (iptables-persistent install may have failed — check apt/dpkg lock)"
+		if persistInstallFailed && ctx.Cli.Sudo(pkgInstalledCheck("iptables-persistent")).Out() != "yes" {
+			detail = "iptables-persistent could not be installed (no install candidate for this release, or the apt/dpkg lock was held) — " +
+				"firewall rules are LIVE but would NOT survive a reboot"
 		}
 		return StatusFail, detail, fmt.Errorf("persistence incomplete")
 	}

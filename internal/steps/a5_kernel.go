@@ -1,6 +1,9 @@
 package steps
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // A5Kernel implements §A5: kernel/sysctl hardening, THP=madvise, core_pattern
 // lockdown. rp_filter is lockout-capable, so a live rpf-revert timer is armed
@@ -100,5 +103,12 @@ fi`
 
 	cp := ctx.Cli.Run("sysctl -n kernel.core_pattern").Out()
 	rpf := ctx.Cli.Run("sysctl -n net.ipv4.conf.all.rp_filter").Out()
-	return StatusOK, "sysctl hardening applied (core_pattern=" + cp + ", rp_filter=" + rpf + "), THP=madvise", nil
+	// Report the OBSERVED THP mode, never a blanket "THP=madvise": some kernels
+	// expose no THP knob at all and the write above is a best-effort `|| true`.
+	thpNow := ctx.Cli.Run("cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null").Out()
+	thpNote := "THP=madvise"
+	if !strings.Contains(thpNow, "[madvise]") {
+		thpNote = "THP NOT madvise (" + firstLine(thpNow) + ") — takes effect after reboot if grub was updated"
+	}
+	return StatusOK, "sysctl hardening applied (core_pattern=" + cp + ", rp_filter=" + rpf + "), " + thpNote, nil
 }

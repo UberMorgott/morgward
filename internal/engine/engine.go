@@ -146,6 +146,12 @@ type Summary struct {
 	// verify, or A4 skipped / produced no comparable sample pair).
 	BenchPreMBs, BenchPostMBs, BenchRatio float64
 	BenchOK                               bool
+
+	// ProbesPassed/ProbesTotal is the live tweak-probe tally taken right after a
+	// MUTATING run (run / step) — the REAL on-box state, as opposed to Applied()/
+	// Total() which only count step statuses. Best-effort: the audit pass is never
+	// run-fatal, and ProbesTotal == 0 means "unknown" (renderers omit the segment).
+	ProbesPassed, ProbesTotal int
 }
 
 // Applied is the count of steps that finished StatusOK (actually applied work).
@@ -342,6 +348,14 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 	if !facts.IsUbuntu {
 		log.Warn("ID=%s is not ubuntu — runbook is Ubuntu-specific; proceeding with version-drift protocol", facts.ID)
 	}
+	// F20 conservative fallback must never be SILENT: when neither 24.04 nor 26.04
+	// was confirmed (off-target release, or a glitched os-release probe) the steps
+	// degrade to the oldest-supported-sshd crypto set and drop the 26.04-only knobs.
+	// Say so, or the operator believes they got the 26.04 hardening they did not get.
+	if !facts.Is2404 && !facts.Is2604 {
+		log.Warn("OS version not confirmed as 24.04/26.04 (VERSION_ID=%q) — applying the CONSERVATIVE compatibility set: "+
+			"OpenSSH 8.9-safe crypto, NO mlkem768 post-quantum KEX, NO PerSourcePenalties, NO RequiredRSASize", facts.VersionID)
+	}
 	if facts.EgressIface == "" || facts.EgressIface == "lo" {
 		return nil, cleanup, fmt.Errorf("egress interface detection failed (got %q) — aborting per §2", facts.EgressIface)
 	}
@@ -439,6 +453,7 @@ func Run(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error
 		Before:  s.before, After: after,
 		Skips: cnt.skips,
 	}
+	applyProbeTally(&sum, s, cfg)
 	applyResultMarkers(&sum)
 	applySnapshotBench(&sum, s.ctx.Bench)
 	applyBench(&sum, s.ctx.Bench)
@@ -479,11 +494,54 @@ func RunSteps(ctx context.Context, cfg *config.Config, log *ui.Logger, ids []str
 		return err
 	}
 	sum := Summary{OK: cnt.ok, Skip: cnt.skip, Fail: cnt.fail, Elapsed: time.Since(start), Skips: cnt.skips, Results: cnt.results}
+	applyProbeTally(&sum, s, cfg)
 	applyResultMarkers(&sum)
 	applyBench(&sum, s.ctx.Bench)
 	logBenchAndSkips(s.log, sum)
 	emitDone(h, sum)
 	return nil
+}
+
+// applyProbeTally runs the live tweak audit after a mutating pass and folds the HARD
+// probe tally into the summary. Best effort by construction: tweaks.Run never returns
+// an error (a transport failure yields no probes), so a failure here just leaves
+// ProbesTotal at 0 and the renderers omit the segment — the run itself never fails.
+// It counts ONLY the probes of steps this pass actually executed (sum.Results):
+// a pass that applied the tweak bucket must not be judged on A2's probes.
+func applyProbeTally(sum *Summary, s *session, cfg *config.Config) {
+	if s == nil || s.cli == nil {
+		return
+	}
+	sum.ProbesPassed, sum.ProbesTotal = probeTally(tweaks.Run(s.cli, s.log, s.ctx.Facts, cfg), sum.Results)
+}
+
+// probeTally scores only the probes belonging to steps this pass executed.
+func probeTally(rs []tweaks.Result, done []StepResult) (passed, total int) {
+	ran := ranSteps(done)
+	var mine []tweaks.Result
+	for _, r := range rs {
+		if ran[r.Probe.Step] {
+			mine = append(mine, r)
+		}
+	}
+	return tweaks.Tally(mine)
+}
+
+// ranSteps is the set of step tags (Probe.Step form) this pass actually executed.
+// A SKIPPED step deliberately did nothing, so its probes are not this run's to
+// answer for; a FAILED one stays in — that is exactly where red must show.
+// Step IDs and Probe.Step match verbatim ("A1", "A6.5") except the A2 split
+// (A2-safe / A2-danger), whose probes are tagged with the base "A2".
+func ranSteps(rs []StepResult) map[string]bool {
+	m := make(map[string]bool, len(rs))
+	for _, r := range rs {
+		if r.Status == steps.StatusSkip {
+			continue
+		}
+		id, _, _ := strings.Cut(r.ID, "-")
+		m[id] = true
+	}
+	return m
 }
 
 // unmeasuredSuffix renders the F21 "could not check" rows for the verify summary

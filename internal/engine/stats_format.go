@@ -58,6 +58,20 @@ func formatDelta(label, before, after string) string {
 	}
 }
 
+// probeSegment renders the real on-box tweak tally as a trailing summary segment,
+// or "" when the audit produced nothing (never print a meaningless "0/0"). A
+// non-zero red count is called out in words — this line carries no styling.
+func (s Summary) probeSegment() string {
+	if s.ProbesTotal == 0 {
+		return ""
+	}
+	seg := fmt.Sprintf(" · твиков подтверждено %d/%d", s.ProbesPassed, s.ProbesTotal)
+	if n := s.ProbesTotal - s.ProbesPassed; n > 0 {
+		seg += fmt.Sprintf(" (НЕ подтверждено %d)", n)
+	}
+	return seg
+}
+
 // statsLines returns the human text block for the run's before/after metrics and
 // the applied-fix list. Returns nil when both snapshots are absent. Every row whose
 // data is unknown (empty/zero/nil on the relevant side) is skipped by
@@ -69,8 +83,8 @@ func (s Summary) statsLines() []string {
 	}
 
 	// Header: applied/total · skip · fail · reboots.
-	out := []string{fmt.Sprintf("СТАТИСТИКА — применено %d/%d · пропущено %d · ошибок %d · перезагрузок %d",
-		s.Applied(), s.Total(), s.Skip, s.Fail, s.Reboots)}
+	out := []string{fmt.Sprintf("СТАТИСТИКА — шагов применено %d/%d · пропущено %d · ошибок %d · перезагрузок %d%s",
+		s.Applied(), s.Total(), s.Skip, s.Fail, s.Reboots, s.probeSegment())}
 
 	for _, g := range groups {
 		out = append(out, statsSectionLabel[g.Section])

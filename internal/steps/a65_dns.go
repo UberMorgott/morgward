@@ -32,9 +32,12 @@ const dnsCalibrateScript = `#!/usr/bin/env bash
 CONF=/etc/systemd/resolved.conf.d/99-morgward-dns.conf
 mkdir -p /etc/systemd/resolved.conf.d
 
-# Ensure dig is available; if not, install dnsutils non-interactively. If it is
-# still missing we fall back to hardcoded defaults rather than failing the step.
+# Ensure dig is available. The package holding it was RENAMED: bind9-dnsutils is
+# the real package, "dnsutils" only a transitional stub that may be gone on a newer
+# release — so try the real name first and fall back to the old one. If dig is still
+# missing we fall back to hardcoded defaults rather than failing the step.
 if ! command -v dig >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive ` + aptGet + ` install -y -q bind9-dnsutils >/dev/null 2>&1 ||
   DEBIAN_FRONTEND=noninteractive ` + aptGet + ` install -y -q dnsutils >/dev/null 2>&1 || true
 fi
 
