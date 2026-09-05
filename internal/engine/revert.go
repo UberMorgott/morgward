@@ -48,10 +48,12 @@ var revertScript = map[string]string{
 	// A5: removing the drop-ins is not enough for the two knobs whose kernel default
 	// is NOT restored by `sysctl --system` — no distro file names them, so the live
 	// values would keep the applied setting until the next reboot. kernel.panic /
-	// panic_on_oops are reset explicitly here. kernel.io_uring_disabled is ONE-WAY
-	// (the kernel refuses to lower it), so it can only clear on reboot — said so in
-	// the revert detail rather than pretending a `sysctl -w` would work.
-	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf /etc/sysctl.d/60-morgward-iouring.conf /etc/sysctl.d/60-morgward-panic.conf /etc/systemd/coredump.conf.d/99-morgward.conf; sysctl --system >/dev/null 2>&1 || true; sysctl -w kernel.panic=0 kernel.panic_on_oops=0 >/dev/null 2>&1 || true`,
+	// panic_on_oops / io_uring_disabled are therefore reset explicitly here.
+	// io_uring_disabled is NOT one-way (unlike kernel.unprivileged_bpf_disabled): its
+	// sysctl handler is a plain proc_dointvec_minmax over 0..2, so root can lower it
+	// back to the kernel default 0. Best-effort — on a kernel without the key the
+	// write just fails and `|| true` swallows it.
+	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf /etc/sysctl.d/60-morgward-iouring.conf /etc/sysctl.d/60-morgward-panic.conf /etc/systemd/coredump.conf.d/99-morgward.conf; sysctl --system >/dev/null 2>&1 || true; sysctl -w kernel.panic=0 kernel.panic_on_oops=0 >/dev/null 2>&1 || true; sysctl -w kernel.io_uring_disabled=0 >/dev/null 2>&1 || true`,
 	"A6":   `rm -f /etc/systemd/journald.conf.d/99-vps-cap.conf /etc/needrestart/conf.d/50-autorestart.conf /etc/systemd/system.conf.d/limits.conf /etc/chrony/conf.d/90-morgward.conf; systemctl restart systemd-journald 2>/dev/null || true; systemctl restart chrony 2>/dev/null || true`,
 	"A6.5": `rm -f /etc/systemd/resolved.conf.d/99-morgward-dns.conf; systemctl restart systemd-resolved 2>/dev/null || true`,
 	"A6.7": `rm -f /etc/systemd/zram-generator.conf /etc/sysctl.d/99-zram.conf; swapoff /dev/zram0 2>/dev/null || true; sed -i -E '/# morgward-disabled-swap$/{s/^#//;s/[[:space:]]*# morgward-disabled-swap$//}' /etc/fstab 2>/dev/null || true; swapon -a 2>/dev/null || true; systemctl disable --now earlyoom 2>/dev/null || true`,
@@ -63,7 +65,7 @@ var revertScript = map[string]string{
 // deliberately INCOMPLETE, so the operator reads what stayed behind instead of a bare
 // "reverted". Absent id ⇒ "reverted".
 var revertDetail = map[string]string{
-	"A5": "reverted (kernel.panic reset live; io_uring restriction lifts after reboot — the kernel refuses to lower it)",
+	"A5": "reverted (kernel.panic + io_uring restriction reset live; a kernel that refuses the write clears it on reboot)",
 	// fstrim.timer is Ubuntu's own baseline (the distro ships and enables it on
 	// discard-capable storage), so disabling it on revert would leave the box WORSE
 	// than morgward found it. A6 only ever enabled what the distro wants enabled.
