@@ -16,12 +16,13 @@ func (Precond) ID() string    { return "PRE" }
 func (Precond) Title() string { return "§1 Preconditions (apt index, admin user, key, group)" }
 
 func (Precond) Run(ctx *Context) (Status, string, error) {
-	// apt index refresh — HARD gate before the first apt-install (A1). aptPrelude
-	// already refreshes once per boot, but PRE is the one place a failed refresh must
-	// ABORT rather than be swallowed, so it runs its own unconditional update and
-	// stamps AptUpdateMarker on success (later steps' prelude then no-ops).
+	// apt index refresh — HARD gate before the first apt-install (A1). PRE is the one
+	// place a failed refresh must ABORT rather than be swallowed, so it runs its own
+	// unconditional update and stamps AptUpdateMarker on success (later steps' prelude
+	// then no-ops). It therefore takes the prelude WITHOUT aptUpdateOnce: the full
+	// prelude would refresh the index a second time for nothing.
 	ctx.Log.Detail("apt-get update (apt index gate)…")
-	upd := ctx.Cli.Sudo(aptPrelude() + aptGet + " update\n")
+	upd := ctx.Cli.Sudo(aptPreludeNoUpdate() + aptGet + " update\n")
 	if upd.RC != 0 {
 		return StatusFail, "apt-get update failed: " + firstLine(upd.Stderr), fmt.Errorf("apt index refresh failed")
 	}

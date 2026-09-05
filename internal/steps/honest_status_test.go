@@ -100,6 +100,21 @@ func TestAptPreludeContract(t *testing.T) {
 			t.Errorf("stdbuf must not be used (LD_PRELOAD spam on rust-coreutils): %q", s)
 		}
 	}
+	// PRE runs its OWN hard-gate `apt-get update` right after the prelude, so it takes
+	// the no-update variant — otherwise every first run refreshes the index twice.
+	// The variant keeps the whole non-interactive contract, just not the refresh.
+	nu := aptPreludeNoUpdate()
+	if strings.Contains(nu, AptUpdateMarker) || strings.Contains(nu, aptGet+" update") {
+		t.Errorf("aptPreludeNoUpdate must not refresh the index:\n%s", nu)
+	}
+	for _, want := range []string{"NEEDRESTART_SUSPEND=1", "NEEDRESTART_MODE=a", "DEBIAN_FRONTEND=noninteractive"} {
+		if !strings.Contains(nu, want) {
+			t.Errorf("aptPreludeNoUpdate must keep %q:\n%s", want, nu)
+		}
+	}
+	if p != nu+aptUpdateOnce {
+		t.Errorf("aptPrelude must be aptPreludeNoUpdate + the once-per-boot refresh:\n%s", p)
+	}
 }
 
 // A lost SSH transport (rc=-1 / a transport error) must be told apart from a

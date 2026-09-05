@@ -121,13 +121,22 @@ const aptUpdateOnce = "if [ ! -e " + AptUpdateMarker + " ]; then " +
 // runs needrestart (auto-restarting services), SUSPEND=1 makes it a no-op — belt and
 // braces against the ncurses checklist on a box whose needrestart ignores the mode.
 func aptPrelude() string {
+	return aptPreludeNoUpdate() + aptUpdateOnce
+}
+
+// aptPreludeNoUpdate is aptPrelude WITHOUT the once-per-boot index refresh, for the
+// one caller that runs its own refresh right after: PRE, where a failed `apt-get
+// update` must ABORT rather than be swallowed. Using the full prelude there refreshed
+// the index TWICE on every first run (aptUpdateOnce, then PRE's hard gate) — a wasted
+// round-trip against every mirror. Nobody else should use this: a script that installs
+// without a preceding refresh dies on a fresh image's empty index.
+func aptPreludeNoUpdate() string {
 	return "export DEBIAN_FRONTEND=noninteractive\n" +
 		"export NEEDRESTART_MODE=a\n" +
 		"export NEEDRESTART_SUSPEND=1\n" +
 		"export UCF_FORCE_CONFFOLD=1\n" +
 		"mkdir -p /etc/needrestart/conf.d\n" +
-		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644") +
-		aptUpdateOnce
+		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644")
 }
 
 // aptConfOpts stops dpkg from ever prompting about a modified conffile (keep the
