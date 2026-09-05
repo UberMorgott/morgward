@@ -180,8 +180,14 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: fileExists("/etc/sysctl.d/99-net-tune.conf"), Want: eq("1")},
 		Probe{ID: "a4.bbr_conf", Step: "A4", Name: "99-bbr.conf",
 			Cmd: fileExists("/etc/sysctl.d/99-bbr.conf"), Want: eq("1")},
-		Probe{ID: "a4.bbr_module", Step: "A4", Name: "tcp_bbr loaded",
-			Cmd: "lsmod | grep -q '^tcp_bbr' && echo 1 || echo 0", Want: eq("1")},
+		// tcp_bbr is a MODULE on the generic kernels (lsmod shows it), but some cloud
+		// kernel flavours build it in (CONFIG_TCP_CONG_BBR=y) — then lsmod is empty
+		// while BBR works perfectly, and an lsmod-only probe reported a red "not
+		// applied" right after a successful A4. Accept either: loaded module, or the
+		// algorithm present in the kernel's available list (built-in).
+		Probe{ID: "a4.bbr_module", Step: "A4", Name: "tcp_bbr available",
+			Cmd:  "lsmod 2>/dev/null | grep -q '^tcp_bbr' && echo 1 || { sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr && echo 1 || echo 0; }",
+			Want: eq("1")},
 		Probe{ID: "a4.bbr_active", Step: "A4", Name: "BBR congestion control",
 			Cmd: "sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null", Want: has("bbr")},
 		Probe{ID: "a4.qdisc", Step: "A4", Name: "fq qdisc default",
