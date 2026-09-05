@@ -193,7 +193,10 @@ path → check the other.
   `fstrim.timer` where `lsblk --discard` reports support (A6). M06 chrony installed on
   22.04/24.04 (shipped on 26.04) with `/etc/chrony/conf.d/90-morgward.conf` — optional
   install, `timedatectl` fallback in every branch (A6). M07 `UnusedConnectionTimeout
-  600` always + `ChannelTimeout session:*=1800` **greenfield only** (A2). M13
+  600` + `ChannelTimeout session:*=1800`, both **greenfield only** (A2 — OpenSSH does
+  not count forwarding listeners as open channels, so `UnusedConnectionTimeout` reaps
+  an idle `ssh -N -R` tunnel 600 s after connect; probe `a2.unused_timeout` reports
+  `na` on brownfield, `a2.channel_timeout` is not registered there). M13
   systemd-coredump `Storage=none`/`ProcessSizeMax=0` drop-in where the package exists
   (A5 — that package rewrites `core_pattern` on every upgrade, so the sysctl alone is
   not enough). INFO-only probes, no apply: `a2.socket_activation` (M23),
@@ -416,12 +419,14 @@ path → check the other.
   - **A5 live knobs:** `sysctl --system` cannot restore `kernel.panic` /
     `panic_on_oops` (no distro file names them, so the applied live values would
     survive the drop-in removal), so the revert resets them explicitly with
-    `sysctl -w kernel.panic=0 kernel.panic_on_oops=0 || true`.
-    `kernel.io_uring_disabled` is **one-way** — the kernel refuses to lower it — so it
-    can only clear on reboot, and the revert SAYS so instead of pretending.
+    `sysctl -w kernel.panic=0 kernel.panic_on_oops=0 || true`. Same for
+    `kernel.io_uring_disabled`: it is **not** a one-way latch (that is
+    `kernel.unprivileged_bpf_disabled`) — its handler is a plain
+    `proc_dointvec_minmax` over 0..2 — so the revert writes
+    `sysctl -w kernel.io_uring_disabled=0 || true` too.
   - **Deliberately incomplete reverts must say what stayed** via `revertDetail`
-    (`revert.go`, falls back to plain `"reverted"`). Today: **A5** (io_uring lifts
-    after reboot) and **A6** — the A6 revert leaves `fstrim.timer` ENABLED on purpose:
+    (`revert.go`, falls back to plain `"reverted"`). Today: **A5** (live kernel knobs
+    reset, reboot only as the fallback) and **A6** — the A6 revert leaves `fstrim.timer` ENABLED on purpose:
     it is Ubuntu's own baseline on discard-capable storage, so disabling it would
     leave the box worse than morgward found it.
 

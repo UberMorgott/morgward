@@ -180,12 +180,21 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: "sshd -T 2>/dev/null | grep -i '^kexalgorithms'", Want: has("mlkem768x25519-sha256")})
 	}
 
-	// M07: idle-connection reaping, OpenSSH >= 9.2 only. ChannelTimeout is applied on
-	// a greenfield box only (a brownfield operator may run long-lived automation over
-	// a session channel), so its probe is registered only there.
+	// M07: idle-connection reaping, OpenSSH >= 9.2 only. BOTH knobs are applied on a
+	// greenfield box only — a brownfield operator may run long-lived automation over a
+	// session channel, and an idle `ssh -N -R` reverse tunnel holds NO channel at all
+	// (OpenSSH does not count forwarding listeners), so UnusedConnectionTimeout would
+	// reap it. ChannelTimeout's probe is registered only on greenfield;
+	// UnusedConnectionTimeout keeps a visible row that reports "na" on brownfield, so a
+	// knob we deliberately did not apply never reads as "not applied".
 	if facts.Is2404 || facts.Is2604 || facts.SSHDAtLeast(9, 2) {
+		unusedCmd := "echo na"
+		if facts.Greenfield {
+			unusedCmd = "sshd -T 2>/dev/null | awk '/^unusedconnectiontimeout/{print $2}'"
+		}
 		ps = append(ps, Probe{ID: "a2.unused_timeout", Step: "A2", Name: "UnusedConnectionTimeout",
-			Cmd: "sshd -T 2>/dev/null | awk '/^unusedconnectiontimeout/{print $2}'", Want: eq("600")})
+			Cmd:  unusedCmd,
+			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "600" || o == "na" }})
 		if facts.Greenfield {
 			ps = append(ps, Probe{ID: "a2.channel_timeout", Step: "A2", Name: "ChannelTimeout (idle session)",
 				Cmd: "sshd -T 2>/dev/null | grep -i '^channeltimeout'", Want: has("session:*=1800")})

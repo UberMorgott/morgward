@@ -119,10 +119,12 @@ func TestCryptoBlockVersionGate(t *testing.T) {
 	}
 }
 
-// M07: UnusedConnectionTimeout is safe everywhere (it only reaps connections with
-// no open channel), but ChannelTimeout closes an IDLE session channel — which is
-// greenfield-only, so a brownfield operator's long-lived automation over a session
-// channel is never cut. Both need OpenSSH >= 9.2, so 22.04 gets neither.
+// M07: both idle timeouts are GREENFIELD-ONLY. ChannelTimeout closes an idle
+// session channel; UnusedConnectionTimeout reaps a connection with no open channel
+// — and OpenSSH does not count forwarding listeners as channels, so an idle
+// `ssh -N -R` reverse tunnel would die 600s after connect. Neither may touch a
+// brownfield operator's long-lived sessions/tunnels. Both need OpenSSH >= 9.2, so
+// 22.04 gets neither.
 func TestCryptoBlockIdleTimeouts(t *testing.T) {
 	ctx := newTestCtx()
 	mk := func(is2404, greenfield bool, maj, min int) string {
@@ -138,8 +140,8 @@ func TestCryptoBlockIdleTimeouts(t *testing.T) {
 		t.Errorf("greenfield 24.04 must emit both idle timeouts:\n%s", green)
 	}
 	brown := mk(true, false, 9, 6)
-	if !strings.Contains(brown, "UnusedConnectionTimeout 600") {
-		t.Errorf("brownfield must still emit UnusedConnectionTimeout (no open channel = safe):\n%s", brown)
+	if strings.Contains(brown, "UnusedConnectionTimeout") {
+		t.Errorf("brownfield must NOT reap idle connections (kills `ssh -N -R` tunnels):\n%s", brown)
 	}
 	if strings.Contains(brown, "ChannelTimeout") {
 		t.Errorf("brownfield must NOT cut idle session channels:\n%s", brown)

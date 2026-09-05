@@ -423,9 +423,11 @@ HostKey /etc/ssh/ssh_host_rsa_key
 	// M07 idle-connection reaping — OpenSSH >= 9.2 only (24.04 9.6p1 and 26.04 10.x;
 	// 22.04's 8.9p1 rejects both directives).
 	//
-	// UnusedConnectionTimeout only closes a connection with NO open channels at all,
-	// so it can never interrupt a shell, an scp or a live tunnel — it just stops
-	// half-dead sockets from accumulating. Applied everywhere.
+	// UnusedConnectionTimeout closes a connection with NO open CHANNELS — and OpenSSH
+	// does NOT count forwarding listeners as channels, so an idle `ssh -N -R` reverse
+	// tunnel (no channel until traffic arrives) is reaped 600s after connect. That is
+	// fine on a fresh box but would silently kill an existing operator's tunnel, so it
+	// is GREENFIELD-ONLY, exactly like ChannelTimeout below.
 	//
 	// ChannelTimeout session:*=1800 closes an IDLE interactive session after 30 min.
 	// That is safe on a fresh box, but on a BROWNFIELD one the operator may be
@@ -433,11 +435,9 @@ HostKey /etc/ssh/ssh_host_rsa_key
 	// — a run must never silently start cutting an existing workflow's sessions. Note
 	// the pattern is `session:*` deliberately: it never matches forwarded-tcpip /
 	// direct-tcpip, so port forwards and VPN-style tunnels are untouched either way.
-	if ctx.Facts.Is2404 || ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 2) {
+	if (ctx.Facts.Is2404 || ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 2)) && ctx.Facts.Greenfield {
 		b.WriteString("UnusedConnectionTimeout 600\n")
-		if ctx.Facts.Greenfield {
-			b.WriteString("ChannelTimeout session:*=1800\n")
-		}
+		b.WriteString("ChannelTimeout session:*=1800\n")
 	}
 
 	// PerSourcePenalties: OpenSSH >= 9.8 only (26.04). 9.6p1 (24.04) and 8.9p1

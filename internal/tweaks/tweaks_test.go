@@ -166,14 +166,22 @@ func TestNewProbeGates(t *testing.T) {
 		}
 	}
 
-	// M07: ChannelTimeout is greenfield-only; UnusedConnectionTimeout is universal
-	// on sshd >= 9.2.
+	// M07: both idle timeouts are greenfield-only. ChannelTimeout is not probed on a
+	// brownfield box at all; UnusedConnectionTimeout keeps a visible row that reports
+	// "na" there (a knob we deliberately did not apply is not "not applied").
 	brown := ids(Registry(&detect.Facts{Is2404: true, Greenfield: false}, cfg))
 	if _, ok := brown["a2.channel_timeout"]; ok {
 		t.Error("brownfield must not be probed for ChannelTimeout (never applied there)")
 	}
-	if _, ok := brown["a2.unused_timeout"]; !ok {
-		t.Error("UnusedConnectionTimeout is applied on every sshd >= 9.2 box, so it must be probed")
+	p, ok := brown["a2.unused_timeout"]
+	if !ok {
+		t.Fatal("UnusedConnectionTimeout must keep a visible row on brownfield")
+	}
+	if p.Cmd != "echo na" || !p.Want("na") {
+		t.Errorf("brownfield UnusedConnectionTimeout must report na, got cmd=%q", p.Cmd)
+	}
+	if g := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, cfg))["a2.unused_timeout"]; !g.Want("600") || g.Cmd == "echo na" {
+		t.Errorf("greenfield UnusedConnectionTimeout must probe sshd -T, got cmd=%q", g.Cmd)
 	}
 	if _, ok := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, cfg))["a2.channel_timeout"]; !ok {
 		t.Error("greenfield must be probed for ChannelTimeout")
