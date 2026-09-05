@@ -87,3 +87,20 @@ func TestA8ID(t *testing.T) {
 		t.Errorf("A8Upgrade.ID()=%q want A8", (A8Upgrade{}).ID())
 	}
 }
+
+// The old pre-run `apt-get -s full-upgrade` simulation ran BEFORE A8's explicit
+// `apt-get update`, so a stale index reported 0 after a real 80-package upgrade.
+// The count now comes from apt's own summary line in the REAL run's stdout.
+func TestAptChangedCount(t *testing.T) {
+	for name, tc := range map[string]struct{ out, want string }{
+		"upgrade + install": {"Reading package lists...\n50 upgraded, 25 newly installed, 0 to remove and 0 not upgraded.\nGet:1 ...\n", "75"},
+		"nothing to do":     {"0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n", "0"},
+		"last line wins":    {"1 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n3 upgraded, 4 newly installed, 0 to remove and 2 not upgraded.\n", "7"},
+		"no summary line":   {"E: Could not get lock\n", ""},
+		"empty":             {"", ""},
+	} {
+		if got := aptChangedCount(tc.out); got != tc.want {
+			t.Errorf("%s: aptChangedCount = %q, want %q", name, got, tc.want)
+		}
+	}
+}

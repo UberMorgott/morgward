@@ -3,6 +3,8 @@ package steps
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,13 +66,6 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	// ONLY to contain that leak, so dropping stdbuf drops the wrapper with it.
 	// aptConfOpts carries `Dpkg::Use-Pty=0` for the output shape instead.
 
-	// Count the packages a full-upgrade WOULD install/upgrade, BEFORE running it
-	// (simulation; heredoc-free). `apt-get -s full-upgrade` lists each change as an
-	// "Inst <pkg> ..." line, so a grep -c is the upgrade count. Best-effort: a parse
-	// miss just yields an empty marker, which the engine treats as 0.
-	upCount := ctx.Cli.Sudo(
-		"DEBIAN_FRONTEND=noninteractive apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst' || echo 0").Out()
-
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
 	// aptPreludeNoUpdate: A8 always refreshes the index explicitly right below, so
 	// the prelude's once-per-boot update would only double the (silent, up to 300s
@@ -81,6 +76,12 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
 	}
 
+	// Count what the REAL run changed, from apt's own summary line. A pre-run
+	// `apt-get -s full-upgrade` used to do this, but it ran BEFORE the explicit
+	// `apt-get update` above, so on a stale index it reported 0 while the actual
+	// upgrade installed ~80 packages. Best-effort: a parse miss yields an empty
+	// marker, which the engine treats as 0.
+	upCount := aptChangedCount(up.Stdout)
 	// Capture boot_id, reboot, poll for a NEW boot_id.
 	pre := ctx.Cli.BootID()
 	if pre == "" {
@@ -260,6 +261,24 @@ func fields(s string) []string {
 		return nil
 	}
 	return f
+}
+
+// aptSummaryRe matches apt's always-printed run summary,
+// "N upgraded, M newly installed, K to remove and J not upgraded."
+var aptSummaryRe = regexp.MustCompile(`(\d+) upgraded, (\d+) newly installed`)
+
+// aptChangedCount returns upgraded+newly-installed from the LAST apt summary line
+// in out (the full-upgrade's own; an earlier `apt-get update` prints none), or ""
+// when there is no such line.
+func aptChangedCount(out string) string {
+	m := aptSummaryRe.FindAllStringSubmatch(out, -1)
+	if len(m) == 0 {
+		return ""
+	}
+	last := m[len(m)-1]
+	up, _ := strconv.Atoi(last[1])
+	nw, _ := strconv.Atoi(last[2])
+	return strconv.Itoa(up + nw)
 }
 
 // short truncates a boot_id to its first 8 chars for log lines.
