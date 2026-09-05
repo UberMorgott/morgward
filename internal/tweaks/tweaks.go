@@ -39,17 +39,25 @@ type Result struct {
 	Probe   Probe
 	Applied bool
 	Detail  string
+	// Err is non-empty when the PROBE ITSELF could not be executed — the audit
+	// round-trip lost the SSH transport, or the probe produced no output line at all.
+	// The observed value is then unknown, NOT "unset": scoring it against Want would
+	// report a perfectly-applied tweak as missing (C2). Applied stays false, but a
+	// renderer MUST show such a row as "?" / "probe error: <Err>" rather than a red
+	// "not applied", and Tally counts it as neither applied nor applicable.
+	Err string
 	// Informational mirrors Probe.Informational so renderers that only carry the
 	// Result can treat the row as a neutral state report (not a pass/fail verdict).
 	Informational bool
 }
 
 // Tally counts the HARD probes (Informational rows are neutral state reports, not
-// verdicts — they never inflate either side) and how many of them are applied. It is
-// the honest "what is really on the box" number for the run summary.
+// verdicts — they never inflate either side; rows that could not be MEASURED are
+// likewise excluded) and how many of them are applied. It is the honest "what is
+// really on the box" number for the run summary.
 func Tally(rs []Result) (passed, total int) {
 	for _, r := range rs {
-		if r.Informational {
+		if r.Informational || r.Err != "" {
 			continue
 		}
 		total++
@@ -280,9 +288,25 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 	return ps
 }
 
+// batchErr describes why the whole audit round-trip could not be measured, or ""
+// when it ran. A transport loss (rc = -1 / a transport error) leaves every probe's
+// stdout empty for a reason that has nothing to do with the box's state, so scoring
+// those empties against Want would paint an entirely-hardened box red (C2).
+func batchErr(r sshx.Result) string {
+	if r.Err != nil {
+		return "probe round-trip failed: " + r.Err.Error()
+	}
+	if r.RC == -1 {
+		return "probe round-trip failed: SSH transport lost"
+	}
+	return ""
+}
+
 // Run executes every applicable probe in ONE privileged round-trip. Each probe's
 // stdout is captured tab-delimited (id<TAB>value) and scored by its Want. Best
-// effort: a transport error yields all-not-applied rather than aborting.
+// effort: it never aborts — a probe that could not be EXECUTED (lost transport, or
+// no output line for its id) comes back with Result.Err set and Applied=false, so
+// renderers can show "?" instead of a false red "not applied".
 func Run(cli *sshx.Client, log *ui.Logger, facts *detect.Facts, cfg *config.Config) []Result {
 	probes := Registry(facts, cfg)
 	if len(probes) == 0 {
@@ -298,6 +322,7 @@ func Run(cli *sshx.Client, log *ui.Logger, facts *detect.Facts, cfg *config.Conf
 	}
 
 	res := cli.Sudo(b.String())
+	bErr := batchErr(res)
 
 	vals := make(map[string]string, len(probes))
 	for line := range strings.SplitSeq(res.Stdout, "\n") {
@@ -309,9 +334,20 @@ func Run(cli *sshx.Client, log *ui.Logger, facts *detect.Facts, cfg *config.Conf
 	}
 
 	out := make([]Result, 0, len(probes))
-	applied := 0
+	applied, errored := 0, 0
 	for _, p := range probes {
-		v := vals[p.ID]
+		v, seen := vals[p.ID]
+		pErr := bErr
+		if pErr == "" && !seen {
+			// The batch ran but this probe emitted no `id<TAB>…` line at all — its
+			// command was killed or never reached. Unknown, not "unset".
+			pErr = "probe produced no output"
+		}
+		if pErr != "" {
+			errored++
+			out = append(out, Result{Probe: p, Applied: false, Detail: "", Err: pErr, Informational: p.Informational})
+			continue
+		}
 		ok := p.Want(v)
 		if ok {
 			applied++
@@ -320,6 +356,22 @@ func Run(cli *sshx.Client, log *ui.Logger, facts *detect.Facts, cfg *config.Conf
 	}
 	if log != nil {
 		log.Info("анализ: %d проб, %d применено", len(out), applied)
+		if errored > 0 {
+			// Never let an unmeasurable probe pass as "not applied": say it out loud.
+			log.Warn("анализ: %d проб не удалось выполнить (?): %s", errored, firstErr(out))
+		}
 	}
 	return out
+}
+
+// firstErr returns the first probe error text in the batch, for a one-line log
+// summary ("" when nothing errored). Every errored row carries the same message
+// when the whole round-trip failed, so one sample is enough.
+func firstErr(rs []Result) string {
+	for _, r := range rs {
+		if r.Err != "" {
+			return r.Err
+		}
+	}
+	return ""
 }

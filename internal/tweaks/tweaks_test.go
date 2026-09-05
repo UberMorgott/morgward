@@ -136,6 +136,25 @@ func TestA2SafeProbesInformational(t *testing.T) {
 	}
 }
 
+// C2: a probe that could not be EXECUTED is unknown, not "not applied" — Tally
+// must count it as neither applied nor applicable, so an unreachable box cannot
+// deflate the "applied" score into a wall of false failures.
+func TestTallyExcludesErroredProbes(t *testing.T) {
+	rs := []Result{
+		{Probe: Probe{ID: "ok"}, Applied: true},
+		{Probe: Probe{ID: "missing"}, Applied: false},
+		{Probe: Probe{ID: "unknown"}, Applied: false, Err: "probe round-trip failed: SSH transport lost"},
+		{Probe: Probe{ID: "info"}, Applied: false, Informational: true},
+	}
+	passed, total := Tally(rs)
+	if passed != 1 || total != 2 {
+		t.Errorf("Tally = (%d,%d), want (1,2) — errored and informational rows must not count", passed, total)
+	}
+	if got := firstErr(rs); got == "" {
+		t.Error("firstErr must surface the probe error for the log summary")
+	}
+}
+
 // TestA10ExtrasRemoved guards the locked decision: the former strict-only A10
 // extras (module blacklist, /dev/shm) are dropped entirely.
 func TestA10ExtrasRemoved(t *testing.T) {
