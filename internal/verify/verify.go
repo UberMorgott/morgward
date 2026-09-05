@@ -165,6 +165,21 @@ func Run(c *sshx.Client, log *ui.Logger, port int, facts *detect.Facts) Result {
 		{Name: "fail2ban", Cmd: "fail2ban-client status sshd >/dev/null 2>&1 && echo ok", Want: equals("ok"), Lockout: false},
 		{Name: "BBR", Cmd: "sysctl -n net.ipv4.tcp_congestion_control", Want: equals("bbr"), Lockout: false},
 		{Name: "core_pattern", Cmd: "sysctl -n kernel.core_pattern", Want: contains("/bin/false"), Lockout: false},
+		{Name: "kernel panic reboot", Cmd: "sysctl -n kernel.panic", Want: equals("10"), Lockout: false},
+		{
+			Name:    "io_uring restricted",
+			Cmd:     "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled || echo __noiouring__",
+			Want:    contains("1"),
+			Lockout: false,
+			// The knob only exists from kernel 6.6, so 22.04's 5.15 GA kernel has no
+			// io_uring restriction to assert — a skip-with-reason, not a warning.
+			NA: func(out string) (string, bool) {
+				if strings.TrimSpace(out) == "__noiouring__" {
+					return "kernel has no io_uring_disabled knob (< 6.6)", true
+				}
+				return "", false
+			},
+		},
 		{Name: "THP madvise", Cmd: "cat /sys/kernel/mm/transparent_hugepage/enabled", Want: contains("[madvise]"), Lockout: false},
 		{Name: "ZRAM", Cmd: "swapon --show | grep -q zram && echo ok", Want: equals("ok"), Lockout: false},
 		{Name: "earlyoom", Cmd: "systemctl is-active earlyoom", Want: equals("active"), Lockout: false},

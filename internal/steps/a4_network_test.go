@@ -11,6 +11,32 @@ func sample(speed, size float64, url string) string {
 	return fmt.Sprintf("SAMPLE %g %g 1.0 %s", speed, size, url)
 }
 
+// M04: the conntrack sizing script must carry all three brownfield guards — leave a
+// k8s box alone, never lower an existing value, and persist both the sysctl and the
+// modprobe hashsize — and must contain no heredoc (§A1 stdin caveat).
+func TestConntrackScriptGuards(t *testing.T) {
+	for _, want := range []string{
+		"pgrep -x kubelet",                        // kube-proxy owns nf_conntrack
+		`[ "$CUR" -gt "$CTMAX" ] && CTMAX="$CUR"`, // never lower an existing value
+		conntrackSysctl,
+		conntrackModprobe,
+		"hashsize=%s",
+	} {
+		if !strings.Contains(conntrackScript, want) {
+			t.Errorf("conntrack script missing %q:\n%s", want, conntrackScript)
+		}
+	}
+	if strings.Contains(conntrackScript, "<<") {
+		t.Errorf("no heredoc may appear in a remote script:\n%s", conntrackScript)
+	}
+	// RAM tiers: 2G -> 65536, 4G -> 131072, anything larger -> 262144.
+	for _, want := range []string{"CTMAX=262144", "CTMAX=131072", "CTMAX=65536"} {
+		if !strings.Contains(conntrackScript, want) {
+			t.Errorf("conntrack script missing RAM tier %q", want)
+		}
+	}
+}
+
 func TestMedianSpeedOddCount(t *testing.T) {
 	out := strings.Join([]string{
 		sample(10e6, 10e6, "u1"),

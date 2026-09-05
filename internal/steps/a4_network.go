@@ -28,8 +28,54 @@ net.ipv4.tcp_max_syn_backlog = 8192
 net.ipv4.tcp_syncookies = 1
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_mtu_probing = 1
+net.ipv4.icmp_ratelimit = 20
+net.ipv4.icmp_ratemask = 88089
+net.ipv4.icmp_ignore_bogus_error_responses = 1
 vm.dirty_ratio = 10
 vm.dirty_background_ratio = 5
+`
+
+// conntrackSysctl / conntrackModprobe are the files A4 owns for M04. Separate from
+// 99-net-tune.conf because they are CONDITIONAL (written only on a box that
+// actually tracks connections) and the revert must be able to drop them alone.
+const (
+	conntrackSysctl   = "/etc/sysctl.d/60-morgward-conntrack.conf"
+	conntrackModprobe = "/etc/modprobe.d/60-morgward-conntrack.conf"
+)
+
+// conntrackScript sizes nf_conntrack_max by RAM on a box that NATs or runs
+// containers, where the 5.15/6.x default (~65k on a small box, and as low as 32k)
+// silently drops connections under load with "nf_conntrack: table full" in dmesg.
+//
+// Three guards keep it safe on a brownfield box:
+//   - k8s: kube-proxy owns nf_conntrack and re-writes it from its own config, so a
+//     box running kubelet is left alone entirely (fighting it would just flap).
+//   - never LOWER an existing value: an operator who already raised the table keeps
+//     their number; we only ever raise it toward the RAM-derived target.
+//   - the module may not be loaded yet, so the value is persisted through
+//     /etc/sysctl.d + /etc/modprobe.d (hashsize) and applied live best-effort.
+//
+// hashsize = max/4 is the kernel's own documented ratio (one bucket per 4 tracked
+// connections). No heredoc — every file is written with printf (§A1 stdin caveat).
+const conntrackScript = `if pgrep -x kubelet >/dev/null 2>&1; then
+  echo "conntrack: kubelet present — kube-proxy owns nf_conntrack, skipped"
+else
+  MEMKB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  CTMAX=262144
+  [ "${MEMKB:-0}" -le 4194304 ] && CTMAX=131072
+  [ "${MEMKB:-0}" -le 2097152 ] && CTMAX=65536
+  CUR=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null || echo 0)
+  case "$CUR" in ''|*[!0-9]*) CUR=0 ;; esac
+  [ "$CUR" -gt "$CTMAX" ] && CTMAX="$CUR"
+  mkdir -p /etc/sysctl.d /etc/modprobe.d
+  printf 'net.netfilter.nf_conntrack_max = %s\n' "$CTMAX" > ` + conntrackSysctl + `
+  chmod 644 ` + conntrackSysctl + `
+  printf 'options nf_conntrack hashsize=%s\n' "$((CTMAX/4))" > ` + conntrackModprobe + `
+  chmod 644 ` + conntrackModprobe + `
+  sysctl -q -w net.netfilter.nf_conntrack_max="$CTMAX" 2>/dev/null || true
+  echo "$((CTMAX/4))" > /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null || true
+  echo "conntrack: nf_conntrack_max=$CTMAX hashsize=$((CTMAX/4))"
+fi
 `
 
 const bbrConf = `net.core.default_qdisc = fq
@@ -139,6 +185,17 @@ func (a A4Network) Run(ctx *Context) (Status, string, error) {
 
 	if r := ctx.Cli.Sudo(apply); r.RC != 0 {
 		return StatusFail, "network tuning apply failed: " + firstLine(r.Stderr), nil
+	}
+
+	// M04: conntrack table sizing, ONLY on a box that actually tracks connections
+	// (docker's own rules, or real NAT). A plain single-service VPS never fills the
+	// table, so writing the knob there would be noise the audit then has to explain.
+	if ctx.Facts.DockerSeen || ctx.Facts.NatRules {
+		if r := ctx.Cli.Sudo(conntrackScript); r.RC == 0 {
+			ctx.Log.Detail("%s", firstLine(r.Out()))
+		} else {
+			ctx.Log.Warn("conntrack sizing rc=%d (continuing): %s", r.RC, firstLine(r.Stderr))
+		}
 	}
 
 	// Verify BBR effective — the ONLY hard-fail condition.

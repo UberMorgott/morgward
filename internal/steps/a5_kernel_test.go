@@ -26,6 +26,33 @@ func TestKernelHardenConfRouting(t *testing.T) {
 	}
 }
 
+// The A5 extras must be FEATURE-GATED on the box, not written blind: the io_uring
+// key only exists from kernel 6.6 (22.04's 5.15 has no such sysctl) and the
+// coredump drop-in is meaningless without systemd-coredump. panic/panic_on_oops is
+// universal and is written unconditionally.
+func TestExtraSysctlScriptGates(t *testing.T) {
+	s := extraSysctlScript()
+	if !strings.Contains(s, "if [ -e /proc/sys/kernel/io_uring_disabled ]; then") {
+		t.Errorf("io_uring conf must be gated on the key existing (5.15 kernels lack it):\n%s", s)
+	}
+	if !strings.Contains(s, "rm -f "+ioUringConf) {
+		t.Errorf("a kernel without the key must not keep a stale io_uring conf:\n%s", s)
+	}
+	if !strings.Contains(s, "command -v coredumpctl") {
+		t.Errorf("coredump drop-in must be gated on systemd-coredump being present:\n%s", s)
+	}
+	// Content is delivered base64-encoded (no heredoc — §A1 stdin caveat), so assert
+	// on the destination paths rather than the literal bodies.
+	for _, path := range []string{ioUringConf, panicConf, coredumpConf} {
+		if !strings.Contains(s, path) {
+			t.Errorf("script must write %s:\n%s", path, s)
+		}
+	}
+	if strings.Contains(s, "<<") {
+		t.Errorf("no heredoc may appear in a remote script (§A1 stdin caveat):\n%s", s)
+	}
+}
+
 // TestKernelHardenConfGreenfield asserts rp_filter stays STRICT (=1) when there
 // is no forwarding (greenfield default).
 func TestKernelHardenConfGreenfield(t *testing.T) {

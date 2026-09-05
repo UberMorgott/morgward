@@ -54,6 +54,43 @@ kernel.core_pattern = |/bin/false
 `, rpf)
 }
 
+// Paths A5 owns beyond 99-zz-kernel-harden.conf. One file per concern so a revert
+// can drop exactly what it wrote, and so a distro/operator file is never rewritten.
+const (
+	ioUringConf   = "/etc/sysctl.d/60-morgward-iouring.conf"
+	panicConf     = "/etc/sysctl.d/60-morgward-panic.conf"
+	coredumpConf  = "/etc/systemd/coredump.conf.d/99-morgward.conf"
+	panicConfBody = "kernel.panic = 10\nkernel.panic_on_oops = 1\n"
+	// M13: systemd-coredump writes crash dumps to /var/lib/systemd/coredump, which
+	// fills a small VPS disk and persists process memory (secrets) on disk. A5
+	// already sets core_pattern=|/bin/false, but the systemd-coredump package
+	// re-asserts its own core_pattern on every upgrade — this drop-in makes the
+	// policy stick on the systemd side instead of fighting that pipeline.
+	coredumpConfBody = "[Coredump]\nStorage=none\nProcessSizeMax=0\n"
+)
+
+// extraSysctlScript writes the A5 sysctl drop-ins whose keys are NOT universal.
+//
+//   - M01 kernel.io_uring_disabled=1 blocks io_uring for unprivileged processes (a
+//     recurring LPE surface) while leaving CAP_SYS_ADMIN users working — value 2
+//     would break privileged containers. The key exists from kernel 6.6, so 22.04's
+//     5.15 GA kernel does not have it: writing it unconditionally would make
+//     `sysctl --system` fail. Landed only when the key is actually present.
+//   - M02 kernel.panic=10 + panic_on_oops=1 turn a wedged kernel into a reboot,
+//     which is the only useful outcome on a console-less VPS. Universal.
+//   - M13 the systemd-coredump policy, only where systemd-coredump exists.
+func extraSysctlScript() string {
+	return "mkdir -p /etc/sysctl.d\n" +
+		"if [ -e /proc/sys/kernel/io_uring_disabled ]; then\n" +
+		putFile(ioUringConf, "kernel.io_uring_disabled = 1\n", "0644") +
+		"else\n  rm -f " + ioUringConf + "\nfi\n" +
+		putFile(panicConf, panicConfBody, "0644") +
+		"if [ -x /usr/lib/systemd/systemd-coredump ] || [ -x /lib/systemd/systemd-coredump ] || command -v coredumpctl >/dev/null 2>&1; then\n" +
+		"  mkdir -p /etc/systemd/coredump.conf.d\n" +
+		putFile(coredumpConf, coredumpConfBody, "0644") +
+		"fi\n"
+}
+
 func (a A5Kernel) Run(ctx *Context) (Status, string, error) {
 	// Write the sysctl file (zz prefix sorts after distro defaults). rp_filter is
 	// loose (=2) when forwarding/routing is active so asymmetric VPN/router return
@@ -61,6 +98,13 @@ func (a A5Kernel) Run(ctx *Context) (Status, string, error) {
 	conf := kernelHardenConf(ctx.Facts.Forwarding)
 	if r := ctx.Cli.Sudo(putFile("/etc/sysctl.d/99-zz-kernel-harden.conf", conf, "0644")); r.RC != 0 {
 		return StatusFail, "writing kernel sysctl failed: " + firstLine(r.Stderr), nil
+	}
+
+	// Version/feature-gated extras (io_uring, panic-on-oops, coredump policy). Their
+	// keys/units are not present on every supported release, so the script probes for
+	// each one rather than emitting a sysctl `sysctl --system` would reject.
+	if r := ctx.Cli.Sudo(extraSysctlScript()); r.RC != 0 {
+		ctx.Log.Warn("kernel sysctl extras rc=%d (continuing): %s", r.RC, firstLine(r.Stderr))
 	}
 
 	// Arm a LIVE rp_filter revert (rp_filter=1 can sever asymmetric-routed sessions).
@@ -110,5 +154,10 @@ fi`
 	if !strings.Contains(thpNow, "[madvise]") {
 		thpNote = "THP NOT madvise (" + firstLine(thpNow) + ") — takes effect after reboot if grub was updated"
 	}
-	return StatusOK, "sysctl hardening applied (core_pattern=" + cp + ", rp_filter=" + rpf + "), " + thpNote, nil
+	iou := ctx.Cli.Run("sysctl -n kernel.io_uring_disabled 2>/dev/null").Out()
+	if iou == "" {
+		iou = "n/a (<6.6 kernel)"
+	}
+	return StatusOK, "sysctl hardening applied (core_pattern=" + cp + ", rp_filter=" + rpf +
+		", panic=10, io_uring_disabled=" + iou + "), " + thpNote, nil
 }

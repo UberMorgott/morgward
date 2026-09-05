@@ -99,9 +99,64 @@ func TestRegistryUnknownVersionMatchesConservativeSet(t *testing.T) {
 	if _, ok := unknown["a2.kex_mlkem"]; ok {
 		t.Error("unconfirmed version must not probe the 26.04-only mlkem KEX")
 	}
+	// Everything the 24.04 set probes must also be probed on an unconfirmed box,
+	// EXCEPT the knobs A2 itself version-gates and therefore never wrote there — the
+	// audit must mirror the apply, not assert more than it applied.
+	versionGated := map[string]bool{"a2.unused_timeout": true, "a2.channel_timeout": true}
 	for id := range ids(Registry(&detect.Facts{Is2404: true}, cfg)) {
+		if versionGated[id] {
+			continue
+		}
 		if _, ok := unknown[id]; !ok {
 			t.Errorf("unconfirmed version registry is missing %q from the 24.04 set", id)
+		}
+	}
+	// …and the gated ones must indeed be absent, matching cryptoBlock's own gate.
+	for id := range versionGated {
+		if _, ok := unknown[id]; ok {
+			t.Errorf("unconfirmed version must not probe the sshd-9.2-only %q", id)
+		}
+	}
+}
+
+// Each new probe must be registered under exactly the gate its apply uses, so the
+// audit never asserts a knob morgward deliberately did not write.
+func TestNewProbeGates(t *testing.T) {
+	cfg := &config.Config{Port: 22}
+
+	// M04: conntrack is sized only on a box that actually tracks connections.
+	plain := ids(Registry(&detect.Facts{Is2404: true}, cfg))
+	if _, ok := plain["a4.conntrack"]; ok {
+		t.Error("a plain box must not be probed for conntrack sizing")
+	}
+	for _, f := range []*detect.Facts{{Is2404: true, DockerSeen: true}, {Is2404: true, NatRules: true}} {
+		if _, ok := ids(Registry(f, cfg))["a4.conntrack"]; !ok {
+			t.Errorf("docker=%v nat=%v must be probed for conntrack sizing", f.DockerSeen, f.NatRules)
+		}
+	}
+
+	// M07: ChannelTimeout is greenfield-only; UnusedConnectionTimeout is universal
+	// on sshd >= 9.2.
+	brown := ids(Registry(&detect.Facts{Is2404: true, Greenfield: false}, cfg))
+	if _, ok := brown["a2.channel_timeout"]; ok {
+		t.Error("brownfield must not be probed for ChannelTimeout (never applied there)")
+	}
+	if _, ok := brown["a2.unused_timeout"]; !ok {
+		t.Error("UnusedConnectionTimeout is applied on every sshd >= 9.2 box, so it must be probed")
+	}
+	if _, ok := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, cfg))["a2.channel_timeout"]; !ok {
+		t.Error("greenfield must be probed for ChannelTimeout")
+	}
+
+	// The INFO-only probes must never be scored as failures.
+	for _, id := range []string{"a5.apparmor_userns", "a5.lockdown", "a6.tmp_tmpfs", "a2.socket_activation"} {
+		p, ok := plain[id]
+		if !ok {
+			t.Errorf("probe %q missing from the registry", id)
+			continue
+		}
+		if !p.Informational {
+			t.Errorf("probe %q reports state morgward does not change — it must be Informational", id)
 		}
 	}
 }

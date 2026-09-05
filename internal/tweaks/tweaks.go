@@ -164,10 +164,31 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: "sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}'", Want: eq("yes"), Informational: true},
 	)
 
-	if facts.Is2604 {
+	if facts.Is2604 || facts.SSHDAtLeast(9, 9) {
 		ps = append(ps, Probe{ID: "a2.kex_mlkem", Step: "A2", Name: "PQ KEX (mlkem768)",
 			Cmd: "sshd -T 2>/dev/null | grep -i '^kexalgorithms'", Want: has("mlkem768x25519-sha256")})
 	}
+
+	// M07: idle-connection reaping, OpenSSH >= 9.2 only. ChannelTimeout is applied on
+	// a greenfield box only (a brownfield operator may run long-lived automation over
+	// a session channel), so its probe is registered only there.
+	if facts.Is2404 || facts.Is2604 || facts.SSHDAtLeast(9, 2) {
+		ps = append(ps, Probe{ID: "a2.unused_timeout", Step: "A2", Name: "UnusedConnectionTimeout",
+			Cmd: "sshd -T 2>/dev/null | awk '/^unusedconnectiontimeout/{print $2}'", Want: eq("600")})
+		if facts.Greenfield {
+			ps = append(ps, Probe{ID: "a2.channel_timeout", Step: "A2", Name: "ChannelTimeout (idle session)",
+				Cmd: "sshd -T 2>/dev/null | grep -i '^channeltimeout'", Want: has("session:*=1800")})
+		}
+	}
+
+	// M23 (INFO): on 24.04+ sshd can be socket-activated, in which case ssh.socket —
+	// NOT sshd_config's Port — decides the listening port. morgward never writes a
+	// Port directive, so nothing breaks either way; the probe just makes the box's
+	// activation mode visible before an operator changes the port by hand.
+	ps = append(ps, Probe{ID: "a2.socket_activation", Step: "A2", Name: "sshd socket activation",
+		Cmd:           "systemctl is-active ssh.socket 2>/dev/null || echo inactive",
+		Want:          func(o string) bool { return strings.TrimSpace(o) == "inactive" },
+		Informational: true})
 
 	ps = append(ps,
 		// --- A2.5 cloud-init ---
@@ -203,7 +224,19 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 		Probe{ID: "a4.io_sched", Step: "A4", Name: "I/O scheduler (udev)",
 			Cmd:  "ls /sys/block 2>/dev/null | grep -q '^vd' && { test -f /etc/udev/rules.d/60-io-scheduler.rules && echo 1 || echo 0; } || echo na",
 			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "na" }},
+	)
 
+	// M04: A4 sizes the conntrack table ONLY on a box that actually tracks connections
+	// (docker or real NAT), so the probe is registered under the SAME gate — a plain
+	// single-service VPS is never told a knob it should not have is missing. A k8s box
+	// is skipped by the apply (kube-proxy owns nf_conntrack), so it reports "na".
+	if facts.DockerSeen || facts.NatRules {
+		ps = append(ps, Probe{ID: "a4.conntrack", Step: "A4", Name: "conntrack table sized",
+			Cmd:  "test -f /etc/sysctl.d/60-morgward-conntrack.conf && echo 1 || { pgrep -x kubelet >/dev/null 2>&1 && echo na || echo 0; }",
+			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "na" }})
+	}
+
+	ps = append(ps,
 		// --- A5 kernel ---
 		Probe{ID: "a5.harden_conf", Step: "A5", Name: "99-zz-kernel-harden.conf",
 			Cmd: fileExists("/etc/sysctl.d/99-zz-kernel-harden.conf"), Want: eq("1")},
@@ -215,6 +248,29 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: "sysctl -n kernel.kptr_restrict 2>/dev/null", Want: eq("2")},
 		Probe{ID: "a5.thp", Step: "A5", Name: "THP madvise",
 			Cmd: "cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null", Want: has("[madvise]")},
+		// M01: the key only exists from kernel 6.6, so an older kernel reports "na"
+		// (not applicable) rather than a red "not applied".
+		Probe{ID: "a5.io_uring", Step: "A5", Name: "io_uring restricted",
+			Cmd:  "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled 2>/dev/null || echo na",
+			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "2" || o == "na" }},
+		// M02: a wedged kernel on a console-less VPS must reboot itself.
+		Probe{ID: "a5.panic", Step: "A5", Name: "panic auto-reboot",
+			Cmd: "sysctl -n kernel.panic 2>/dev/null", Want: eq("10")},
+		// M13: only meaningful where systemd-coredump exists; elsewhere "na".
+		Probe{ID: "a5.coredump", Step: "A5", Name: "coredump storage off",
+			Cmd:  "test -f /etc/systemd/coredump.conf.d/99-morgward.conf && echo 1 || { command -v coredumpctl >/dev/null 2>&1 && echo 0 || echo na; }",
+			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "na" }},
+		// INFO-only kernel state morgward does NOT change (M10 / M11).
+		Probe{ID: "a5.apparmor_userns", Step: "A5", Name: "AppArmor userns restricted",
+			Cmd:           "sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo na",
+			Want:          eq("1"),
+			Informational: true},
+		Probe{ID: "a5.lockdown", Step: "A5", Name: "kernel lockdown mode",
+			Cmd: "cat /sys/kernel/security/lockdown 2>/dev/null || echo na",
+			Want: func(o string) bool {
+				return strings.Contains(o, "[integrity]") || strings.Contains(o, "[confidentiality]")
+			},
+			Informational: true},
 
 		// --- A6 maintenance ---
 		Probe{ID: "a6.journald", Step: "A6", Name: "journald cap",
@@ -225,6 +281,21 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 			Cmd: fileExists("/etc/systemd/system.conf.d/limits.conf"), Want: eq("1")},
 		Probe{ID: "a6.ntp", Step: "A6", Name: "NTP enabled",
 			Cmd: "timedatectl show -p NTP --value 2>/dev/null", Want: has("yes")},
+		// M05: enabled only where the storage reports discard support; "na" otherwise.
+		Probe{ID: "a6.fstrim", Step: "A6", Name: "fstrim.timer enabled",
+			Cmd:  `lsblk --discard -n -o DISC-GRAN 2>/dev/null | grep -qv '^\s*0B\s*$' && systemctl is-enabled fstrim.timer 2>/dev/null || echo na`,
+			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "enabled" || o == "na" }},
+		// M06: chrony is installed on 22.04/24.04 and shipped on 26.04; a box left on
+		// systemd-timesyncd (no chrony candidate) reports "na", not a failure.
+		// M12 (INFO): 26.04 mounts /tmp as tmpfs by default. morgward does not change
+		// it (the size budget is workload-dependent) — the row just reports the state.
+		Probe{ID: "a6.tmp_tmpfs", Step: "A6", Name: "/tmp on tmpfs",
+			Cmd:           "findmnt -no FSTYPE /tmp 2>/dev/null || echo na",
+			Want:          eq("tmpfs"),
+			Informational: true},
+		Probe{ID: "a6.chrony", Step: "A6", Name: "chrony tracking",
+			Cmd:  "chronyc tracking >/dev/null 2>&1 && echo 1 || { timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes && echo na || echo 0; }",
+			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "na" }},
 
 		// --- A6.5 DNS ---
 		Probe{ID: "a65.dns_conf", Step: "A6.5", Name: "resolved DNS hardening",

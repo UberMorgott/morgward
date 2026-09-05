@@ -119,6 +119,37 @@ func TestCryptoBlockVersionGate(t *testing.T) {
 	}
 }
 
+// M07: UnusedConnectionTimeout is safe everywhere (it only reaps connections with
+// no open channel), but ChannelTimeout closes an IDLE session channel — which is
+// greenfield-only, so a brownfield operator's long-lived automation over a session
+// channel is never cut. Both need OpenSSH >= 9.2, so 22.04 gets neither.
+func TestCryptoBlockIdleTimeouts(t *testing.T) {
+	ctx := newTestCtx()
+	mk := func(is2404, greenfield bool, maj, min int) string {
+		ctx.Facts.Is2404, ctx.Facts.Is2604 = is2404, false
+		ctx.Facts.Is2204 = false
+		ctx.Facts.Greenfield = greenfield
+		ctx.Facts.SSHDMajor, ctx.Facts.SSHDMinor = maj, min
+		return cryptoBlock(ctx)
+	}
+
+	green := mk(true, true, 9, 6)
+	if !strings.Contains(green, "UnusedConnectionTimeout 600") || !strings.Contains(green, "ChannelTimeout session:*=1800") {
+		t.Errorf("greenfield 24.04 must emit both idle timeouts:\n%s", green)
+	}
+	brown := mk(true, false, 9, 6)
+	if !strings.Contains(brown, "UnusedConnectionTimeout 600") {
+		t.Errorf("brownfield must still emit UnusedConnectionTimeout (no open channel = safe):\n%s", brown)
+	}
+	if strings.Contains(brown, "ChannelTimeout") {
+		t.Errorf("brownfield must NOT cut idle session channels:\n%s", brown)
+	}
+	old := mk(false, true, 8, 9) // 22.04 / OpenSSH 8.9 rejects both directives
+	if strings.Contains(old, "UnusedConnectionTimeout") || strings.Contains(old, "ChannelTimeout") {
+		t.Errorf("sshd 8.9 must emit neither idle timeout (sshd -t would reject them):\n%s", old)
+	}
+}
+
 // TestCryptoBlockSSHDVersionGate covers the 22.04 support range: the sshd knobs
 // gate on the PROBED OpenSSH version as well as the release flag, so jammy
 // (8.9p1) gets none of them and a backported sshd on an unconfirmed release gets
