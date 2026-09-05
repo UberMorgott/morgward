@@ -558,6 +558,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// cursor moves). The log FILE stays raw (ui.Logger writes it independently);
 		// only what reaches the screen is cleaned. wrapped() then hard-wraps the
 		// sanitized text to the viewport width so nothing crosses the border.
+		m.idleTicks = 0 // output arrived → clear the "no output for N s" heartbeat
 		m.content += sanitizeStreamLine(string(msg))
 		m.vp.SetContent(m.wrapped())
 		m.vp.GotoBottom()
@@ -725,6 +726,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.elapsed = time.Since(m.runStart)
 		m.spin = (m.spin + 1) % len(spinnerFrames)
+		m.idleTicks++ // reset by logMsg; drives the idle heartbeat (runHints)
 		return m, tickEvery()
 
 	case resizeTickMsg:
@@ -1425,6 +1427,7 @@ func (m model) resetRunState() model {
 	m.curID = ""
 	m.curTitle = ""
 	m.spin = 0
+	m.idleTicks = 0
 	m.dashAuditRunning = false
 	m.dashAuditDone = false
 	m.dashAuditTotal = 0

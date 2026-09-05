@@ -316,6 +316,13 @@ type model struct {
 	elapsed  time.Duration
 	spin     int
 
+	// idleTicks counts the 1s ticks since the last streamed output line (logMsg resets
+	// it to 0). Past runIdleHeartbeat it drives the "no output for N s" heartbeat on the
+	// run screen, so a long-silent step (apt blocked on the dpkg lock for minutes) can't
+	// be mistaken for a wedged TUI. Counted in TICKS, not wall time, so it is exercisable
+	// with fake ticks and needs no second ticker.
+	idleTicks int
+
 	// Terminal screen (phaseTerminal, 2a). The non-copyable session (emulator,
 	// pipe, goroutines) lives behind a POINTER so the model stays value-copyable
 	// every Update (CLAUDE.md gotcha). nil when the terminal screen has never been

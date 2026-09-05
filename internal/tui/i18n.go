@@ -56,6 +56,7 @@ const (
 	kFormHint
 	kRunHintRunning
 	kRunHintIdle
+	kRunNoOutput
 
 	// run-phase progress + summary pieces
 	kStepN     // "Step" word in "Step N/M"
@@ -359,6 +360,7 @@ var tr = map[stringKey][2]string{
 	kFormHint:       {"tab/↑↓ переход · ←/→ переключить · enter: следующее поле, подключение (на «Подключиться») · l: язык · esc выход", "tab/↑↓ move · ←/→ toggle · enter: next field, connect (on Connect) · l: lang · esc quit"},
 	kRunHintRunning: {"esc назад · l: язык · ctrl+c выход", "esc back · l: lang · ctrl+c quit"},
 	kRunHintIdle:    {"enter/esc назад · ↑/↓ прокрутка · l: язык · ctrl+c выход", "enter/esc back · ↑/↓ scroll · l: lang · ctrl+c quit"},
+	kRunNoOutput:    {"⏳ нет вывода %d с — шаг ещё выполняется (apt может ждать dpkg-lock до 300 с)", "⏳ no output for %d s — the step is still running (apt may wait up to 300 s for the dpkg lock)"},
 
 	kStepN:     {"Шаг", "Step"},
 	kDoneWord:  {"готово", "done"},

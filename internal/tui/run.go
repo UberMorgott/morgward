@@ -133,6 +133,14 @@ func (m model) finishedTailRows() int {
 // manual scroll so only quit is shown; once finished/idle, enter/esc back + scroll + quit.
 func (m model) runHints() string {
 	if m.running && !m.finished {
+		// Idle heartbeat: after runIdleHeartbeat silent ticks, lead the hint line with
+		// "no output for N s" so a step that streams nothing for minutes (apt blocked on
+		// the dpkg lock) reads as working, not wedged. It sits directly under the last
+		// output line, updates on the existing 1s tick, and clears on the next logMsg (or
+		// when the run ends) — no extra row, so the viewport budget is untouched.
+		if hb := m.idleHeartbeat(); hb != "" {
+			return hb + " · " + t(m.lang, kRunHintRunning)
+		}
 		return t(m.lang, kRunHintRunning)
 	}
 	// A FAILED run keeps the session and offers a retry, so say so — the generic idle
@@ -141,6 +149,20 @@ func (m model) runHints() string {
 		return t(m.lang, kRunHintErr)
 	}
 	return t(m.lang, kRunHintIdle)
+}
+
+// runIdleHeartbeat is how many silent 1s ticks must pass before the run screen says so.
+const runIdleHeartbeat = 30
+
+// idleHeartbeat returns the localized "no output for N s" line once the run has streamed
+// nothing for more than runIdleHeartbeat ticks, or "" while output is flowing / the run
+// is not in flight. idleTicks is reset by logMsg, so the line disappears on the next
+// output line by itself.
+func (m model) idleHeartbeat() string {
+	if !m.running || m.finished || m.idleTicks <= runIdleHeartbeat {
+		return ""
+	}
+	return fmt.Sprintf(t(m.lang, kRunNoOutput), m.idleTicks)
 }
 
 // progressLine renders the top progress line: a step counter + bar + percent +
