@@ -79,3 +79,19 @@ func TestFstrimScriptGatedOnDiscard(t *testing.T) {
 		t.Errorf("fstrim script must enable the timer:\n%s", fstrimScript)
 	}
 }
+
+// A freshly installed chrony has not picked a source yet; the raw first line of
+// `chronyc tracking` rendered as "chrony (Reference ID    : 00000000 ())".
+func TestChronyNote(t *testing.T) {
+	syncing := "Reference ID    : 00000000 ()\nStratum         : 0\nLeap status     : Not synchronised\n"
+	synced := "Reference ID    : C0248F97 (time.cloudflare.com)\nStratum         : 3\nRef time (UTC)  : Fri Sep 05 06:00:37 2026\nLeap status     : Normal\n"
+	for name, tc := range map[string]struct{ in, want string }{
+		"not yet synced": {syncing, "chrony: installed, syncing"},
+		"synced":         {synced, "chrony: synced (stratum 3)"},
+		"no chrony":      {"", "ntp on"},
+	} {
+		if got := chronyNote(tc.in); got != tc.want {
+			t.Errorf("%s: chronyNote = %q, want %q", name, got, tc.want)
+		}
+	}
+}

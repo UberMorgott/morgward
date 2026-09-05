@@ -1,5 +1,7 @@
 package steps
 
+import "strings"
+
 // A6Maint implements §A6: journald cap, needrestart non-interactive,
 // DefaultLimitNOFILE, time sync, periodic TRIM. AppArmor is verified, not disabled.
 type A6Maint struct{}
@@ -69,6 +71,31 @@ const nofileConf = `[Manager]
 DefaultLimitNOFILE=65536:524288
 `
 
+// chronyNote condenses `chronyc tracking` into a short A6 detail. Right after the
+// install chrony has not picked a source yet, and the old "first line verbatim"
+// note rendered that as the alarming `chrony (Reference ID    : 00000000 ())`.
+// An all-zero Reference ID or a "Not synchronised" leap status means "still
+// syncing", which is the expected state seconds after installing.
+func chronyNote(tracking string) string {
+	if strings.TrimSpace(tracking) == "" {
+		return "ntp on"
+	}
+	f := map[string]string{}
+	for l := range strings.SplitSeq(tracking, "\n") {
+		if k, v, ok := strings.Cut(l, ":"); ok {
+			f[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	ref, _, _ := strings.Cut(f["Reference ID"], " ")
+	if strings.Trim(ref, "0") == "" || strings.Contains(strings.ToLower(f["Leap status"]), "not synchronised") {
+		return "chrony: installed, syncing"
+	}
+	if s := f["Stratum"]; s != "" {
+		return "chrony: synced (stratum " + s + ")"
+	}
+	return "chrony: synced"
+}
+
 func (a A6Maint) Run(ctx *Context) (Status, string, error) {
 	script := "mkdir -p /var/log/journal /etc/systemd/journald.conf.d /etc/needrestart/conf.d /etc/systemd/system.conf.d\n" +
 		putFile("/etc/systemd/journald.conf.d/99-vps-cap.conf", journaldConf, "0644") +
@@ -89,11 +116,7 @@ systemctl daemon-reexec
 	if r := ctx.Cli.Sudo(timeSyncScript(ctx.Facts.Is2204 || ctx.Facts.Is2404)); r.RC != 0 {
 		ctx.Log.Warn("time sync setup rc=%d (continuing): %s", r.RC, firstLine(r.Stderr))
 	}
-	track := ctx.Cli.Sudo("chronyc tracking 2>/dev/null | head -1").Out()
-	timeNote := "ntp on"
-	if track != "" {
-		timeNote = "chrony (" + track + ")"
-	}
+	timeNote := chronyNote(ctx.Cli.Sudo("chronyc tracking 2>/dev/null").Out())
 
 	// M05: weekly TRIM where the storage supports discard.
 	trim := firstLine(ctx.Cli.Sudo(fstrimScript).Out())
