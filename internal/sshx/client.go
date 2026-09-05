@@ -621,6 +621,7 @@ func (c *Client) lineEmitter(stream string) func(string) {
 func teeLines(r io.Reader, capture *strings.Builder, emit func(string)) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLine)
+	sc.Split(scanCRLFLines)
 	for sc.Scan() {
 		line := sc.Text()
 		capture.WriteString(line)
@@ -632,6 +633,29 @@ func teeLines(r io.Reader, capture *strings.Builder, emit func(string)) {
 			emit(line)
 		}
 	}
+}
+
+// scanCRLFLines is bufio.ScanLines that ALSO terminates a token at a bare '\r'.
+// apt/dpkg redraw progress in place ("Waiting for cache lock: … [12s]",
+// "Reading database … 45%") with CR and no LF, so a LF-only scanner sits on the
+// whole redraw sequence until the command finishes — a 300s dpkg-lock wait looks
+// like a dead run to the operator. Splitting on CR streams each redraw as its own
+// line; the ui sanitizer already collapses CR-redraw segments for display.
+func scanCRLFLines(data []byte, atEOF bool) (int, []byte, error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		adv := i + 1
+		if data[i] == '\r' && adv < len(data) && data[adv] == '\n' {
+			adv++ // CRLF counts as one terminator
+		}
+		return adv, data[:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 // Sudo runs a multi-line script with root privileges using base64 delivery,

@@ -72,7 +72,10 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 		"DEBIAN_FRONTEND=noninteractive apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst' || echo 0").Out()
 
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
-	up := ctx.Cli.Sudo(aptPrelude() + aptGet + ` update
+	// aptPreludeNoUpdate: A8 always refreshes the index explicitly right below, so
+	// the prelude's once-per-boot update would only double the (silent, up to 300s
+	// lock-wait) round-trip.
+	up := ctx.Cli.Sudo(aptPreludeNoUpdate() + aptGet + ` update
 ` + aptGet + ` full-upgrade -y` + aptConfOpts)
 	if up.RC != 0 {
 		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
