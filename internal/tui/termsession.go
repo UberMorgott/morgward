@@ -176,15 +176,25 @@ type termSession struct {
 // retired marks the emulator as superseded so the goroutine's last read is discarded
 // instead of pushed at the remote app (see retireEmuDrain); it is the only mutable
 // state, so the goroutine touches no lock the drain path holds.
+//
+// done is closed by the goroutine on its way out, so retireEmuDrain can tell a drain
+// that is genuinely PARKED in a read (needs waking) from one that already returned
+// (must not be written to — nobody would ever take that write).
 type emuDrain struct {
 	retired atomic.Bool
+	done    chan struct{}
 }
+
+// newEmuDrain builds a drain control block. Always use it: a zero emuDrain has a nil
+// done channel and retireEmuDrain would fall back to waking an already-dead drain.
+func newEmuDrain() *emuDrain { return &emuDrain{done: make(chan struct{})} }
 
 // startEmuDrain launches emu's reply-drain goroutine. It closes over the *termSession
 // POINTER and the control block only — never the value-copied model — and takes no
 // session lock beyond the input pipe write.
 func (s *termSession) startEmuDrain(emu *vt.SafeEmulator, d *emuDrain) {
 	go func() {
+		defer close(d.done)
 		buf := make([]byte, 256)
 		for {
 			n, err := emu.Read(buf)
@@ -211,16 +221,26 @@ func (s *termSession) startEmuDrain(emu *vt.SafeEmulator, d *emuDrain) {
 // flag outside SafeEmulator's mutex — a real data race against the drain's Read that the
 // race detector flags. The wake-up write goes through the locked SafeEmulator.Write.
 //
-// ponytail: fire-and-forget goroutine. If the drain happens to observe `retired` between
-// its read and the check, it returns without taking the wake-up and that goroutine parks
-// on the dead emulator's pipe forever — one leaked goroutine in a narrow race, against
-// one leaked goroutine on EVERY retire if we didn't wake at all. A deterministic reap
-// needs an interruptible read, which the vt API does not offer.
+// The emulator's reply pipe is UNBUFFERED, so the wake-up write blocks until the drain
+// reads it — and if the drain has ALREADY exited (its Read errored, or a previous retire
+// reaped it) nobody ever will and the writer parks forever: one leaked goroutine per
+// reflow. d.done makes that case cheap to detect, so the write is only ever issued for a
+// drain that is genuinely still parked.
+//
+// ponytail: the remaining window is the narrow race where the drain observes `retired`
+// between its read and the check and returns without taking the wake-up — one leaked
+// goroutine in a rare interleaving, against one on EVERY retire if we did not wake at
+// all. A deterministic reap needs an interruptible read, which the vt API does not offer.
 func retireEmuDrain(emu *vt.SafeEmulator, d *emuDrain) {
 	if emu == nil || d == nil {
 		return
 	}
 	d.retired.Store(true)
+	select {
+	case <-d.done:
+		return // drain already gone: a wake-up write would block forever
+	default:
+	}
 	go func() { _, _ = emu.Write([]byte("\x1b[6n")) }()
 }
 
@@ -280,7 +300,7 @@ func newTermSessionWith(shell shellFunc, cols, rows int) *termSession {
 	resizeCh := make(chan sshx.WinSize, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	drain := &emuDrain{}
+	drain := newEmuDrain()
 	s := &termSession{
 		emu:           emu,
 		out:           &termOut{emu: emu, drain: drain, ring: newTermRing(termRingCap)},
@@ -480,7 +500,7 @@ func (s *termSession) reflowNow(cols, rows int) {
 
 	// The fresh emulator gets its own reply drain (started here so it is already parked
 	// when the emulator goes live below).
-	freshDrain := &emuDrain{}
+	freshDrain := newEmuDrain()
 	s.startEmuDrain(fresh, freshDrain)
 
 	// Mark `replaying` so the alt-off/alt-on the replay re-emits into `fresh` (firing its

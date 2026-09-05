@@ -178,3 +178,21 @@ func TestProbeErrorRendersUnknown(t *testing.T) {
 		t.Fatalf("security row = %q, want the raw probe error", m.secRootLoginState)
 	}
 }
+
+// A probe whose CHECK could not run is UNKNOWN, not applied — an OK step says the
+// apply worked, not that anyone measured it. markStepsApplied used to clear Err and
+// manufacture a green tick out of a "?" row.
+func TestProbeErrorSurvivesMarkStepsApplied(t *testing.T) {
+	m := dashModel(100, 40)
+	m.dashAuditResults[0].Applied = false
+	m.dashAuditResults[0].Err = "ssh: command timed out"
+	out := m.markStepsApplied(engine.Summary{Results: []engine.StepResult{
+		{ID: m.dashAuditResults[0].Probe.Step, Status: steps.StatusOK},
+	}})
+	if out.dashAuditResults[0].Applied {
+		t.Error("errored probe marked applied off an OK step")
+	}
+	if out.dashAuditResults[0].Err == "" {
+		t.Error("markStepsApplied cleared a probe error instead of leaving the row unknown")
+	}
+}

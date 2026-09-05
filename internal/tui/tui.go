@@ -166,6 +166,11 @@ type model struct {
 	engineCancel context.CancelFunc
 	abort        chan struct{}
 
+	// bgAuditCancel cancels the out-of-band dashboard audit (bgAudit), which dials
+	// its OWN SSH session and so must be stoppable independently of engineCancel:
+	// goBack and the next launchEngine both cancel it.
+	bgAuditCancel context.CancelFunc
+
 	// runGen is the current run generation. launchEngine bumps it for every run;
 	// each streaming listener (listen/listenConn/listenStats/listenProg) captures
 	// the generation it was issued under and tags its messages (genMsg). Update

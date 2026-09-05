@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"regexp"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -133,4 +134,26 @@ func TestEmuDrainSurvivesReflow(t *testing.T) {
 	_, _ = s.out.Write([]byte("\x1b[6n"))
 	waitFor(t, 2*time.Second, func() bool { return len(cprRe.FindAll(rs.sent(), -1)) == 2 },
 		"post-reflow CPR reply (fresh emulator drained)")
+}
+
+// The emulator reply pipe is UNBUFFERED, so retireEmuDrain's wake-up write blocks
+// until the drain reads it. A drain that has ALREADY exited never will, and the
+// writer parks forever — one leaked goroutine per reflow. d.done makes that case
+// detectable, so no write is issued for a dead drain.
+func TestRetireEmuDrainSkipsDeadDrain(t *testing.T) {
+	emu := newTermEmulator(80, 24)
+	d := newEmuDrain()
+	close(d.done) // the drain already returned (Read errored / earlier retire reaped it)
+
+	time.Sleep(20 * time.Millisecond) // let unrelated goroutines settle
+	before := runtime.NumGoroutine()
+	retireEmuDrain(emu, d)
+	time.Sleep(50 * time.Millisecond) // a would-be wake-up goroutine would be parked by now
+
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("retiring a dead drain leaked %d goroutine(s) on the unbuffered reply pipe", after-before)
+	}
+	if !d.retired.Load() {
+		t.Error("retireEmuDrain must still mark the drain retired")
+	}
 }

@@ -982,6 +982,9 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 		m.engineCancel()
 		m.engineCancel = nil
 	}
+	// Same for the out-of-band dashboard audit: it holds its OWN SSH connection.
+	m.cancelBgAudit()
+	m.bgAuditCancel = nil
 	if m.abort != nil {
 		close(m.abort)
 		m.abort = nil
@@ -1112,7 +1115,8 @@ func (m model) dashHome() (tea.Model, tea.Cmd) {
 	}
 	m.dashStale = false
 	m = m.markStepsApplied(m.summary)
-	return m, m.bgAudit()
+	m, cmd := m.bgAudit()
+	return m, cmd
 }
 
 // markStepsApplied folds a finished MUTATING run's real results into the Dashboard
@@ -1136,9 +1140,12 @@ func (m model) markStepsApplied(sum engine.Summary) model {
 	copy(upd, m.dashAuditResults)
 	applied := 0
 	for i := range upd {
-		if ok[upd[i].Probe.Step] {
+		// A probe whose CHECK could not run (Err set) is UNKNOWN, not applied — an OK
+		// step says the apply succeeded, it says nothing about a measurement that never
+		// happened. Clearing Err here manufactured a green ✓ out of a "?" row; such rows
+		// stay "?" until bgAudit measures them for real.
+		if ok[upd[i].Probe.Step] && upd[i].Err == "" {
 			upd[i].Applied = true
-			upd[i].Err = ""
 		}
 		if dashRowSatisfied(upd[i]) {
 			applied++
@@ -1149,21 +1156,37 @@ func (m model) markStepsApplied(sum engine.Summary) model {
 	return m
 }
 
+// cancelBgAudit stops an in-flight background dashboard audit, if any. Nil-safe and
+// idempotent (a context.CancelFunc tolerates repeated calls), so callers only need to
+// clear the field afterwards.
+func (m model) cancelBgAudit() {
+	if m.bgAuditCancel != nil {
+		m.bgAuditCancel()
+	}
+}
+
 // bgAudit runs a read-only audit OUT OF BAND: no phase change, no run log, no
 // spinner — just a one-shot engine.Execute whose final Summary comes back as a
 // bgAuditMsg. It is tagged with the current run generation like every streamed
 // message, so a result that lands after the operator started another run is dropped
 // instead of overwriting fresher state. Returns nil when the form has no usable
 // config (nothing to audit with).
-func (m model) bgAudit() tea.Cmd {
+func (m model) bgAudit() (model, tea.Cmd) {
 	cfg, err := m.formConfig()
 	if err != nil {
-		return nil
+		return m, nil
 	}
 	gen := m.runGen
-	return func() tea.Msg {
+	// Cancelable like the foreground run (engineCancel): the audit dials its own SSH
+	// session, so leaving the Dashboard or starting the next run must be able to stop
+	// it instead of leaving a connection alive until it finishes on its own.
+	m.cancelBgAudit()
+	auditCtx, cancel := context.WithCancel(context.Background())
+	m.bgAuditCancel = cancel
+	return m, func() tea.Msg {
+		defer cancel() // release the ctx once the audit is done, however it ended
 		var sum engine.Summary
-		e := engine.Execute(context.Background(), cfg, "audit", nil, engine.Hooks{
+		e := engine.Execute(auditCtx, cfg, "audit", nil, engine.Hooks{
 			OnProgress: func(p engine.Progress) {
 				if p.Done {
 					sum = p.Summary
@@ -1425,6 +1448,10 @@ func (m model) launchEngine(cfg *config.Config) (tea.Model, tea.Cmd) {
 	// --key / audit path ⇒ unchanged engine behavior. Captured as a LOCAL like the
 	// channels below so goBack reassigning model fields can't disturb this run.
 	preparedKey := m.pendingKey
+	// A new run supersedes any background dashboard audit still in flight (the
+	// re-run paths reach launchEngine WITHOUT going through goBack).
+	m.cancelBgAudit()
+	m.bgAuditCancel = nil
 	runCtx, cancel := context.WithCancel(context.Background())
 	m.engineCancel = cancel
 	m.abort = make(chan struct{})
