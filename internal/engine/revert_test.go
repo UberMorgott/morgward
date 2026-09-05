@@ -165,3 +165,29 @@ func TestRevertSelectStepsUnknownRejected(t *testing.T) {
 		t.Fatalf("unknown=%v, want [BOGUS]", unknown)
 	}
 }
+
+// A5's revert must not stop at removing the drop-ins: `sysctl --system` cannot
+// restore kernel.panic / panic_on_oops (no distro file names them, so the applied
+// live values would survive), and kernel.io_uring_disabled is one-way — the kernel
+// refuses to lower it, so the revert must SAY it only clears on reboot instead of
+// pretending otherwise. A6's revert deliberately leaves fstrim.timer enabled
+// (distro default) and must say so too.
+func TestRevertRestoresLiveKernelKnobs(t *testing.T) {
+	a5 := revertScript["A5"]
+	for _, want := range []string{"sysctl -w kernel.panic=0", "kernel.panic_on_oops=0"} {
+		if !strings.Contains(a5, want) {
+			t.Errorf("A5 revert must reset the live knob %q:\n%s", want, a5)
+		}
+	}
+	if !strings.Contains(revertDetail["A5"], "io_uring") || !strings.Contains(revertDetail["A5"], "reboot") {
+		t.Errorf("A5 revert detail must say io_uring lifts after reboot: %q", revertDetail["A5"])
+	}
+	if !strings.Contains(revertDetail["A6"], "fstrim.timer") {
+		t.Errorf("A6 revert detail must say fstrim.timer stays enabled: %q", revertDetail["A6"])
+	}
+	for id := range revertDetail {
+		if _, ok := revertScript[id]; !ok {
+			t.Errorf("revertDetail has an entry for non-revertable %q", id)
+		}
+	}
+}

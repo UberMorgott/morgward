@@ -41,16 +41,33 @@ import (
 // password it stays locked — that is the image default, not a morgward-introduced
 // state, and SSH access is already restored by the drop-in removal above.
 var revertScript = map[string]string{
-	"A1":   `iptables -F INPUT 2>/dev/null; iptables -P INPUT ACCEPT 2>/dev/null; ip6tables -F INPUT 2>/dev/null; ip6tables -P INPUT ACCEPT 2>/dev/null; rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6 /usr/local/sbin/fw-rollback.sh /root/iptables-backup.v4 /root/iptables-backup.v6; systemctl stop fw-rollback.timer 2>/dev/null || true`,
-	"A2":   steps.RmSSHDropIns + ` /etc/cloud/cloud.cfg.d/99-disable-passwords.cfg; [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ] && sed -ri 's/^\s*PasswordAuthentication\s+no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf 2>/dev/null || true; passwd -u root 2>/dev/null || true; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`,
-	"A3":   `rm -f /etc/fail2ban/jail.local; systemctl restart fail2ban 2>/dev/null || systemctl stop fail2ban 2>/dev/null || true`,
-	"A4":   `rm -f /etc/sysctl.d/99-net-tune.conf /etc/sysctl.d/99-bbr.conf /etc/modules-load.d/bbr.conf /etc/udev/rules.d/60-io-scheduler.rules /etc/sysctl.d/60-morgward-conntrack.conf /etc/modprobe.d/60-morgward-conntrack.conf; sysctl --system >/dev/null 2>&1 || true`,
-	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf /etc/sysctl.d/60-morgward-iouring.conf /etc/sysctl.d/60-morgward-panic.conf /etc/systemd/coredump.conf.d/99-morgward.conf; sysctl --system >/dev/null 2>&1 || true`,
+	"A1": `iptables -F INPUT 2>/dev/null; iptables -P INPUT ACCEPT 2>/dev/null; ip6tables -F INPUT 2>/dev/null; ip6tables -P INPUT ACCEPT 2>/dev/null; rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6 /usr/local/sbin/fw-rollback.sh /root/iptables-backup.v4 /root/iptables-backup.v6; systemctl stop fw-rollback.timer 2>/dev/null || true`,
+	"A2": steps.RmSSHDropIns + ` /etc/cloud/cloud.cfg.d/99-disable-passwords.cfg; [ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ] && sed -ri 's/^\s*PasswordAuthentication\s+no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf 2>/dev/null || true; passwd -u root 2>/dev/null || true; [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`,
+	"A3": `rm -f /etc/fail2ban/jail.local; systemctl restart fail2ban 2>/dev/null || systemctl stop fail2ban 2>/dev/null || true`,
+	"A4": `rm -f /etc/sysctl.d/99-net-tune.conf /etc/sysctl.d/99-bbr.conf /etc/modules-load.d/bbr.conf /etc/udev/rules.d/60-io-scheduler.rules /etc/sysctl.d/60-morgward-conntrack.conf /etc/modprobe.d/60-morgward-conntrack.conf; sysctl --system >/dev/null 2>&1 || true`,
+	// A5: removing the drop-ins is not enough for the two knobs whose kernel default
+	// is NOT restored by `sysctl --system` — no distro file names them, so the live
+	// values would keep the applied setting until the next reboot. kernel.panic /
+	// panic_on_oops are reset explicitly here. kernel.io_uring_disabled is ONE-WAY
+	// (the kernel refuses to lower it), so it can only clear on reboot — said so in
+	// the revert detail rather than pretending a `sysctl -w` would work.
+	"A5":   `rm -f /etc/sysctl.d/99-zz-kernel-harden.conf /etc/sysctl.d/60-morgward-iouring.conf /etc/sysctl.d/60-morgward-panic.conf /etc/systemd/coredump.conf.d/99-morgward.conf; sysctl --system >/dev/null 2>&1 || true; sysctl -w kernel.panic=0 kernel.panic_on_oops=0 >/dev/null 2>&1 || true`,
 	"A6":   `rm -f /etc/systemd/journald.conf.d/99-vps-cap.conf /etc/needrestart/conf.d/50-autorestart.conf /etc/systemd/system.conf.d/limits.conf /etc/chrony/conf.d/90-morgward.conf; systemctl restart systemd-journald 2>/dev/null || true; systemctl restart chrony 2>/dev/null || true`,
 	"A6.5": `rm -f /etc/systemd/resolved.conf.d/99-morgward-dns.conf; systemctl restart systemd-resolved 2>/dev/null || true`,
 	"A6.7": `rm -f /etc/systemd/zram-generator.conf /etc/sysctl.d/99-zram.conf; swapoff /dev/zram0 2>/dev/null || true; sed -i -E '/# morgward-disabled-swap$/{s/^#//;s/[[:space:]]*# morgward-disabled-swap$//}' /etc/fstab 2>/dev/null || true; swapon -a 2>/dev/null || true; systemctl disable --now earlyoom 2>/dev/null || true`,
 	"A9":   `rm -f /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/52-unattended-upgrades-local`,
 	"A10":  `rm -f /etc/audit/rules.d/99-vps.rules /usr/local/sbin/ssh-login-notify.sh; sed -i '/ssh-login-notify/d' /etc/pam.d/sshd 2>/dev/null || true; systemctl restart auditd 2>/dev/null || true`,
+}
+
+// revertDetail overrides the generic "reverted" line for the steps whose revert is
+// deliberately INCOMPLETE, so the operator reads what stayed behind instead of a bare
+// "reverted". Absent id ⇒ "reverted".
+var revertDetail = map[string]string{
+	"A5": "reverted (kernel.panic reset live; io_uring restriction lifts after reboot — the kernel refuses to lower it)",
+	// fstrim.timer is Ubuntu's own baseline (the distro ships and enables it on
+	// discard-capable storage), so disabling it on revert would leave the box WORSE
+	// than morgward found it. A6 only ever enabled what the distro wants enabled.
+	"A6": "reverted (fstrim.timer left enabled: distro default)",
 }
 
 // IsRevertable reports whether the given step ID has a per-tweak revert snippet.
@@ -142,9 +159,13 @@ func RunRevert(ctx context.Context, cfg *config.Config, log *ui.Logger, ids []st
 		r := s.cli.Sudo(revertScript[id])
 		if r.RC == 0 {
 			c.ok++
-			s.log.OK("%s reverted", id)
+			detail, ok := revertDetail[id]
+			if !ok {
+				detail = "reverted"
+			}
+			s.log.OK("%s %s", id, detail)
 			c.results = append(c.results, StepResult{
-				ID: id, Title: title, Status: steps.StatusOK, Detail: "reverted",
+				ID: id, Title: title, Status: steps.StatusOK, Detail: detail,
 			})
 			emit(id, title, i, steps.StatusOK.String())
 			continue
