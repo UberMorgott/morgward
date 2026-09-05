@@ -62,9 +62,41 @@ func TestEncodeKey(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := encodeKey(c.key)
+			got := encodeKey(c.key, false)
 			if !bytes.Equal(got, c.want) {
 				t.Fatalf("encodeKey(%+v) = %v, want %v", c.key, got, c.want)
+			}
+		})
+	}
+}
+
+// TestEncodeKeyAppCursor covers DECCKM (application cursor keys): while the remote app
+// has it enabled, the cursor + Home/End keys must go out in the SS3 form its terminfo
+// declares (kcuu1=\EOA …), or slang-based dialogs (whiptail/needrestart) ignore them.
+// Everything else keeps its normal encoding in both modes.
+func TestEncodeKeyAppCursor(t *testing.T) {
+	cases := []struct {
+		name string
+		key  tea.Key
+		want []byte
+	}{
+		{"up SS3", tea.Key{Code: tea.KeyUp}, []byte("\x1bOA")},
+		{"down SS3", tea.Key{Code: tea.KeyDown}, []byte("\x1bOB")},
+		{"right SS3", tea.Key{Code: tea.KeyRight}, []byte("\x1bOC")},
+		{"left SS3", tea.Key{Code: tea.KeyLeft}, []byte("\x1bOD")},
+		{"home SS3", tea.Key{Code: tea.KeyHome}, []byte("\x1bOH")},
+		{"end SS3", tea.Key{Code: tea.KeyEnd}, []byte("\x1bOF")},
+		{"tab unchanged", tea.Key{Code: tea.KeyTab}, []byte{'\t'}},
+		{"enter unchanged", tea.Key{Code: tea.KeyEnter}, []byte{'\r'}},
+		{"space unchanged", tea.Key{Code: tea.KeySpace}, []byte{' '}},
+		{"pgup unchanged", tea.Key{Code: tea.KeyPgUp}, []byte("\x1b[5~")},
+		{"alt+up SS3", tea.Key{Code: tea.KeyUp, Mod: tea.ModAlt}, []byte("\x1b\x1bOA")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := encodeKey(c.key, true)
+			if !bytes.Equal(got, c.want) {
+				t.Fatalf("encodeKey(%+v, app) = %v, want %v", c.key, got, c.want)
 			}
 		})
 	}

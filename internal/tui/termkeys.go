@@ -19,7 +19,13 @@ import (
 //
 // Returns nil for keys that produce no input (pure modifier presses, unknown
 // extended keys) so the caller writes nothing.
-func encodeKey(k tea.Key) []byte {
+// appCursor is the emulator's live DECCKM (application cursor keys) state: full-screen
+// apps send DECSET ?1 on startup and then expect SS3-form cursor keys (\x1bOA), which is
+// what their terminfo entry (kcuu1=\EOA for xterm*) tells them to look for. ncurses is
+// forgiving and accepts the CSI form too, but slang/newt — whiptail, i.e. every
+// needrestart/debconf dialog — is NOT: it matches the terminfo string literally, so
+// always-CSI arrows are silently dead in those dialogs.
+func encodeKey(k tea.Key, appCursor bool) []byte {
 	ctrl := k.Mod&tea.ModCtrl != 0
 	alt := k.Mod&tea.ModAlt != 0
 
@@ -39,6 +45,11 @@ func encodeKey(k tea.Key) []byte {
 	// Named special keys: canonical byte/escape sequences that do NOT vary with Text
 	// (Text is empty for most of them anyway).
 	if b, ok := specialKeyBytes(k.Code); ok {
+		if appCursor {
+			if ss3, ok := ss3KeyBytes(k.Code); ok {
+				return withAlt(ss3, alt)
+			}
+		}
 		return withAlt(b, alt)
 	}
 
@@ -133,6 +144,28 @@ func specialKeyBytes(code rune) ([]byte, bool) {
 		return []byte("\x1b[23~"), true
 	case tea.KeyF12:
 		return []byte("\x1b[24~"), true
+	}
+	return nil, false
+}
+
+// ss3KeyBytes returns the SS3 (\x1bO…) form of a cursor/Home/End key, used while the
+// remote app has DECCKM (application cursor keys) enabled — exactly what xterm sends in
+// that mode, and what the xterm terminfo entry (kcuu1=\EOA, khome=\EOH, kend=\EOF)
+// declares. Only these six keys change form; everything else keeps its normal encoding.
+func ss3KeyBytes(code rune) ([]byte, bool) {
+	switch code {
+	case tea.KeyUp:
+		return []byte("\x1bOA"), true
+	case tea.KeyDown:
+		return []byte("\x1bOB"), true
+	case tea.KeyRight:
+		return []byte("\x1bOC"), true
+	case tea.KeyLeft:
+		return []byte("\x1bOD"), true
+	case tea.KeyHome:
+		return []byte("\x1bOH"), true
+	case tea.KeyEnd:
+		return []byte("\x1bOF"), true
 	}
 	return nil, false
 }

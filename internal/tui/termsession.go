@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 
 	"github.com/UberMorgott/morgward/internal/sshx"
@@ -150,6 +151,14 @@ type termSession struct {
 	// default, and an app that wants no cursor (vim insert-elsewhere, password prompts)
 	// sends ?25l to turn it off.
 	cursorVisible bool
+
+	// appCursor tracks DECCKM (DECSET/DECRST ?1): true = the remote app asked for
+	// APPLICATION cursor keys and now expects the SS3 form (\x1bOA) instead of the CSI
+	// form (\x1b[A). Updated by the EnableMode/DisableMode callbacks (drain goroutine,
+	// s.mu ONLY — same trivial-callback rule as CursorVisibility), read by the model when
+	// it encodes a keypress. Rebuilt correctly across a reflow: the replay re-emits the
+	// mode sequence into the fresh emulator, which re-fires the callback.
+	appCursor bool
 }
 
 // termScrollback is the number of scrollback lines the emulator retains. A modest
@@ -282,6 +291,21 @@ func (s *termSession) setCallbacks(emu *vt.SafeEmulator) {
 			s.mu.Lock()
 			s.cursorVisible = visible
 			s.mu.Unlock()
+		},
+		EnableMode: func(mode ansi.Mode) {
+			// DECCKM on. Trivial callback on the drain goroutine: take ONLY s.mu.
+			if mode == ansi.Mode(ansi.ModeCursorKeys) {
+				s.mu.Lock()
+				s.appCursor = true
+				s.mu.Unlock()
+			}
+		},
+		DisableMode: func(mode ansi.Mode) {
+			if mode == ansi.Mode(ansi.ModeCursorKeys) {
+				s.mu.Lock()
+				s.appCursor = false
+				s.mu.Unlock()
+			}
 		},
 		AltScreen: func(on bool) {
 			s.mu.Lock()
@@ -494,6 +518,15 @@ func (s *termSession) altScreen() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.alt
+}
+
+// appCursorKeys reports whether the remote app has DECCKM enabled, so the model encodes
+// cursor/Home/End keys in the SS3 form the app's terminfo expects. Read under mu (the
+// EnableMode/DisableMode callbacks write it on the drain goroutine).
+func (s *termSession) appCursorKeys() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appCursor
 }
 
 // cursorShown reports whether the remote wants a visible cursor (DECTCEM ?25 on). Read

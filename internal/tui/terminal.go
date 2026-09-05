@@ -311,7 +311,7 @@ func (m model) terminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return mm, nil
 		}
 	}
-	if b := encodeKey(msg.Key()); len(b) > 0 {
+	if b := encodeKey(msg.Key(), m.term.appCursorKeys()); len(b) > 0 {
 		m.term.write(b)
 		// Real input → snap back to the bottom so the user sees what they're typing and
 		// the response to it (standard terminal follow-on-input behavior).
