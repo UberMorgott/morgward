@@ -2,6 +2,7 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -25,9 +26,28 @@ func (m *model) populateSecurityState() {
 
 	applied := map[string]bool{}
 	seen := map[string]bool{}
+	probeErr := map[string]string{}
 	for _, r := range m.dashAuditRaw {
 		applied[r.Probe.ID] = r.Applied
 		seen[r.Probe.ID] = true
+		if r.Err != "" && !r.Applied {
+			probeErr[r.Probe.ID] = r.Err
+		}
+	}
+	// A probe whose CHECK failed tells us nothing about the access posture — show the
+	// failure verbatim instead of a verdict we did not observe (asserting "root login by
+	// password" off a failed probe would be an outright lie about a security state).
+	for id, e := range probeErr {
+		msg := fmt.Sprintf(t(m.lang, kProbeErrPrefix), e)
+		switch id {
+		case "a2.permitroot":
+			m.secRootLoginState = msg
+		case "a2.passauth":
+			m.secKeyOnlyState = msg
+		case "a2.allowgroups":
+			m.secAdminState = msg
+		}
+		delete(seen, id)
 	}
 
 	if seen["a2.permitroot"] {

@@ -16,6 +16,10 @@ var (
 	// applied as a full-width row band (no padding) so the selected entry reads as picked.
 	fileSelStyle = lipgloss.NewStyle().Background(lipgloss.Color("57")).Foreground(lipgloss.Color("231"))
 
+	// dashNoticeStyle marks the dashboard's run-failure notice: amber, so it reads as a
+	// warning that needs attention without the alarm of the red validation errStyle.
+	dashNoticeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
 	// run-phase box chrome: the rounded border drawn by hand (lipgloss v1.1 has
 	// no native border labels), tinted to match the form's accent.
 	borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("57"))

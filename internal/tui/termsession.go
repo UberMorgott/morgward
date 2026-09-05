@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
@@ -21,9 +23,10 @@ import (
 // the ring into it, then swap `emu` under this same mu — so the drain never writes to a
 // half-built emulator and no bytes are lost or reordered across the swap.
 type termOut struct {
-	mu   sync.Mutex
-	emu  *vt.SafeEmulator // the live emulator; swapped atomically on reflow
-	ring *termRing        // raw-stream mirror for replay-on-resize
+	mu    sync.Mutex
+	emu   *vt.SafeEmulator // the live emulator; swapped atomically on reflow
+	drain *emuDrain        // control block of emu's reply-drain goroutine; swapped with emu
+	ring  *termRing        // raw-stream mirror for replay-on-resize
 }
 
 // Write mirrors p into the ring and forwards it to the current emulator, both under
@@ -161,6 +164,82 @@ type termSession struct {
 	appCursor bool
 }
 
+// emuDrain is the control block of ONE emulator's reply-drain goroutine.
+//
+// WHY a drain exists at all: the emulator answers queries the remote app sends —
+// DSR/CPR (\x1b[6n cursor position), device attributes, mode reports — by writing them
+// into an UNBUFFERED io.Pipe (vt.Emulator.pr/pw). With nobody reading that pipe the
+// answer BLOCKS inside vt.Write, which the drain calls while holding termOut.mu, and
+// the whole terminal wedges: whiptail/dialog/vim all query the cursor on startup.
+// Forwarding the answer to the remote PTY stdin is also simply the correct behaviour.
+//
+// retired marks the emulator as superseded so the goroutine's last read is discarded
+// instead of pushed at the remote app (see retireEmuDrain); it is the only mutable
+// state, so the goroutine touches no lock the drain path holds.
+type emuDrain struct {
+	retired atomic.Bool
+}
+
+// startEmuDrain launches emu's reply-drain goroutine. It closes over the *termSession
+// POINTER and the control block only — never the value-copied model — and takes no
+// session lock beyond the input pipe write.
+func (s *termSession) startEmuDrain(emu *vt.SafeEmulator, d *emuDrain) {
+	go func() {
+		buf := make([]byte, 256)
+		for {
+			n, err := emu.Read(buf)
+			if d.retired.Load() {
+				return // emulator superseded/torn down: this last answer is stale
+			}
+			if n > 0 {
+				s.write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+}
+
+// retireEmuDrain reaps the drain attached to a DEAD emulator — one superseded by a
+// reflow (already swapped out of termOut, so nothing writes to it any more) or torn down
+// by close(). The goroutine is parked in a blocking pipe read, so retiring means marking
+// it and then WAKING it with a query whose answer it discards; it then returns and the
+// emulator (scrollback and all) becomes collectable.
+//
+// vt.Emulator.Close() would be the obvious wake-up, but it flips the emulator's `closed`
+// flag outside SafeEmulator's mutex — a real data race against the drain's Read that the
+// race detector flags. The wake-up write goes through the locked SafeEmulator.Write.
+//
+// ponytail: fire-and-forget goroutine. If the drain happens to observe `retired` between
+// its read and the check, it returns without taking the wake-up and that goroutine parks
+// on the dead emulator's pipe forever — one leaked goroutine in a narrow race, against
+// one leaked goroutine on EVERY retire if we didn't wake at all. A deterministic reap
+// needs an interruptible read, which the vt API does not offer.
+func retireEmuDrain(emu *vt.SafeEmulator, d *emuDrain) {
+	if emu == nil || d == nil {
+		return
+	}
+	d.retired.Store(true)
+	go func() { _, _ = emu.Write([]byte("\x1b[6n")) }()
+}
+
+// queryRe matches the CSI sequences the emulator ANSWERS: device status reports
+// (CSI…n, incl. the \x1b[6n cursor query), device attributes (CSI…c, CSI>…c) and mode
+// requests (CSI…$p). Parameter bytes are 0x30–0x3F and intermediates 0x20–0x2F, so the
+// class below can't swallow a neighbouring sequence.
+var queryRe = regexp.MustCompile("\x1b\\[[0-9;:<=>?]*[ -/]*(?:[nc]|\\$p)")
+
+// stripQueries removes those queries from a stream about to be REPLAYED into a fresh
+// emulator. A query paints nothing, so the replayed screen is unchanged; what it saves is
+// the duplicate answer that would otherwise be injected into the remote app's stdin.
+func stripQueries(b []byte) []byte {
+	if len(b) == 0 {
+		return b
+	}
+	return queryRe.ReplaceAll(b, nil)
+}
+
 // termScrollback is the number of scrollback lines the emulator retains. A modest
 // buffer so paging through `top`/long output works without unbounded growth.
 const termScrollback = 5000
@@ -201,14 +280,18 @@ func newTermSessionWith(shell shellFunc, cols, rows int) *termSession {
 	resizeCh := make(chan sshx.WinSize, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 
+	drain := &emuDrain{}
 	s := &termSession{
 		emu:           emu,
-		out:           &termOut{emu: emu, ring: newTermRing(termRingCap)},
+		out:           &termOut{emu: emu, drain: drain, ring: newTermRing(termRingCap)},
 		pw:            pw,
 		resizeCh:      resizeCh,
 		cancel:        cancel,
 		cursorVisible: true, // DECTCEM ?25 defaults ON
 	}
+	// Start draining the emulator's reply pipe BEFORE any byte can reach it — an
+	// un-drained reply blocks vt.Write under out.mu and hangs the terminal (see emuDrain).
+	s.startEmuDrain(emu, drain)
 
 	// Wire title/bell/alt callbacks BEFORE the drain goroutine starts writing, so there
 	// is no race on first output. Every emulator (initial AND each reflow rebuild) gets
@@ -395,6 +478,11 @@ func (s *termSession) reflowNow(cols, rows int) {
 	fresh := newTermEmulator(cols, rows)
 	s.setCallbacks(fresh)
 
+	// The fresh emulator gets its own reply drain (started here so it is already parked
+	// when the emulator goes live below).
+	freshDrain := &emuDrain{}
+	s.startEmuDrain(fresh, freshDrain)
+
 	// Mark `replaying` so the alt-off/alt-on the replay re-emits into `fresh` (firing its
 	// AltScreen callback synchronously inside fresh.Write below) does NOT arm another
 	// reflow — that would recurse without bound. Set/cleared under reflowMu, but NOT held
@@ -404,15 +492,25 @@ func (s *termSession) reflowNow(cols, rows int) {
 	s.reflowMu.Unlock()
 
 	s.out.mu.Lock()
-	stream := s.out.ring.bytes()
+	// stripQueries: the recorded stream holds every query the app ever sent, and replaying
+	// one would make the emulator answer it a SECOND time — a stale CPR landing in the
+	// remote app's stdin as garbage input. Queries have no screen effect, so dropping them
+	// leaves the replayed picture identical.
+	stream := stripQueries(s.out.ring.bytes())
 	if len(stream) > 0 {
 		// Replay the recorded stream into the fresh emulator. Errors from Write are not
 		// possible for the in-memory emulator; ignore for parity with the drain path.
 		_, _ = fresh.Write(stream)
 	}
+	oldEmu, oldDrain := s.out.emu, s.out.drain
 	s.out.emu = fresh
+	s.out.drain = freshDrain
 	s.emu = fresh
 	s.out.mu.Unlock()
+
+	// Retire the superseded emulator's drain so its goroutine (and the old emulator,
+	// scrollback and all) are reaped instead of parked on a pipe read forever.
+	retireEmuDrain(oldEmu, oldDrain)
 
 	s.reflowMu.Lock()
 	s.replaying = false
@@ -656,6 +754,14 @@ func (s *termSession) close() {
 	}
 	s.altReflowWait = false
 	s.reflowMu.Unlock()
+
+	// Retire the live emulator's reply drain so its goroutine is reaped too. Read the pair
+	// under out.mu so it can't be a torn half of a reflow swap.
+	if s.out != nil {
+		s.out.mu.Lock()
+		retireEmuDrain(s.out.emu, s.out.drain)
+		s.out.mu.Unlock()
+	}
 
 	s.cancel()
 	// Close the write end so io.Copy(stdin, ShellIO.In) in Shell hits EOF and that

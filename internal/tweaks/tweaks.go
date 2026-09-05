@@ -49,6 +49,7 @@ type Result struct {
 	// Informational mirrors Probe.Informational so renderers that only carry the
 	// Result can treat the row as a neutral state report (not a pass/fail verdict).
 	Informational bool
+	Err           string // probe command failed; Applied is unknown
 }
 
 // Tally counts the HARD probes (Informational rows are neutral state reports, not

@@ -42,6 +42,8 @@ func TestEncodeKey(t *testing.T) {
 		{"unicode", tea.Key{Code: 'é', Text: "é"}, []byte("é")},
 		{"enter", tea.Key{Code: tea.KeyEnter}, []byte{'\r'}},
 		{"tab", tea.Key{Code: tea.KeyTab}, []byte{'\t'}},
+		{"shift+tab backtab", tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}, []byte("\x1b[Z")},
+		{"alt+shift+tab backtab", tea.Key{Code: tea.KeyTab, Mod: tea.ModShift | tea.ModAlt}, []byte("\x1b\x1b[Z")},
 		{"escape", tea.Key{Code: tea.KeyEscape}, []byte{0x1b}},
 		{"backspace", tea.Key{Code: tea.KeyBackspace}, []byte{0x7f}},
 		{"space", tea.Key{Code: tea.KeySpace}, []byte{' '}},

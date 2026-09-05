@@ -64,6 +64,15 @@ type logMsg string
 
 type doneMsg struct{ err error }
 
+// bgAuditMsg carries the result of the BACKGROUND dashboard refresh (see bgAudit): a
+// read-only audit run out of band after a mutating run, so the operator gets the
+// Dashboard back instantly instead of watching a reconnect. A failed background audit
+// is silent — the grid keeps the marks folded in from the run's own step results.
+type bgAuditMsg struct {
+	sum engine.Summary
+	err error
+}
+
 // genMsg tags a streamed run message (logMsg/doneMsg/connMsg/statMsg/progMsg) with
 // the run generation that produced it. Every in-session re-run path
 // (summaryGoHome's dashStale re-audit, launchApplyTweaks, startSteps, startRevert)
@@ -266,6 +275,11 @@ type model struct {
 	// path (summaryGoHome) sees it set, it clears the flag and re-runs the audit so
 	// the grid reflects the post-apply state instead of stale connect-time results.
 	dashStale bool
+	// dashNotice is a one-line localized notice shown under the audit status line —
+	// currently the "the run failed: <detail>" message an engine error leaves behind
+	// when the session SURVIVES it (see runExitHome). Empty = no notice row rendered,
+	// so the default Dashboard layout is unchanged. Cleared by the next run launch.
+	dashNotice string
 
 	// Security menu state (phaseSecurity). All plain strings/bool — value-copy safe.
 	// The three sec*State fields are derived from the audit BEFORE entering the menu
