@@ -24,7 +24,9 @@ func TestSummaryCarriesFacts(t *testing.T) {
 // compile-time guard: if prepare's read-only parameter is removed, Audit's call
 // site below stops compiling.
 func TestAuditReadOnlyContract(t *testing.T) {
-	// The function value must be assignable; this fails to compile if Audit's
-	// signature drifts from (ctx, cfg, *ui.Logger, Hooks) error.
-	var _ func(context.Context, *config.Config, *ui.Logger, Hooks) error = Audit
+	// The call below fails to compile if Audit's signature drifts from
+	// (ctx, cfg, *ui.Logger, Hooks) error.
+	var _ = func(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error {
+		return Audit(ctx, cfg, log, h)
+	}
 }

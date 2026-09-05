@@ -11,7 +11,7 @@ func TestFilesMenuOpenClose(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a.conf"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	if !m.files.menuOpen {
 		t.Fatal("'m' must open the context menu")
 	}
@@ -22,7 +22,7 @@ func TestFilesMenuOpenClose(t *testing.T) {
 		t.Fatal("menuSel must land on an enabled item")
 	}
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.menuOpen {
 		t.Fatal("Esc must close the menu")
 	}
@@ -34,7 +34,7 @@ func TestFilesMenuPasteEnablement(t *testing.T) {
 	m.files.sel = 0
 	// Empty clipboard → Paste present but disabled.
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	if it, ok := findMenuItem(m.files.menuItems, "v"); !ok || it.enabled {
 		t.Fatalf("Paste must be present+disabled with empty clip: ok=%v enabled=%v", ok, it.enabled)
 	}
@@ -42,7 +42,7 @@ func TestFilesMenuPasteEnablement(t *testing.T) {
 	// Set a clip → Paste enabled.
 	m.files.clip = fileClip{path: "/x/y"}
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	if it, ok := findMenuItem(m.files.menuItems, "v"); !ok || !it.enabled {
 		t.Fatalf("Paste must be enabled with a clip set: ok=%v enabled=%v", ok, it.enabled)
 	}
@@ -53,7 +53,7 @@ func TestFilesMenuDisabledOnParent(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}})
 	m.files.sel = 0 // ".."
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	for _, key := range []string{"r", "d", "c", "x"} {
 		if it, ok := findMenuItem(m.files.menuItems, key); ok && it.enabled {
 			t.Fatalf("menu item %q must be disabled on '..'", key)
@@ -66,11 +66,11 @@ func TestFilesMenuSuppressesListing(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}, {name: "b"}})
 	m.files.sel = 0
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	selBefore := m.files.sel
 	menuSelBefore := m.files.menuSel
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'j'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.sel != selBefore {
 		t.Fatal("listing sel must not move while the menu is open")
 	}
@@ -84,7 +84,7 @@ func TestFilesMenuPickRoutesToOp(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: "a"}})
 	m.files.sel = 0
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	// Move menuSel onto the New-folder item, then Enter.
 	idx, ok := menuIndexOf(m.files.menuItems, "n")
 	if !ok {
@@ -92,7 +92,7 @@ func TestFilesMenuPickRoutesToOp(t *testing.T) {
 	}
 	m.files.menuSel = idx
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.menuOpen {
 		t.Fatal("picking an item must close the menu")
 	}
@@ -106,14 +106,14 @@ func TestFilesMenuPickDelete(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "victim"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'm'})
-	m = n.(model)
+	m = asModel(t, n)
 	idx, ok := menuIndexOf(m.files.menuItems, "d")
 	if !ok {
 		t.Fatal("menu missing Delete item")
 	}
 	m.files.menuSel = idx
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.promptKind != fpConfirmDelete || m.files.promptArg != "victim" {
 		t.Fatalf("picking Delete must open the delete confirm: kind=%d arg=%q", m.files.promptKind, m.files.promptArg)
 	}

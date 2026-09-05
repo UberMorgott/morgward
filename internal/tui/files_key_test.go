@@ -24,20 +24,20 @@ func TestFilesKeyRenamePromptSuppressesListing(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "old.conf"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'r'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.promptKind != fpRename || m.files.prompt.Value() != "old.conf" {
 		t.Fatalf("'r' must open a rename prompt seeded with the name: kind=%d val=%q", m.files.promptKind, m.files.prompt.Value())
 	}
 	// A 'j' now edits the prompt (listing suppressed): sel stays put, input grows.
 	selBefore := m.files.sel
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.sel != selBefore {
 		t.Fatal("listing key must be suppressed while prompting")
 	}
 	// Esc cancels back to no prompt.
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("Esc must close the prompt")
 	}
@@ -48,7 +48,7 @@ func TestFilesKeyDeleteConfirmNoCancels(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "victim"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'd'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.promptKind != fpConfirmDelete || m.files.promptArg != "victim" {
 		t.Fatalf("'d' must open a delete confirm for the selected entry: kind=%d arg=%q", m.files.promptKind, m.files.promptArg)
 	}
@@ -57,7 +57,7 @@ func TestFilesKeyDeleteConfirmNoCancels(t *testing.T) {
 	}
 	// 'n' = no → confirm closes, nothing deleted (nil cli would have set err on a real op).
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("'n' must close the confirm")
 	}
@@ -72,13 +72,13 @@ func TestFilesKeyDeleteRequiresExplicitY(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "victim"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'd'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.promptKind != fpConfirmDelete {
 		t.Fatalf("'d' must open a delete confirm: kind=%d", m.files.promptKind)
 	}
 	// A bare Enter must cancel (NOT run the delete) — nil cli would have set f.err if it ran.
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("Enter must close the delete confirm")
 	}
@@ -93,13 +93,13 @@ func TestFilesTabMidPromptKeepsPrompt(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "old"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'r'}) // open rename prompt
-	m = n.(model)
+	m = asModel(t, n)
 	if !m.files.prompting() {
 		t.Fatal("precondition: rename prompt should be open")
 	}
 	// Route through workspaceKey (the real entry point that intercepts Tab) with a bare Tab.
 	n, _ = m.workspaceKey(tea.KeyPressMsg{Code: tea.KeyTab})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.wsTab != wsFiles {
 		t.Fatal("Tab mid-prompt must NOT switch to the Terminal tab")
 	}
@@ -113,12 +113,12 @@ func TestFilesKeyMutationRejectsParentMarker(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}})
 	m.files.sel = 0 // ".."
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'r'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("rename on '..' must be a no-op")
 	}
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'd'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("delete on '..' must be a no-op")
 	}
@@ -129,7 +129,7 @@ func TestFilesKeyCopySetsClip(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "src"}})
 	m.files.sel = 1
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'c'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.clip.path != "/etc/src" || m.files.clip.cut {
 		t.Fatalf("copy clip = %+v want /etc/src cut=false", m.files.clip)
 	}
@@ -139,17 +139,17 @@ func TestFilesKeyCopySetsClip(t *testing.T) {
 func TestFilesKeyMovesSelection(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}, {name: "b"}})
 	next, _ := m.filesKey(tea.KeyPressMsg{Code: 'j'})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.files.sel != 1 {
 		t.Fatalf("j → sel=%d want 1", m.files.sel)
 	}
 	next, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyDown})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.files.sel != 2 {
 		t.Fatalf("down → sel=%d want 2", m.files.sel)
 	}
 	next, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyDown}) // past end → clamp
-	m = next.(model)
+	m = asModel(t, next)
 	if m.files.sel != 2 {
 		t.Fatalf("down past end → sel=%d want 2 (clamped)", m.files.sel)
 	}
@@ -159,7 +159,7 @@ func TestFilesKeyMovesSelection(t *testing.T) {
 func TestFilesKeyAddressFocusToggle(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: "a"}})
 	next, _ := m.filesKey(tea.KeyPressMsg{Code: ':'})
-	m = next.(model)
+	m = asModel(t, next)
 	if !m.files.addrFocus {
 		t.Fatal("':' must focus the address bar")
 	}
@@ -167,7 +167,7 @@ func TestFilesKeyAddressFocusToggle(t *testing.T) {
 		t.Fatalf("address bar seeded to cwd, got %q", m.files.addr.Value())
 	}
 	next, _ = m.filesKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.files.addrFocus {
 		t.Fatal("Esc must unfocus the address bar")
 	}
@@ -179,7 +179,7 @@ func TestFilesActivateFileOpens(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: "a.conf"}})
 	m.files.sel = 1 // a regular file
 	n, cmd := m.filesActivateSelected()
-	m = n.(model)
+	m = asModel(t, n)
 	if cmd == nil {
 		t.Fatal("activating a file must return the async open Cmd (was a no-op nil)")
 	}
@@ -207,7 +207,7 @@ func TestFilesKeyToggleHidden(t *testing.T) {
 	// Default: visible = [.., a]; select the last visible row.
 	m.files.sel = 1
 	next, _ := m.filesKey(tea.KeyPressMsg{Code: '.'})
-	m = next.(model)
+	m = asModel(t, next)
 	if !m.files.showHidden {
 		t.Fatal("'.' must toggle showHidden on")
 	}
@@ -216,7 +216,7 @@ func TestFilesKeyToggleHidden(t *testing.T) {
 	}
 	// Toggle back off; sel (was 1 → "a") must stay in range of the 2 visible rows.
 	next, _ = m.filesKey(tea.KeyPressMsg{Code: '.'})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.files.sel >= len(m.files.visibleEntries()) {
 		t.Fatalf("sel=%d out of visible range %d after toggle", m.files.sel, len(m.files.visibleEntries()))
 	}

@@ -162,7 +162,7 @@ func TestSecuritySafeButtonsRunSteps(t *testing.T) {
 		m.inputs[fHost].SetValue("")
 		m.inputs[fPass].SetValue("secret")
 		next, _ := m.securityAction(tc.btn)
-		mm := next.(model)
+		mm := asModel(t, next)
 		if mm.command != "step" {
 			t.Fatalf("btn %v: command=%q want \"step\"", tc.btn, mm.command)
 		}
@@ -182,7 +182,7 @@ func TestSecurityDangerRequiresConfirm(t *testing.T) {
 
 	// First trigger → confirm raised, NO apply.
 	next, _ := m.securityAction(secBtnKeyOnlyDanger)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if !mm.secDangerConfirm {
 		t.Fatalf("DANGER action did not raise the lockout confirm")
 	}
@@ -192,7 +192,7 @@ func TestSecurityDangerRequiresConfirm(t *testing.T) {
 
 	// Enter confirms → launches RunSteps over the danger IDs.
 	n2, _ := mm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m2 := n2.(model)
+	m2 := asModel(t, n2)
 	if m2.command != "step" {
 		t.Fatalf("after confirm, command=%q want \"step\"", m2.command)
 	}
@@ -207,12 +207,12 @@ func TestSecurityDangerRequiresConfirm(t *testing.T) {
 func TestSecurityDangerEscCancels(t *testing.T) {
 	m := secModel(100, 40)
 	next, _ := m.securityAction(secBtnKeyOnlyDanger)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if !mm.secDangerConfirm {
 		t.Fatalf("DANGER action did not raise the confirm")
 	}
 	n2, _ := mm.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m2 := n2.(model)
+	m2 := asModel(t, n2)
 	if m2.secDangerConfirm {
 		t.Fatalf("esc did not cancel the danger confirm")
 	}
@@ -234,7 +234,7 @@ func TestDashboardSecurityButtonOpensMenu(t *testing.T) {
 	secX := pillRanges(m.dashButtonNames(), dashButtonStartCol)[1][0] + 1
 
 	next, _ := m.dashboardClick(secX, btnRow)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseSecurity {
 		t.Fatalf("Security button → phase %v, want phaseSecurity", mm.phase)
 	}
@@ -302,8 +302,8 @@ func TestSecurityBackPillHitTest(t *testing.T) {
 		t.Fatalf("securityView missing the back pill label")
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: backY, Button: tea.MouseLeft})
-	if next.(model).phase != phaseDashboard {
-		t.Fatalf("security back click → phase %v, want phaseDashboard", next.(model).phase)
+	if asModel(t, next).phase != phaseDashboard {
+		t.Fatalf("security back click → phase %v, want phaseDashboard", asModel(t, next).phase)
 	}
 }
 
@@ -316,7 +316,7 @@ func TestSecurityBackPillSwallowedByDangerConfirm(t *testing.T) {
 	backY := m.secBackRow()
 	backX := pillRanges([]string{t2(m.lang, kWikiBack)}, wikiBackStartCol)[0][0] + 1
 	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: backY, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseSecurity {
 		t.Fatalf("back click while danger-confirm armed navigated to %v; want it swallowed (phaseSecurity)", mm.phase)
 	}
@@ -334,5 +334,8 @@ func TestSecurityModelValueCopySafe(t *testing.T) {
 	}
 	if m.secDangerConfirm {
 		t.Fatalf("value copy aliased secDangerConfirm")
+	}
+	if cp.secRootLoginState != "MUTATED" || !cp.secDangerConfirm {
+		t.Fatalf("the copy did not keep its own mutation: %q / %v", cp.secRootLoginState, cp.secDangerConfirm)
 	}
 }

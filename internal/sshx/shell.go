@@ -109,7 +109,7 @@ func (c *Client) Shell(ctx context.Context, sio ShellIO, resize <-chan WinSize) 
 // pty shell over any ptySession. Split out from Shell so a fake session can drive
 // the exit-classification + resize-forwarding paths without a live SSH server.
 func runShellSession(ctx context.Context, sess ptySession, sio ShellIO, resize <-chan WinSize) error {
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	sio = defaultShellIO(sio)
 
 	if err := sess.RequestPty(sio.Term, sio.Rows, sio.Cols, ptyModes); err != nil {
@@ -178,8 +178,7 @@ func runShellSession(ctx context.Context, sess ptySession, sio ShellIO, resize <
 func classifyShellExit(err error) error {
 	// A non-zero remote exit status is a normal end of an interactive session, not
 	// a transport failure. errors.As also matches a wrapped ExitError.
-	var ee *ssh.ExitError
-	if errors.As(err, &ee) {
+	if _, ok := errors.AsType[*ssh.ExitError](err); ok {
 		return nil
 	}
 	return err

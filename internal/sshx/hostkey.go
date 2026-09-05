@@ -100,7 +100,7 @@ func parseSHA256Fingerprint(s string) ([]byte, error) {
 func (p *HostKeyPin) verify(hostport string, remote net.Addr, key ssh.PublicKey) error {
 	if p.knownHostsCB != nil {
 		if err := p.knownHostsCB(hostport, remote, key); err != nil {
-			return fmt.Errorf("%w: %s: %v", ErrHostKeyMismatch, p.desc, err)
+			return fmt.Errorf("%w: %s: %w", ErrHostKeyMismatch, p.desc, err)
 		}
 		return nil
 	}

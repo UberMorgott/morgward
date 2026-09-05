@@ -244,6 +244,8 @@ func (m model) securityAction(btn secButton) (tea.Model, tea.Cmd) {
 		// Raise the explicit lockout confirm; apply launches on Enter (key handler).
 		m.secDangerConfirm = true
 		return m, nil
+	case secBtnNone:
+		// No button — nothing to run.
 	}
 	return m, nil
 }
@@ -332,6 +334,8 @@ func (m model) securityClick(x, y int) (tea.Model, tea.Cmd) {
 		return m.securityAction(secBtnCryptoKey)
 	case secBtnKeyOnlyDanger:
 		return m.securityAction(secBtnKeyOnlyDanger)
+	case secBtnNone:
+		// Click landed outside every pill.
 	}
 	return m, nil
 }

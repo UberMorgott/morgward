@@ -151,8 +151,8 @@ func (m model) keyLayers() []*lipgloss.Layer {
 	// No cancel token ⇒ the whole pill starts the run (defensive; the localized text
 	// always contains "[Esc"), leaving CANCEL zero-width and thus unhittable.
 	splitX := contentX0 + pillW
-	if esc := strings.Index(full, "[Esc"); esc >= 0 {
-		splitX = contentX0 + pillPad + lipgloss.Width(full[:esc])
+	if before, _, ok := strings.Cut(full, "[Esc"); ok {
+		splitX = contentX0 + pillPad + lipgloss.Width(before)
 	}
 	add(idKeyStart, last, contentX0, splitX-contentX0)
 	add(idKeyCancel, last, splitX, contentX0+pillW-splitX)

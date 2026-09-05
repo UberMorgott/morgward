@@ -79,7 +79,7 @@ func TestMatrixRowClickOpensWiki(t *testing.T) {
 	m := matrixModel(100, 40)
 	y := summaryBodyTopRow + 3 // the A4-bbr row
 	next, _ := m.Update(tea.MouseClickMsg{X: 3, Y: y, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseWiki {
 		t.Fatalf("matrix row click → phase %v, want phaseWiki", mm.phase)
 	}
@@ -94,8 +94,8 @@ func TestMatrixRowClickOpensWiki(t *testing.T) {
 	}
 	// Esc from the wiki returns to the matrix (wikiReturn round-trip).
 	n2, _ := mm.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if n2.(model).phase != phaseMatrix {
-		t.Fatalf("esc from wiki → phase %v, want phaseMatrix", n2.(model).phase)
+	if asModel(t, n2).phase != phaseMatrix {
+		t.Fatalf("esc from wiki → phase %v, want phaseMatrix", asModel(t, n2).phase)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestMatrixBackPillHitTest(t *testing.T) {
 	}
 	// A click on the back pill via Update returns to the form (goBack).
 	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: backY, Button: tea.MouseLeft})
-	if next.(model).phase != phaseForm {
-		t.Fatalf("back pill click → phase %v, want phaseForm", next.(model).phase)
+	if asModel(t, next).phase != phaseForm {
+		t.Fatalf("back pill click → phase %v, want phaseForm", asModel(t, next).phase)
 	}
 }

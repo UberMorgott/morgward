@@ -162,7 +162,7 @@ func TestWikiBackButtonHitTest(t *testing.T) {
 
 	// Dispatching the click through Update returns to wikiReturn.
 	next, _ := m.Update(mouseClickAt(wikiBackStartCol+1, row))
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("back-button click → phase %v, want phaseDashboard (wikiReturn)", mm.phase)
 	}

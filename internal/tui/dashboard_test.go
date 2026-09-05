@@ -51,7 +51,7 @@ func TestConnectIsReadOnlyAudit(t *testing.T) {
 	// Click the Connect pill (first pill on the frStart row).
 	startX := m.pillColStart() + 1
 	next, _ := m.formClick(startX, formBodyTopRow+si)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command != "audit" {
 		t.Fatalf("Connect (mouse) launched command %q, want \"audit\" (read-only); apply path must NOT run", mm.command)
 	}
@@ -62,7 +62,7 @@ func TestConnectIsReadOnlyAudit(t *testing.T) {
 	m2.inputs[fPass].SetValue("secret")
 	m2.focus = rowStart
 	next2, _ := m2.updateForm(tea.KeyPressMsg{Code: tea.KeyEnter})
-	mm2 := next2.(model)
+	mm2 := asModel(t, next2)
 	if mm2.command != "audit" {
 		t.Fatalf("Connect (keyboard) launched command %q, want \"audit\"", mm2.command)
 	}
@@ -235,7 +235,7 @@ func TestDashboardApplyShowsA8Confirm(t *testing.T) {
 	applyX := pillRanges(m.dashButtonNames(), dashButtonStartCol)[0][0] + 1
 
 	next, _ := m.dashboardClick(applyX, btnRow)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if !mm.dashApplyConfirm {
 		t.Fatalf("Apply click did not raise the A8 reboot confirm")
 	}
@@ -248,7 +248,7 @@ func TestDashboardApplyShowsA8Confirm(t *testing.T) {
 	mm.inputs[fHost].SetValue("")
 	mm.inputs[fPass].SetValue("secret")
 	n2, _ := mm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m2 := n2.(model)
+	m2 := asModel(t, n2)
 	if m2.command != "step" {
 		t.Fatalf("after confirm, command=%q want \"step\"", m2.command)
 	}
@@ -272,7 +272,7 @@ func TestDashboardAuditRowClickOpensWiki(t *testing.T) {
 	// Click the first grid row (the BBR result, Step "A4") in the scroll region.
 	row := m.dashScrollTopRow(innerW)
 	next, _ := m.dashboardClick(4, row)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseWiki {
 		t.Fatalf("audit row click → phase %v, want phaseWiki", mm.phase)
 	}

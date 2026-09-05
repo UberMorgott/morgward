@@ -306,7 +306,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ctrl+l also toggles. In the form phase 'l' is only intercepted when focus is
 		// NOT on a text input, so typing 'l' into a field still works.
 		if s == "ctrl+l" ||
-			(s == "l" && !(m.phase == phaseForm && m.focus < nInputs)) {
+			(s == "l" && (m.phase != phaseForm || m.focus >= nInputs)) {
 			m.toggleLang()
 			return m, nil
 		}
@@ -503,6 +503,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.scrollBy(1)
 			}
 			return m, nil
+		case phaseForm, phaseRun, phaseTerminal:
+			// Not handled here: the form has its own key path, and run/done keys fall
+			// through to the shared handler below.
 		}
 		// run/done phase
 		switch s {
@@ -732,8 +735,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// 2c: an open-sync upload-back conflict (remote mtime moved since the file was opened)
 			// is a localized, actionable notice ("press P to overwrite"), not a raw English error.
-			var conflict sftpConflictErr
-			if errors.As(msg.err, &conflict) {
+			if _, ok := errors.AsType[sftpConflictErr](msg.err); ok {
 				m.files.setErr(t(m.lang, kFmConflict))
 				return m, nil
 			}

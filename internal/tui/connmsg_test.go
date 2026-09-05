@@ -14,7 +14,7 @@ func route(t *testing.T, info monitor.ConnInfo) (model, func()) {
 	t.Helper()
 	start := model{phase: phaseRun}
 	next, _ := start.Update(tea.Msg(connMsg(info)))
-	m := next.(model)
+	m := asModel(t, next)
 	stop := func() {
 		if m.stopSample != nil {
 			m.stopSample()

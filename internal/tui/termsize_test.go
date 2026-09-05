@@ -31,7 +31,7 @@ func TestWindowSizeIgnoresScreenBufferHeight(t *testing.T) {
 
 	m := newModel()
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 3000})
-	mm := next.(model)
+	mm := asModel(t, next)
 
 	if mm.h == 3000 {
 		t.Fatal("screen-buffer height 3000 reached m.h — the layout would pin the footer off-screen")
@@ -51,7 +51,7 @@ func TestWindowSizeFallsBackToMsg(t *testing.T) {
 
 	m := newModel()
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.w != 100 || mm.h != 40 {
 		t.Fatalf("m.w,m.h = %d,%d, want the message's 100,40 when there is no console", mm.w, mm.h)
 	}

@@ -78,7 +78,7 @@ func TestKeyBackHitTestClipped(t *testing.T) {
 		// And the real click path must leave the phase alone.
 		row := keyPillRowY(m)
 		next, _ := m.Update(tea.MouseClickMsg{X: contentX0, Y: row, Button: tea.MouseLeft})
-		if got := next.(model).phase; got != phaseKey {
+		if got := asModel(t, next).phase; got != phaseKey {
 			t.Fatalf("pem=%d: click at the clipped back-pill row y=%d → phase %v, want phaseKey",
 				pem, row, got)
 		}
@@ -129,13 +129,13 @@ func TestKeyPreRunStartCancelHitTest(t *testing.T) {
 	// The cancel half begins where the "[Esc]" token starts within the rendered pill.
 	// strings.Index is a BYTE offset; the prefix is Cyrillic, so convert to display cells.
 	full := t2(m.lang, kKeyPreRunButtons)
-	escByte := strings.Index(full, "[Esc")
-	if escByte < 0 {
+	before, _, ok := strings.Cut(full, "[Esc")
+	if !ok {
 		t.Fatalf("pre-run pill text %q has no [Esc] token", full)
 	}
 	// +1 for the pill's left padding (Padding(0,1)) added by pillOnStyle; the prefix
 	// width is in display cells (lipgloss.Width).
-	cancelX := contentX0 + 1 + lipgloss.Width(full[:escByte])
+	cancelX := contentX0 + 1 + lipgloss.Width(before)
 	if got := m.hit(cancelX, row); got != idKeyCancel {
 		t.Fatalf("click at the [Esc] half (x=%d) hit %q, want %q", cancelX, got, idKeyCancel)
 	}
@@ -158,7 +158,7 @@ func TestKeyPreRunStartClickLaunches(t *testing.T) {
 	m.inputs[fHost].SetValue("") // validation short-circuits → no goroutine
 	row := keyPillRowY(m)
 	next, _ := m.Update(tea.MouseClickMsg{X: 3, Y: row, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.keyPreRun {
 		t.Fatalf("start click left keyPreRun=true; confirmPreRunKey should clear it")
 	}
@@ -172,9 +172,10 @@ func TestKeyPreRunCancelClickAborts(t *testing.T) {
 	m.keyReturn = phaseForm
 	row := keyPillRowY(m)
 	full := t2(m.lang, kKeyPreRunButtons)
-	cancelX := 2 + 1 + lipgloss.Width(full[:strings.Index(full, "[Esc")])
+	beforeEsc, _, _ := strings.Cut(full, "[Esc")
+	cancelX := 2 + 1 + lipgloss.Width(beforeEsc)
 	next, _ := m.Update(tea.MouseClickMsg{X: cancelX, Y: row, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.keyPreRun {
 		t.Fatalf("cancel click left keyPreRun=true; abort should clear it")
 	}
@@ -206,8 +207,8 @@ func TestKeyPostRunDismissHitTest(t *testing.T) {
 		t.Fatalf("post-run keyView missing the back pill label")
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: row, Button: tea.MouseLeft})
-	if next.(model).phase != phaseSummary {
-		t.Fatalf("post-run back click → phase %v, want phaseSummary (keyReturn)", next.(model).phase)
+	if asModel(t, next).phase != phaseSummary {
+		t.Fatalf("post-run back click → phase %v, want phaseSummary (keyReturn)", asModel(t, next).phase)
 	}
 }
 
@@ -245,9 +246,10 @@ func keyScrollModel(t *testing.T) (m model, barX, topRow, viewH, total, maxOff i
 	return m, m.boxWidth() - 1, topRow, viewH, total, total - viewH
 }
 
-func keyPress(m model, msg tea.KeyPressMsg) model {
+func keyPress(tb testing.TB, m model, msg tea.KeyPressMsg) model {
+	tb.Helper()
 	next, _ := m.Update(msg)
-	return next.(model)
+	return asModel(tb, next)
 }
 
 // TestKeyViewScrollKeys asserts ↑↓ and k/j scroll the key viewer, clamp at both ends,
@@ -256,37 +258,37 @@ func keyPress(m model, msg tea.KeyPressMsg) model {
 func TestKeyViewScrollKeys(t *testing.T) {
 	m, _, _, _, total, maxOff := keyScrollModel(t)
 
-	m = keyPress(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = keyPress(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.keyScroll != 1 {
 		t.Fatalf("↓ → keyScroll=%d, want 1", m.keyScroll)
 	}
-	m = keyPress(m, tea.KeyPressMsg{Text: "j", Code: 'j', BaseCode: 'j'})
+	m = keyPress(t, m, tea.KeyPressMsg{Text: "j", Code: 'j', BaseCode: 'j'})
 	if m.keyScroll != 2 {
 		t.Fatalf("j → keyScroll=%d, want 2", m.keyScroll)
 	}
-	m = keyPress(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	m = keyPress(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.keyScroll != 1 {
 		t.Fatalf("↑ → keyScroll=%d, want 1", m.keyScroll)
 	}
-	m = keyPress(m, tea.KeyPressMsg{Text: "k", Code: 'k', BaseCode: 'k'})
+	m = keyPress(t, m, tea.KeyPressMsg{Text: "k", Code: 'k', BaseCode: 'k'})
 	if m.keyScroll != 0 {
 		t.Fatalf("k → keyScroll=%d, want 0", m.keyScroll)
 	}
-	m = keyPress(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	m = keyPress(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.keyScroll != 0 {
 		t.Fatalf("↑ at the top → keyScroll=%d, want it clamped to 0", m.keyScroll)
 	}
 	// Cyrillic layout: the physical j/k keys carry BaseCode 'j'/'k' but produce "о"/"л".
-	m = keyPress(m, tea.KeyPressMsg{Text: "о", Code: 'о', BaseCode: 'j'})
+	m = keyPress(t, m, tea.KeyPressMsg{Text: "о", Code: 'о', BaseCode: 'j'})
 	if m.keyScroll != 1 {
 		t.Fatalf("Cyrillic j → keyScroll=%d, want 1 (physKey must be layout-independent)", m.keyScroll)
 	}
-	m = keyPress(m, tea.KeyPressMsg{Text: "л", Code: 'л', BaseCode: 'k'})
+	m = keyPress(t, m, tea.KeyPressMsg{Text: "л", Code: 'л', BaseCode: 'k'})
 	if m.keyScroll != 0 {
 		t.Fatalf("Cyrillic k → keyScroll=%d, want 0", m.keyScroll)
 	}
 	for range total + 5 {
-		m = keyPress(m, tea.KeyPressMsg{Code: tea.KeyDown})
+		m = keyPress(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	if m.keyScroll != maxOff {
 		t.Fatalf("↓ past the end → keyScroll=%d, want it clamped to %d", m.keyScroll, maxOff)
@@ -300,17 +302,17 @@ func TestKeyViewScrollWheel(t *testing.T) {
 	const wheelStep = 3 // same constant the wheel handler uses
 
 	next, _ := m.Update(wheelMsg(tea.MouseWheelDown))
-	m = next.(model)
+	m = asModel(t, next)
 	if m.keyScroll != wheelStep {
 		t.Fatalf("wheel down → keyScroll=%d, want %d", m.keyScroll, wheelStep)
 	}
 	next, _ = m.Update(wheelMsg(tea.MouseWheelUp))
-	m = next.(model)
+	m = asModel(t, next)
 	if m.keyScroll != 0 {
 		t.Fatalf("wheel up → keyScroll=%d, want 0", m.keyScroll)
 	}
 	next, _ = m.Update(wheelMsg(tea.MouseWheelUp))
-	m = next.(model)
+	m = asModel(t, next)
 	if m.keyScroll != 0 {
 		t.Fatalf("wheel up at the top → keyScroll=%d, want it clamped to 0", m.keyScroll)
 	}
@@ -351,7 +353,7 @@ func TestKeyViewScrollbarDrag(t *testing.T) {
 		t.Fatalf("drag to the track bottom: keyScroll=%d, want %d", m.keyScroll, maxOff)
 	}
 	next, _ := m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.dragging {
 		t.Fatal("release must end the drag")
 	}
@@ -412,7 +414,7 @@ func TestKeyScrollResetsOnEntry(t *testing.T) {
 	m.command = "run"
 	m.keyScroll = 7 // stale offset from an earlier visit
 	next, _ := m.start()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseKey || !mm.keyPreRun {
 		t.Fatalf("precondition: expected the pre-run key modal, got phase=%v keyPreRun=%v", mm.phase, mm.keyPreRun)
 	}
@@ -434,7 +436,7 @@ func TestKeyScrollResetsOnEntry(t *testing.T) {
 		}
 		found = true
 		n2, _ := s.Update(mouseClickAt(rightX, y))
-		s2 := n2.(model)
+		s2 := asModel(t, n2)
 		if s2.phase != phaseKey {
 			t.Fatalf("key-show click → phase %v, want phaseKey", s2.phase)
 		}

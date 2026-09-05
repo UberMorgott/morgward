@@ -247,6 +247,8 @@ func (m model) filesActionClick(act fmAction) (tea.Model, tea.Cmd) {
 		if e, ok := f.selectedEntry(); ok && !e.isDir && e.name != ".." {
 			return m.filesOpenLocal(e.name)
 		}
+	case fmActNone:
+		// No action row under the click — nothing to run.
 	}
 	return m, nil
 }
@@ -333,6 +335,8 @@ func (m model) filesDispatchPrompt(val string) tea.Cmd {
 			_, cmd := m.filesStartUpload(val)
 			return cmd
 		}
+	case fpNone:
+		// No prompt is open — nothing to dispatch.
 	}
 	return nil
 }

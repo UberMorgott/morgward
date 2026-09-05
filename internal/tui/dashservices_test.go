@@ -71,7 +71,7 @@ func TestDashServiceLinesSortedAndCapped(t *testing.T) {
 	// Build dashServicesCap+5 services in DESCENDING port order; expect ascending out.
 	n := dashServicesCap + 5
 	svcs := make([]detect.ListenService, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		svcs = append(svcs, detect.ListenService{Proto: "tcp", Port: 9000 - i})
 	}
 	m.dashFacts.ListenServices = svcs

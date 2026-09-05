@@ -55,7 +55,8 @@ func runShell(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("host-key pin: %w", err)
 	}
-	cli, err := sshx.DialWithPin(cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM, pin)
+	ctx := context.Background()
+	cli, err := sshx.DialWithPin(ctx, cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM, pin)
 	if err != nil {
 		if errors.Is(err, sshx.ErrNoMutualAuth) {
 			return fmt.Errorf("could not authenticate to %s@%s — the server accepted none of the offered methods (check user/key/password): %w", cfg.User, cfg.Host, err)
@@ -64,7 +65,6 @@ func runShell(cfg *config.Config) error {
 	}
 	defer cli.Close()
 
-	ctx := context.Background()
 	fd := int(os.Stdin.Fd())
 
 	sio := sshx.ShellIO{

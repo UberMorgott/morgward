@@ -58,7 +58,7 @@ func TestApplyConfirmClickConfirm(t *testing.T) {
 		t.Fatalf("confirm pill hit-test missed at its own rendered point (%d,%d)", cx, cy)
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: cx, Y: cy, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command != "step" {
 		t.Fatalf("apply-confirm confirm click → command=%q want \"step\"", mm.command)
 	}
@@ -77,7 +77,7 @@ func TestApplyConfirmClickCancel(t *testing.T) {
 		t.Fatalf("cancel pill hit-test missed at its own rendered point (%d,%d)", xx, xy)
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: xx, Y: xy, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.dashApplyConfirm {
 		t.Fatalf("cancel click did not clear dashApplyConfirm")
 	}
@@ -93,7 +93,7 @@ func TestApplyConfirmClickMissSwallowed(t *testing.T) {
 	m.dashApplyConfirm = true
 	// Click at the very top-left corner — far from the centered modal's pills.
 	next, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command == "step" {
 		t.Fatalf("a miss click launched the apply")
 	}
@@ -118,7 +118,7 @@ func TestSecDangerConfirmClickConfirm(t *testing.T) {
 		t.Fatalf("danger confirm pill hit-test missed at (%d,%d)", cx, cy)
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: cx, Y: cy, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command != "step" {
 		t.Fatalf("danger confirm click → command=%q want \"step\"", mm.command)
 	}
@@ -135,7 +135,7 @@ func TestSecDangerConfirmClickCancel(t *testing.T) {
 		t.Fatalf("danger cancel pill hit-test missed at (%d,%d)", xx, xy)
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: xx, Y: xy, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.secDangerConfirm {
 		t.Fatalf("cancel click did not clear secDangerConfirm")
 	}
@@ -150,7 +150,7 @@ func TestSecDangerConfirmClickMissSwallowed(t *testing.T) {
 	m := secModel(100, 40)
 	m.secDangerConfirm = true
 	next, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command == "step" {
 		t.Fatalf("a miss click launched the lockdown")
 	}
@@ -183,7 +183,7 @@ func TestWikiUpdateConfirmClickConfirm(t *testing.T) {
 		t.Fatalf("wiki update confirm pill hit-test missed at (%d,%d)", cx, cy)
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: cx, Y: cy, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command != "step" {
 		t.Fatalf("wiki update confirm click → command=%q want \"step\"", mm.command)
 	}
@@ -202,7 +202,7 @@ func TestWikiUpdateConfirmClickCancel(t *testing.T) {
 		t.Fatalf("wiki update cancel pill hit-test missed at (%d,%d)", xx, xy)
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: xx, Y: xy, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.wikiUpdateConfirm {
 		t.Fatalf("cancel click did not clear wikiUpdateConfirm")
 	}
@@ -243,7 +243,7 @@ func TestWikiUpdateConfirmClickMissCancels(t *testing.T) {
 	m := wikiUpdateConfirmModel(120, 40)
 	// A click at the top-left corner misses both pills.
 	next, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command == "step" {
 		t.Fatalf("a miss click launched A8")
 	}
@@ -260,12 +260,12 @@ func TestConfirmPillsKeyboardUnchanged(t *testing.T) {
 	m.dashApplyConfirm = true
 	m.inputs[fHost].SetValue("")
 	n1, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if n1.(model).command != "step" {
+	if asModel(t, n1).command != "step" {
 		t.Fatalf("apply-confirm Enter no longer launches")
 	}
 	m.dashApplyConfirm = true
 	n2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if n2.(model).dashApplyConfirm {
+	if asModel(t, n2).dashApplyConfirm {
 		t.Fatalf("apply-confirm Esc no longer cancels")
 	}
 
@@ -273,7 +273,7 @@ func TestConfirmPillsKeyboardUnchanged(t *testing.T) {
 	w := wikiUpdateConfirmModel(120, 40)
 	w.inputs[fHost].SetValue("")
 	nw, _ := w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	wm := nw.(model)
+	wm := asModel(t, nw)
 	if wm.command != "step" || len(wm.cmds) != 1 || wm.cmds[0] != "A8" {
 		t.Fatalf("wiki update Enter no longer launches A8; cmds=%v", wm.cmds)
 	}

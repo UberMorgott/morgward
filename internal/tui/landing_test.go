@@ -125,7 +125,7 @@ func TestDisclosureToggleClickable(t *testing.T) {
 	}
 	// Apply the click and confirm advanced inputs appear.
 	m2, _ := m.formClick(0, formBodyTopRow+di)
-	mm := m2.(model)
+	mm := asModel(t, m2)
 	if !mm.advancedOpen {
 		t.Fatalf("disclosure click did not set advancedOpen")
 	}
@@ -178,7 +178,7 @@ func TestSaveLogTogglePosition(t *testing.T) {
 	}
 	disIdx := kindIndex(rows, frDisclosure)
 	startIdx := kindIndex(rows, frStart)
-	if !(logIdx > disIdx && logIdx < startIdx) {
+	if logIdx <= disIdx || logIdx >= startIdx {
 		t.Fatalf("frLog idx=%d should be after frDisclosure=%d and before frStart=%d", logIdx, disIdx, startIdx)
 	}
 }
@@ -214,6 +214,8 @@ func TestFormHitTestAccuracy(t *testing.T) {
 			if !hit.ok || hit.kind != frStart {
 				t.Fatalf("row %d (frStart): hit=%+v", i, hit)
 			}
+		case frBlank, frAction, frErr, frVersion, frUpdate:
+			// Decorative / conditional rows — no hit-test contract asserted here.
 		}
 	}
 
@@ -228,7 +230,7 @@ func TestFormHitTestAccuracy(t *testing.T) {
 	if hostFirst < 0 {
 		t.Fatalf("no host input row")
 	}
-	for d := 0; d < 3; d++ {
+	for d := range 3 {
 		hit := m.formHitAtClick(5, formBodyTopRow+hostFirst+d)
 		if !hit.ok || hit.field != fHost {
 			t.Fatalf("host row offset %d did not map to fHost: %+v", d, hit)
@@ -300,7 +302,7 @@ func TestFormValidationFramed(t *testing.T) {
 	m.inputs[fHost].SetValue("")
 	m.inputs[fPass].SetValue("secret") // provide auth so host is the failing field
 	next, _ := m.start()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.errMsg == "" {
 		t.Fatalf("empty host did not set errMsg")
 	}

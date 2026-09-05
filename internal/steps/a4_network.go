@@ -76,7 +76,7 @@ const minValidBytes = 1_000_000
 // no sample was valid (network noise — the caller treats that as "not measured").
 func medianSpeed(out string) (median float64, lines []string) {
 	var speeds []float64
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(strings.TrimSpace(l))
 		if len(f) < 5 || f[0] != "SAMPLE" {
 			continue

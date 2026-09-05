@@ -98,7 +98,7 @@ func TestWikiRevertClickLaunchesRevert(t *testing.T) {
 	m.inputs[fPass].SetValue("secret")
 	x := pillRanges([]string{t2(m.lang, kWikiRevertButton)}, wikiBackStartCol)[0][0] + 1
 	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: ry, Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command != "revert" {
 		t.Fatalf("revert click → command=%q, want \"revert\"", mm.command)
 	}
@@ -114,7 +114,7 @@ func TestWikiRevertKeyLaunchesRevert(t *testing.T) {
 	m.inputs[fHost].SetValue("")
 	m.inputs[fPass].SetValue("secret")
 	next, _ := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.command != "revert" || len(mm.cmds) != 1 || mm.cmds[0] != "A4" {
 		t.Fatalf("'r' → command=%q cmds=%v, want revert [A4]", mm.command, mm.cmds)
 	}
@@ -122,7 +122,7 @@ func TestWikiRevertKeyLaunchesRevert(t *testing.T) {
 	// 'r' is a no-op when the revert row is NOT shown (probe not applied).
 	mn := wikiProbeModel(100, 40, "a4.bbr_active", "A4", false, 0)
 	n2, _ := mn.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	if mn2 := n2.(model); mn2.command == "revert" {
+	if mn2 := asModel(t, n2); mn2.command == "revert" {
 		t.Fatalf("'r' launched a revert when the row was hidden")
 	}
 }
@@ -138,7 +138,7 @@ func TestWikiUpdateConfirmTwoStep(t *testing.T) {
 
 	// First activation: press 'u' → arms the confirm, does NOT launch.
 	n1, _ := m.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
-	m1 := n1.(model)
+	m1 := asModel(t, n1)
 	if !m1.wikiUpdateConfirm {
 		t.Fatalf("'u' did not arm the A8 reboot confirm")
 	}
@@ -160,7 +160,7 @@ func TestWikiUpdateConfirmTwoStep(t *testing.T) {
 	m1.inputs[fHost].SetValue("") // empty host → no dial goroutine
 	m1.inputs[fPass].SetValue("secret")
 	n2, _ := m1.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m2 := n2.(model)
+	m2 := asModel(t, n2)
 	if m2.command != "step" {
 		t.Fatalf("after confirm Enter, command=%q want \"step\"", m2.command)
 	}
@@ -176,7 +176,7 @@ func TestWikiUpdateConfirmEscCancels(t *testing.T) {
 	m.wikiUpdateConfirm = true
 
 	n, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if mm.wikiUpdateConfirm {
 		t.Fatalf("Esc did not cancel the pending confirm")
 	}
@@ -197,7 +197,7 @@ func TestWikiUpdateFirstClickArmsConfirm(t *testing.T) {
 	btnY := m.wikiButtonsRowY()
 	upX, _ := pillXForKind(m, wikiRowUpdateButton)
 	n1, _ := m.Update(tea.MouseClickMsg{X: upX, Y: btnY, Button: tea.MouseLeft})
-	m1 := n1.(model)
+	m1 := asModel(t, n1)
 	if !m1.wikiUpdateConfirm {
 		t.Fatalf("update click did not arm the confirm")
 	}
@@ -209,7 +209,7 @@ func TestWikiUpdateFirstClickArmsConfirm(t *testing.T) {
 	// branch fires and clears it.
 	backX, _ := pillXForKind(m1, wikiRowBack)
 	n2, _ := m1.Update(tea.MouseClickMsg{X: backX, Y: m1.wikiButtonsRowY(), Button: tea.MouseLeft})
-	if m2 := n2.(model); m2.wikiUpdateConfirm {
+	if m2 := asModel(t, n2); m2.wikiUpdateConfirm {
 		t.Fatalf("a second click did not cancel the pending confirm")
 	}
 }

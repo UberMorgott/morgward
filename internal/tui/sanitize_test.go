@@ -57,7 +57,7 @@ func TestSanitizeStreamLine(t *testing.T) {
 			// After wrapping to width, every physical line must be ≤ width display
 			// cells so it can never push past the box border.
 			wrapped := wrapTo(san, width)
-			for _, ln := range strings.Split(wrapped, "\n") {
+			for ln := range strings.SplitSeq(wrapped, "\n") {
 				if w := lipgloss.Width(ln); w > width {
 					t.Fatalf("wrapped line exceeds width %d (got %d): %q", width, w, ln)
 				}

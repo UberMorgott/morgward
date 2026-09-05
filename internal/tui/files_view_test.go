@@ -79,7 +79,7 @@ func TestNavTabAtClick(t *testing.T) {
 		t.Fatalf("Files-pill click → %v,%v want navFiles,true", tgt, ok)
 	}
 	// The three zones are disjoint and left→right ordered.
-	if !(homeRange[1] <= termRange[0] && termRange[1] <= filesRange[0]) {
+	if homeRange[1] > termRange[0] || termRange[1] > filesRange[0] {
 		t.Fatalf("nav pill zones overlap/out of order: home=%v term=%v files=%v", homeRange, termRange, filesRange)
 	}
 	// A click off the bar row is not a tab hit.

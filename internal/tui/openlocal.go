@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"hash/crc32"
 	"os"
 	"os/exec"
@@ -64,7 +65,9 @@ func isBinary(data []byte) bool {
 // per-OS command vector is built by the build-tagged osOpenArgs.
 func openLocalFile(path string) error {
 	name, args := osOpenArgs(path)
-	return exec.Command(name, args...).Start() // #nosec G204 -- fixed opener + discrete path arg
+	// context.Background(): the opener is fire-and-forget — the editor the operator
+	// just opened must outlive any request-scoped deadline of ours.
+	return exec.CommandContext(context.Background(), name, args...).Start() // #nosec G204 -- fixed opener + discrete path arg
 }
 
 // openLocalFileFn is the indirection the open-done handler calls so tests can stub the OS

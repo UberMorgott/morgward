@@ -8,11 +8,7 @@ import (
 
 func TestGenerateKeyPairWritesNoFile(t *testing.T) {
 	dir := t.TempDir()
-	cwd, _ := os.Getwd()
-	defer os.Chdir(cwd)
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 	kp, err := GenerateKeyPair("morgward@test")
 	if err != nil {
 		t.Fatalf("keygen: %v", err)

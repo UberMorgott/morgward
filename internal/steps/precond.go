@@ -85,9 +85,9 @@ func putAuthorizedKey(user, line string) string {
 }
 
 func extractMarker(out, marker string) string {
-	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), marker) {
-			return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), marker))
+	for l := range strings.SplitSeq(out, "\n") {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(l), marker); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 	return ""

@@ -58,7 +58,7 @@ func TestNewWritesFileWhenPathGiven(t *testing.T) {
 	l := New(p)
 	l.Info("hello")
 	l.Close()
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile(p) //nolint:gosec // G304 false positive: p is this test's own t.TempDir() path.
 	if err != nil {
 		t.Fatalf("log file not written: %v", err)
 	}

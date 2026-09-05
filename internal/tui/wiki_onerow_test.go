@@ -91,7 +91,7 @@ func TestWikiButtonsOnOneRow(t *testing.T) {
 	// All three button labels on one line: find the line containing the back label and
 	// assert the other two labels are on that same line.
 	var btnLine string
-	for _, ln := range strings.Split(out, "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(ln, t2(m.lang, kWikiBack)) {
 			btnLine = ln
 			break
@@ -114,7 +114,7 @@ func TestWikiBackClickStillNavigates(t *testing.T) {
 		t.Fatalf("no back pill X")
 	}
 	next, _ := m.Update(tea.MouseClickMsg{X: backX, Y: m.wikiButtonsRowY(), Button: tea.MouseLeft})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("back click → phase %v, want phaseDashboard (wikiReturn)", mm.phase)
 	}

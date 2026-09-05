@@ -62,14 +62,14 @@ func TestPhysKey_DirectCases(t *testing.T) {
 func TestPhysKey_RUNewFolderMatchesEN(t *testing.T) {
 	en := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}})
 	enOut, _ := en.filesKey(tea.KeyPressMsg{Text: "n", Code: 'n', BaseCode: 'n'})
-	en = enOut.(model)
+	en = asModel(t, enOut)
 	if en.files.promptKind != fpNewDir {
 		t.Fatalf("US 'n' must open the new-folder prompt, got kind=%d", en.files.promptKind)
 	}
 
 	ru := filesKeyModel([]fileEntry{{name: ".."}, {name: "a"}})
 	ruOut, _ := ru.filesKey(tea.KeyPressMsg{Text: "т", Code: 'т', BaseCode: 'n'})
-	ru = ruOut.(model)
+	ru = asModel(t, ruOut)
 	if ru.files.promptKind != fpNewDir {
 		t.Fatalf("RU physical-N must open the new-folder prompt like US 'n', got kind=%d", ru.files.promptKind)
 	}
@@ -80,7 +80,7 @@ func TestPhysKey_RUNewFolderMatchesEN(t *testing.T) {
 func TestPhysKey_RUToggleHidden(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: ".."}, {name: ".dot"}, {name: "a"}})
 	out, _ := m.filesKey(tea.KeyPressMsg{Text: "ю", Code: 'ю', BaseCode: '.'})
-	m = out.(model)
+	m = asModel(t, out)
 	if !m.files.showHidden {
 		t.Fatal("RU physical '.' must toggle showHidden on like US '.'")
 	}
@@ -91,7 +91,7 @@ func TestPhysKey_RUToggleHidden(t *testing.T) {
 func TestPhysKey_RUAddressFocus(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: "a"}})
 	out, _ := m.filesKey(tea.KeyPressMsg{Text: "ё", Code: 'ё', BaseCode: '/'})
-	m = out.(model)
+	m = asModel(t, out)
 	if !m.files.addrFocus {
 		t.Fatal("physical '/' (non-ASCII output) must focus the address bar like US '/'")
 	}
@@ -103,14 +103,14 @@ func TestPhysKey_AddrTextEntryStaysRaw(t *testing.T) {
 	m := filesKeyModel([]fileEntry{{name: "a"}})
 	// Focus the address bar (US '/').
 	out, _ := m.filesKey(tea.KeyPressMsg{Code: '/', Text: "/"})
-	m = out.(model)
+	m = asModel(t, out)
 	if !m.files.addrFocus {
 		t.Fatal("precondition: address bar must be focused")
 	}
 	m.files.addr.SetValue("")
 	// Type a Cyrillic "т" into the focused address bar — it must land verbatim.
 	out, _ = m.filesKey(tea.KeyPressMsg{Text: "т", Code: 'т', BaseCode: 'n'})
-	m = out.(model)
+	m = asModel(t, out)
 	if got := m.files.addr.Value(); got != "т" {
 		t.Fatalf("address bar must receive raw Cyrillic, got %q", got)
 	}

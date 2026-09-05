@@ -60,7 +60,7 @@ func TestOpenDoneError(t *testing.T) {
 	m := filesKeyModel(nil)
 	m.files.transferring = true
 	n, _ := m.Update(fmOpenDoneMsg{remotePath: "/etc/x", localPath: "/tmp/h-x", err: errors.New("boom")})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if mm.files.transferring {
 		t.Fatal("open-done error must clear transferring")
 	}
@@ -78,7 +78,7 @@ func TestOpenDoneBinaryWarns(t *testing.T) {
 	m := filesKeyModel(nil)
 	m.files.transferring = true
 	n, _ := m.Update(fmOpenDoneMsg{remotePath: "/bin/x", localPath: "/tmp/h-x", mtime: 5, data0: []byte{0x00}})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if mm.files.transferring {
 		t.Fatal("open-done must clear transferring")
 	}
@@ -99,7 +99,7 @@ func TestWatchEventSchedulesFlush(t *testing.T) {
 	of := m.files.registerOpened("/etc/a", "/tmp/h-a", 0)
 	seqBefore := of.seq
 	n, cmd := m.Update(fmWatchEventMsg{localPath: "/tmp/h-a"})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if cmd == nil {
 		t.Fatal("a watch event for a known file must return a non-nil Cmd (listener + flush tick)")
 	}
@@ -120,14 +120,14 @@ func TestFlushDebounce(t *testing.T) {
 
 	// Stale flush: superseded → no upload, transferring stays false.
 	n, _ := m.Update(fmWatchFlushMsg{localPath: "/tmp/h-a", seq: stale})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if mm.files.transferring {
 		t.Fatal("a stale flush must NOT start an upload")
 	}
 
 	// Latest flush: acts → upload starts (transferring set, non-nil Cmd).
 	n, cmd := mm.Update(fmWatchFlushMsg{localPath: "/tmp/h-a", seq: latest})
-	mm = n.(model)
+	mm = asModel(t, n)
 	if !mm.files.transferring {
 		t.Fatal("the latest flush must start an upload (set transferring)")
 	}

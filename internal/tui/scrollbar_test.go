@@ -37,13 +37,13 @@ func dragModel(t *testing.T) (m model, barX, topRow, viewH, total, maxOff int) {
 func pressBar(t *testing.T, m model, x, y int) model {
 	t.Helper()
 	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	return next.(model)
+	return asModel(t, next)
 }
 
 func motionTo(t *testing.T, m model, x, y int) model {
 	t.Helper()
 	next, _ := m.Update(tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft})
-	return next.(model)
+	return asModel(t, next)
 }
 
 // TestScrollbarThumbDragMovesOffset is the whole gesture: press the thumb, drag it to
@@ -73,7 +73,7 @@ func TestScrollbarThumbDragMovesOffset(t *testing.T) {
 	}
 
 	next, _ := m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.dragging {
 		t.Fatal("release must end the drag")
 	}
@@ -97,7 +97,7 @@ func TestScrollbarReleaseWithoutButtonEndsDrag(t *testing.T) {
 		t.Fatal("pressing the thumb must arm the drag")
 	}
 	next, _ := m.Update(tea.MouseReleaseMsg{Button: tea.MouseNone})
-	m = next.(model)
+	m = asModel(t, next)
 	if m.dragging {
 		t.Fatal("a release carrying MouseNone (X10 encoding) must still end the drag")
 	}
@@ -187,7 +187,7 @@ func TestScrollbarDragTerminalRearmsFollow(t *testing.T) {
 
 	// Scroll up first: follow drops and the thumb leaves the bottom.
 	next, _ := m.Update(wheelMsg(tea.MouseWheelUp))
-	m = next.(model)
+	m = asModel(t, next)
 	if m.termFollow {
 		t.Fatal("wheel up should have dropped follow mode")
 	}
@@ -232,7 +232,7 @@ func TestScrollbarColumnMatchesRenderedThumb(t *testing.T) {
 	start, end := scrollThumb(viewH, total, maxOff)
 
 	lines := strings.Split(ui.SanitizeStreamLine(m.matrixView()), "\n")
-	for row := 0; row < viewH; row++ {
+	for row := range viewH {
 		cells := []rune(lines[topRow+row])
 		if len(cells)-1 != barX {
 			t.Fatalf("region row %d is %d cells wide, so its last column is %d, not barX=%d",

@@ -186,7 +186,7 @@ func AppendLineIfMissing(file, line string) string {
 // second-session verify) using key auth as user, runs `true`, and closes it.
 // Proves reachability without relying on the kept-open executor connection.
 func freshLogin(ctx *Context, user string) error {
-	c, err := sshx.Dial(ctx.Cfg.Host, ctx.Cfg.Port, user, "", ctx.KeyPEM)
+	c, err := sshx.Dial(ctx.Ctx, ctx.Cfg.Host, ctx.Cfg.Port, user, "", ctx.KeyPEM)
 	if err != nil {
 		return err
 	}

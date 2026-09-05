@@ -14,6 +14,7 @@ package sshx
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 // Result.Stdout) but suppresses the live emit, so the raw secret never reaches the
 // output sink → run log / TUI scrollback (F02). The producing remote script prints
 // "CONSOLE_PW_MARKER:<value>"; the consuming step parses it back via this same prefix.
+//
+//nolint:gosec // G101 false positive: this is the stdout MARKER prefix, not a credential.
 const SecretMarkerPrefix = "CONSOLE_PW_MARKER:"
 
 // ErrHostKeyChanged is returned (wrapped via %w) when a reconnect within the same
@@ -142,8 +145,9 @@ func (c *Client) SetOutputSink(fn func(stream, line string)) { c.OnOutput = fn }
 // Dial opens a connection. Provide either keyPEM or password (key wins). Host-key
 // handling is the default in-run TOFU (no operator pin); see DialWithPin to verify
 // the first host key against a --known-hosts file / --host-fingerprint.
-func Dial(host string, port int, user, password string, keyPEM []byte) (*Client, error) {
-	return DialWithPin(host, port, user, password, keyPEM, nil)
+// ctx bounds the TCP dial (the 15s dialTimeout still applies independently).
+func Dial(ctx context.Context, host string, port int, user, password string, keyPEM []byte) (*Client, error) {
+	return DialWithPin(ctx, host, port, user, password, keyPEM, nil)
 }
 
 // DialWithPin is Dial with an OPT-IN host-key pin. When pin is non-nil the FIRST
@@ -151,7 +155,7 @@ func Dial(host string, port int, user, password string, keyPEM []byte) (*Client,
 // the server's key; when pin is nil this is byte-identical to Dial (default TOFU).
 // The in-run pin-on-first + ErrHostKeyChanged-on-later-change guard is unchanged on
 // both paths.
-func DialWithPin(host string, port int, user, password string, keyPEM []byte, pin *HostKeyPin) (*Client, error) {
+func DialWithPin(ctx context.Context, host string, port int, user, password string, keyPEM []byte, pin *HostKeyPin) (*Client, error) {
 	c := &Client{Host: host, Port: port, User: user, password: password, pin: pin}
 	if len(keyPEM) > 0 {
 		signer, err := ssh.ParsePrivateKey(keyPEM)
@@ -160,13 +164,13 @@ func DialWithPin(host string, port int, user, password string, keyPEM []byte, pi
 		}
 		c.signer = signer
 	}
-	if err := c.connect(); err != nil {
+	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func (c *Client) authMethods() []ssh.AuthMethod {
+func (c *Client) authMethods(ctx context.Context) []ssh.AuthMethod {
 	var m []ssh.AuthMethod
 	// 1. Explicit key wins (the operator's deliberate choice / bootstrapped key).
 	if c.signer != nil {
@@ -175,7 +179,7 @@ func (c *Client) authMethods() []ssh.AuthMethod {
 	// 2. ssh-agent (if running): the common "just works" path when the provider
 	//    installed the operator's public key. Signers are resolved lazily at
 	//    handshake time so a dead socket costs nothing here.
-	if am := c.agentAuthMethod(); am != nil {
+	if am := c.agentAuthMethod(ctx); am != nil {
 		m = append(m, am)
 	}
 	// 3. Password + keyboard-interactive fallback (some sshd configs require the
@@ -202,13 +206,15 @@ func (c *Client) authMethods() []ssh.AuthMethod {
 // is recorded on the Client and closed by closeAgentConns once connect's handshake
 // returns — so a long-lived TUI that redials per reconnect (with an agent socket
 // present) no longer leaks one fd per dial.
-func (c *Client) agentAuthMethod() ssh.AuthMethod {
+func (c *Client) agentAuthMethod(ctx context.Context) ssh.AuthMethod {
 	sock := os.Getenv("SSH_AUTH_SOCK")
 	if sock == "" {
 		return nil
 	}
 	return ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
-		conn, err := net.Dial("unix", sock)
+		// SSH_AUTH_SOCK is the local operator's own ssh-agent socket path, a unix
+		// socket — not a network destination.
+		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sock)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +262,7 @@ var pinnedHostKeyAlgos = []string{
 	ssh.KeyAlgoECDSA521,
 }
 
-func (c *Client) connect() error {
+func (c *Client) connect(ctx context.Context) error {
 	// Defensive: stop any keepalive still attached to a previous connection so a
 	// caller that re-connects without Close()/detachConn() cannot orphan the old
 	// goroutine. Idempotent — a no-op when the keepalive was already stopped.
@@ -267,7 +273,7 @@ func (c *Client) connect() error {
 	defer c.closeAgentConns()
 	cfg := &ssh.ClientConfig{
 		User:              c.User,
-		Auth:              c.authMethods(),
+		Auth:              c.authMethods(ctx),
 		HostKeyCallback:   c.hostKeyCallback(), // in-run TOFU: pin on first connect, verify after
 		HostKeyAlgorithms: pinnedHostKeyAlgos,
 		Timeout:           dialTimeout,
@@ -278,7 +284,8 @@ func (c *Client) connect() error {
 	// keepalive on the underlying socket — a second, OS-driven liveness signal
 	// beneath the SSH keepalive that helps the kernel tear down a silently-dead
 	// connection (e.g. a NAT that dropped the flow) rather than blocking forever.
-	conn, err := net.DialTimeout("tcp", addr, cfg.Timeout)
+	d := net.Dialer{Timeout: cfg.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("ssh dial %s@%s: %w", c.User, addr, err)
 	}
@@ -291,7 +298,7 @@ func (c *Client) connect() error {
 		_ = conn.Close()
 		if isNoMutualAuth(err) {
 			// Wrap so callers can errors.Is(err, ErrNoMutualAuth); keep the raw text.
-			return fmt.Errorf("ssh handshake %s@%s: %w: %v", c.User, addr, ErrNoMutualAuth, err)
+			return fmt.Errorf("ssh handshake %s@%s: %w: %w", c.User, addr, ErrNoMutualAuth, err)
 		}
 		// Surface a pinned-key mismatch verbatim so errors.Is(err, ErrHostKeyChanged)
 		// works for the caller (NewClientConn wraps the callback error).
@@ -479,7 +486,7 @@ func isNoMutualAuth(err error) bool {
 // On the final failure after the window expires it returns the last error; when
 // that last error was a no-mutual-auth rejection it is wrapped with
 // ErrNoMutualAuth so the caller can print an actionable hint.
-func DialWithRetry(host string, port int, user, password string, keyPEM []byte, pin *HostKeyPin, timeout time.Duration, onTick func(string)) (*Client, error) {
+func DialWithRetry(ctx context.Context, host string, port int, user, password string, keyPEM []byte, pin *HostKeyPin, timeout time.Duration, onTick func(string)) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 90 * time.Second
 	}
@@ -490,7 +497,7 @@ func DialWithRetry(host string, port int, user, password string, keyPEM []byte, 
 	attempt := 0
 	for {
 		attempt++
-		cli, err := DialWithPin(host, port, user, password, keyPEM, pin)
+		cli, err := DialWithPin(ctx, host, port, user, password, keyPEM, pin)
 		if err == nil {
 			return cli, nil
 		}
@@ -551,7 +558,7 @@ func (c *Client) Run(cmd string) Result {
 	if err != nil {
 		return Result{RC: -1, Err: fmt.Errorf("new session: %w", err)}
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
@@ -583,14 +590,17 @@ func (c *Client) Run(cmd string) Result {
 
 	runErr := sess.Wait()
 	r := Result{Stdout: out.String(), Stderr: errb.String()}
-	switch e := runErr.(type) {
-	case nil:
-		r.RC = 0
-	case *ssh.ExitError:
-		r.RC = e.ExitStatus()
-	default:
-		r.RC = -1
-		r.Err = runErr
+	{
+		var e *ssh.ExitError
+		switch {
+		case runErr == nil:
+			r.RC = 0
+		case errors.As(runErr, &e):
+			r.RC = e.ExitStatus()
+		default:
+			r.RC = -1
+			r.Err = runErr
+		}
 	}
 	return r
 }
@@ -656,7 +666,7 @@ func (c *Client) detachConn() *ssh.Client {
 // Used at the §A2 executor handoff once root SSH is closed in strict mode. The
 // pinned host key (in-run TOFU) carries over, so the re-dial verifies the box is
 // the same host.
-func (c *Client) SwitchUser(user string) error {
+func (c *Client) SwitchUser(ctx context.Context, user string) error {
 	if c.signer == nil {
 		return fmt.Errorf("cannot switch to %s: no key loaded", user)
 	}
@@ -664,7 +674,7 @@ func (c *Client) SwitchUser(user string) error {
 	prev := c.User
 	c.User = user
 	c.password = "" // key only from here on
-	if err := c.connect(); err != nil {
+	if err := c.connect(ctx); err != nil {
 		c.User = prev
 		if old != nil {
 			_ = old.Close()
@@ -679,14 +689,14 @@ func (c *Client) SwitchUser(user string) error {
 
 // UseKey switches the active connection from password auth to key auth. The
 // pinned host key carries over so the re-dial verifies the same host.
-func (c *Client) UseKey(keyPEM []byte) error {
+func (c *Client) UseKey(ctx context.Context, keyPEM []byte) error {
 	signer, err := ssh.ParsePrivateKey(keyPEM)
 	if err != nil {
 		return fmt.Errorf("parse private key: %w", err)
 	}
 	c.signer = signer
 	old := c.detachConn()
-	if err := c.connect(); err != nil {
+	if err := c.connect(ctx); err != nil {
 		if old != nil {
 			_ = old.Close()
 		}
@@ -707,7 +717,7 @@ func (c *Client) BootID() string {
 // WaitForReboot polls the SSH port until the box answers AND boot_id differs
 // from preBootID. Returns the new boot_id, or an error on timeout (box may be
 // bricked — caller must escalate, not claim rollback).
-func (c *Client) WaitForReboot(preBootID string, timeout time.Duration, onTick func(string)) (string, error) {
+func (c *Client) WaitForReboot(ctx context.Context, preBootID string, timeout time.Duration, onTick func(string)) (string, error) {
 	deadline := time.Now().Add(timeout)
 	c.Close()
 	// Give the box a moment to actually go down before polling.
@@ -721,7 +731,7 @@ func (c *Client) WaitForReboot(preBootID string, timeout time.Duration, onTick f
 	const rebootAuthFailMax = 5
 	authFails := 0
 	for time.Now().Before(deadline) {
-		if err := c.connect(); err != nil {
+		if err := c.connect(ctx); err != nil {
 			// Distinguish "box still down" (connection refused / TCP timeout — keep
 			// polling) from "box is back UP but rejected our credentials". The latter
 			// means the SSH handshake reached the server and it declined every auth
@@ -733,7 +743,7 @@ func (c *Client) WaitForReboot(preBootID string, timeout time.Duration, onTick f
 			if isNoMutualAuth(err) {
 				authFails++
 				if authFails >= rebootAuthFailMax {
-					return "", fmt.Errorf("%w: %v", ErrRebootAuthFailed, err)
+					return "", fmt.Errorf("%w: %w", ErrRebootAuthFailed, err)
 				}
 			} else {
 				authFails = 0

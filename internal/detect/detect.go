@@ -314,13 +314,13 @@ func parseListeners(ssOut string) (tcp, udp []int, services []ListenService, lis
 // the NAME in `users:(("NAME",pid=123,fd=4))`. Returns "" when ss omitted the
 // attribution (no -p privilege, or a kernel socket).
 func processFromSS(line string) string {
-	i := strings.Index(line, `users:(("`)
-	if i < 0 {
+	_, after, ok := strings.Cut(line, `users:(("`)
+	if !ok {
 		return ""
 	}
-	rest := line[i+len(`users:(("`):]
-	if j := strings.IndexByte(rest, '"'); j >= 0 {
-		return rest[:j]
+	rest := after
+	if before, _, ok := strings.Cut(rest, "\""); ok {
+		return before
 	}
 	return ""
 }
@@ -329,11 +329,11 @@ func processFromSS(line string) string {
 // `users:(("NAME",pid=N,fd=M))`. Returns 0 when ss omitted the attribution or the
 // pid is unparsable (e.g. a kernel socket reported as pid=0).
 func pidFromSS(line string) int {
-	i := strings.Index(line, "pid=")
-	if i < 0 {
+	_, after, ok := strings.Cut(line, "pid=")
+	if !ok {
 		return 0
 	}
-	rest := line[i+len("pid="):]
+	rest := after
 	// The pid runs until the first non-digit (',', ')', etc.).
 	end := 0
 	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
@@ -485,8 +485,8 @@ func classifyCgroupOrigin(cgroupLine string) string {
 // ok=false when no ".service" segment is present.
 func systemdUnitFromPath(path string) (string, bool) {
 	segs := strings.Split(path, "/")
-	for i := len(segs) - 1; i >= 0; i-- {
-		seg := segs[i]
+	for _, seg := range slices.Backward(segs) {
+
 		if unit, ok := strings.CutSuffix(seg, ".service"); ok && unit != "" {
 			return unit, true
 		}
@@ -516,7 +516,7 @@ func dockerPortNames(psOut string) map[int]string {
 		if name == "" {
 			continue
 		}
-		for _, mapping := range strings.Split(ports, ",") {
+		for mapping := range strings.SplitSeq(ports, ",") {
 			mapping = strings.TrimSpace(mapping)
 			arrow := strings.Index(mapping, "->")
 			if arrow < 0 {

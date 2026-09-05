@@ -96,6 +96,8 @@ func (m model) wikiButtonLabel(k wikiActionKind) string {
 		return t(m.lang, kWikiRevertButton)
 	case wikiRowBack:
 		return t(m.lang, kWikiBack)
+	case wikiRowUpdateWarn:
+		// A warning line, not a button — it carries no pill label.
 	}
 	return ""
 }

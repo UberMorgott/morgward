@@ -238,6 +238,8 @@ func (m model) formHitAtClick(x, y int) formHit {
 				return formHit{kind: frUpdate, ok: true}
 			}
 		}
+	case frBlank, frAction, frErr, frVersion:
+		// Decorative rows — not click targets.
 	}
 	return formHit{}
 }
@@ -335,6 +337,8 @@ func (m model) formClick(x, y int) (tea.Model, tea.Cmd) {
 		m.focus = rowUpdateButton
 		m.wantUpdate = true
 		return m, tea.Quit
+	case frBlank, frAction, frErr, frVersion:
+		// Decorative rows — the hit-test never reports them.
 	}
 	return m, nil
 }

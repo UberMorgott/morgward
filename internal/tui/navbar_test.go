@@ -36,7 +36,7 @@ func TestNavToHomeKeepsSessionAlive(t *testing.T) {
 	files0 := m.files
 
 	next, _ := m.navTo(navHome)
-	mm := next.(model)
+	mm := asModel(t, next)
 
 	if mm.phase != phaseDashboard {
 		t.Fatalf("navTo(navHome) phase=%v, want phaseDashboard", mm.phase)
@@ -65,7 +65,7 @@ func TestNavToTerminalReuseNoRedial(t *testing.T) {
 	client0 := m.termClient
 
 	next, _ := m.navTo(navTerminal)
-	mm := next.(model)
+	mm := asModel(t, next)
 
 	if mm.phase != phaseTerminal {
 		t.Fatalf("navTo(navTerminal) phase=%v, want phaseTerminal", mm.phase)
@@ -94,7 +94,7 @@ func TestNavToFilesReuseNoRedial(t *testing.T) {
 	files0 := m.files
 
 	next, _ := m.navTo(navFiles)
-	mm := next.(model)
+	mm := asModel(t, next)
 
 	if mm.phase != phaseTerminal || mm.wsTab != wsFiles {
 		t.Fatalf("navTo(navFiles) phase=%v wsTab=%v, want phaseTerminal/wsFiles", mm.phase, mm.wsTab)
@@ -146,7 +146,7 @@ func TestDashboardNavBarClickRoutesHome(t *testing.T) {
 	m := dashModel(100, 40)
 	homeRange, _, _ := m.navTabZones()
 	next, _ := m.dashboardClick(homeRange[0]+1, switcherRow)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("Home-cell click on Dashboard → phase %v, want phaseDashboard", mm.phase)
 	}
@@ -169,7 +169,7 @@ func TestNavToTerminalFinishedSessionNoReuse(t *testing.T) {
 	m.phase = phaseDashboard
 
 	next, _ := m.navTo(navTerminal)
-	mm := next.(model)
+	mm := asModel(t, next)
 
 	// The dead term pointer must NOT survive — the reuse branch would have kept it.
 	if mm.term == deadTerm {
@@ -191,7 +191,7 @@ func TestWorkspaceCtrlKeysSwitch(t *testing.T) {
 	m.wsTab = wsFiles
 	// ctrl+1 → Главная, keeping the session.
 	next, _ := m.workspaceKey(tea.KeyPressMsg{Code: '1', Mod: tea.ModCtrl, Text: ""})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("ctrl+1 phase=%v, want phaseDashboard", mm.phase)
 	}

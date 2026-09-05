@@ -191,10 +191,8 @@ var ErrCanceled = errors.New("run canceled at step boundary")
 // All hook fields may be nil (only the TUI sets them). ctx carries run-scoped
 // cancellation: the CLI passes context.Background(); the TUI passes a cancelable
 // context it cancels on abort so an in-flight run stops at the next step boundary.
+// ctx must be non-nil.
 func Execute(ctx context.Context, cfg *config.Config, cmd string, ids []string, h Hooks) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	log := ui.New(cfg.LogFile)
 	defer log.Close()
 	if h.Sink != nil {
@@ -256,7 +254,7 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 	// Resilient initial dial: a freshly-reset box often is not auth-ready for the
 	// first ~minute (sshd in initramfs / cloud-init still installing keys or the
 	// root password). Retry for up to 90s with 5s backoff, streaming progress.
-	cli, err := sshx.DialWithRetry(cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM, pin,
+	cli, err := sshx.DialWithRetry(ctx, cfg.Host, cfg.Port, cfg.User, cfg.Password, keyPEM, pin,
 		90*time.Second, func(msg string) { log.Info("%s", msg) })
 	if err != nil {
 		if errors.Is(err, sshx.ErrNoMutualAuth) {
@@ -316,7 +314,7 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 		if r := cli.Sudo(push); r.RC != 0 {
 			return nil, cleanup, fmt.Errorf("push key to root: %s", r.Stderr)
 		}
-		if err := cli.UseKey(keyPEM); err != nil {
+		if err := cli.UseKey(ctx, keyPEM); err != nil {
 			return nil, cleanup, fmt.Errorf("switch to key auth: %w", err)
 		}
 		cfg.Password = "" // bootstrap secret no longer needed

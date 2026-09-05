@@ -138,7 +138,7 @@ func TestCoexistRulesetOpensPorts(t *testing.T) {
 // countLinesWithAll counts how many lines of s contain sub.
 func countLinesWithAll(s, sub string) int {
 	n := 0
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		if strings.Contains(line, sub) {
 			n++
 		}
@@ -182,7 +182,7 @@ func TestCountServicePorts(t *testing.T) {
 	// Cross-check against the ruleset: count non-SSH ACCEPT lines emitted per family.
 	rs := coexistRuleset(22, tcp, udp)
 	v4, v6 := 0, 0
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if !strings.Contains(line, "-j ACCEPT") || strings.Contains(line, "--dport 22 ") {
 			continue // skip SSH ACCEPT and non-ACCEPT (lo/conntrack/icmpv6) lines
 		}

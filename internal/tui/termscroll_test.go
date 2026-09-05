@@ -15,7 +15,7 @@ import (
 func seedLines(t *testing.T, m model, n, wantScrollback int) {
 	t.Helper()
 	var b strings.Builder
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// \r\n so each line starts at column 0 (the pty would do this); plain "\n" only
 		// moves down a row and the vt would not reset the column.
 		fmt.Fprintf(&b, "line%02d\r\n", i)
@@ -175,7 +175,7 @@ func TestTerminalWheelScroll(t *testing.T) {
 	}
 
 	next, _ := m.Update(wheelMsg(tea.MouseWheelUp))
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.termScroll >= bottom {
 		t.Fatalf("wheel up did not move offset toward older output: %d (bottom=%d)", mm.termScroll, bottom)
 	}
@@ -184,18 +184,18 @@ func TestTerminalWheelScroll(t *testing.T) {
 	}
 
 	// Wheel up repeatedly clamps at 0 (never negative).
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		n, _ := mm.Update(wheelMsg(tea.MouseWheelUp))
-		mm = n.(model)
+		mm = asModel(t, n)
 	}
 	if mm.termScroll != 0 {
 		t.Fatalf("wheel up should clamp at 0, got %d", mm.termScroll)
 	}
 
 	// Wheel down repeatedly returns to the bottom and re-arms follow.
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		n, _ := mm.Update(wheelMsg(tea.MouseWheelDown))
-		mm = n.(model)
+		mm = asModel(t, n)
 	}
 	if mm.termScroll != bottom {
 		t.Fatalf("wheel down should clamp at bottom=%d, got %d", bottom, mm.termScroll)
@@ -225,7 +225,7 @@ func TestTerminalShiftPgUpScrolls(t *testing.T) {
 
 	// Shift+PgUp → local scroll up, consumed (not forwarded).
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.termScroll >= bottom {
 		t.Fatalf("shift+pgup did not scroll up: termScroll=%d bottom=%d", mm.termScroll, bottom)
 	}
@@ -247,7 +247,7 @@ func TestTerminalPlainPgUpForwardsAndFollows(t *testing.T) {
 	m.termScroll = 0
 
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if !mm.termFollow {
 		t.Fatal("a forwarded keystroke (plain pgup) must re-arm follow mode")
 	}
@@ -270,7 +270,7 @@ func TestTerminalScrollKeyIgnoredOnAltScreen(t *testing.T) {
 
 	before := m.termScroll
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
-	mm := next.(model)
+	mm := asModel(t, next)
 	// On alt-screen the gesture is not consumed as a local scroll; the offset is
 	// unchanged by scroll logic (the key was forwarded instead).
 	if mm.termScroll != before {
@@ -289,7 +289,7 @@ func TestTerminalFollowPinOnTick(t *testing.T) {
 	// Follow mode: the tick pins to the bottom.
 	m.termFollow = true
 	next, _ := m.Update(termTickMsg{gen: m.termGen})
-	mm := next.(model)
+	mm := asModel(t, next)
 	wantBottom := max(mm.termBodyLen()-rows, 0)
 	if mm.termScroll != wantBottom {
 		t.Fatalf("follow tick: termScroll=%d, want bottom=%d", mm.termScroll, wantBottom)
@@ -299,7 +299,7 @@ func TestTerminalFollowPinOnTick(t *testing.T) {
 	mm.termFollow = false
 	mm.termScroll = 0
 	n2, _ := mm.Update(termTickMsg{gen: mm.termGen})
-	mm2 := n2.(model)
+	mm2 := asModel(t, n2)
 	if mm2.termScroll != 0 {
 		t.Fatalf("non-follow tick moved the offset: %d, want 0 (held)", mm2.termScroll)
 	}

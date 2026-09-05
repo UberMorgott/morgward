@@ -2,6 +2,7 @@ package steps
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/UberMorgott/morgward/internal/detect"
@@ -97,7 +98,7 @@ func applyCryptoHardening(ctx *Context, write string, handoff bool, okDetail str
 	disarmSSHRevert(ctx)
 
 	if handoff && ctx.Cli.User == "root" {
-		if err := ctx.Cli.SwitchUser(admin); err != nil {
+		if err := ctx.Cli.SwitchUser(ctx.Ctx, admin); err != nil {
 			return StatusFail, "executor handoff to admin failed: " + err.Error(), fmt.Errorf("handoff failed")
 		}
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
@@ -208,7 +209,7 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	// and root is still usable, instead of being left admin-only with the timer
 	// already disarmed. Only after a successful handoff do we disarm + lock root.
 	if ctx.Cli.User == "root" {
-		if err := ctx.Cli.SwitchUser(admin); err != nil {
+		if err := ctx.Cli.SwitchUser(ctx.Ctx, admin); err != nil {
 			return StatusFail, "executor handoff to admin failed: " + err.Error() + " (ssh-revert still armed; root not yet locked — box will self-restore in <300s)", fmt.Errorf("handoff failed")
 		}
 		ctx.Log.Detail("executor switched to %s@%s (key + sudo)", admin, ctx.Cfg.Host)
@@ -311,13 +312,7 @@ func assertAdminLoginable(ctx *Context, admin string) (Status, string, error) {
 		return StatusFail, fmt.Sprintf("admin user %q not found — run the PRE step first", admin),
 			fmt.Errorf("admin precondition: user missing")
 	}
-	inGroup := false
-	for _, g := range strings.Fields(groups.Out()) {
-		if g == "sshusers" {
-			inGroup = true
-			break
-		}
-	}
+	inGroup := slices.Contains(strings.Fields(groups.Out()), "sshusers")
 	if !inGroup {
 		return StatusFail, fmt.Sprintf("admin user %q not in sshusers — run the PRE step first (AllowGroups would lock everyone out)", admin),
 			fmt.Errorf("admin precondition: not in sshusers")

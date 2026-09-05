@@ -95,24 +95,25 @@ func (m model) finishedTail() string {
 	// Successful run → repeat the mode-aware SSH-login notice so the last thing the
 	// operator sees is how to reconnect (strict: key-only; soft: password OR key).
 	// Only a full `run` touches auth policy; detect/verify leave it untouched.
-	tail := "✅ " + t(m.lang, kFinishedOK)
+	var tail strings.Builder
+	tail.WriteString("✅ " + t(m.lang, kFinishedOK))
 	// Internet benchmark (Feature G): only when A4 produced a comparable PRE→POST
 	// pair (BenchOK); omitted cleanly for detect/verify or a skipped/no-sample A4.
 	if m.haveSummary && m.summary.BenchOK {
-		tail += "\n" + fmt.Sprintf(t(m.lang, kBenchLine),
-			m.summary.BenchPreMBs, m.summary.BenchPostMBs, m.summary.BenchRatio)
+		tail.WriteString("\n" + fmt.Sprintf(t(m.lang, kBenchLine),
+			m.summary.BenchPreMBs, m.summary.BenchPostMBs, m.summary.BenchRatio))
 	}
 	// Skip reasons (Feature F): list WHY each step was skipped, not just a count.
 	if m.haveSummary && len(m.summary.Skips) > 0 {
-		tail += "\n" + t(m.lang, kSkipsHeader)
+		tail.WriteString("\n" + t(m.lang, kSkipsHeader))
 		for _, sk := range m.summary.Skips {
-			tail += "\n  " + fmt.Sprintf(t(m.lang, kSkipLine), sk.ID, sk.Reason)
+			tail.WriteString("\n  " + fmt.Sprintf(t(m.lang, kSkipLine), sk.ID, sk.Reason))
 		}
 	}
 	if m.command == "run" {
-		tail += "\n" + t(m.lang, kPwOnInfo)
+		tail.WriteString("\n" + t(m.lang, kPwOnInfo))
 	}
-	return tail
+	return tail.String()
 }
 
 // finishedTailRows is the number of content rows finishedTail occupies; runView

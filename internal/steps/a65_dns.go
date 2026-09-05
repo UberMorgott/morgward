@@ -193,7 +193,7 @@ func (A65DNS) Run(ctx *Context) (Status, string, error) {
 	// Cloudflare's measured avg for the "[was: …]" comparison.
 	cfAvg := ""
 	var result, reverted string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		l = strings.TrimSpace(l)
 		switch {
 		case strings.HasPrefix(l, "PROBE "):

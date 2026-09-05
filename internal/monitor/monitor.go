@@ -107,7 +107,7 @@ func (s *Sampler) Run(ctx context.Context, out chan<- Sample) {
 
 		// (Re)connect if we have no live client.
 		if cli == nil {
-			c, err := sshx.Dial(s.info.Host, s.info.Port, users[ui], s.dialPassword(), s.info.KeyPEM)
+			c, err := sshx.Dial(ctx, s.info.Host, s.info.Port, users[ui], s.dialPassword(), s.info.KeyPEM)
 			if err != nil {
 				emit(Sample{Connected: false, Err: err.Error()})
 				// Next attempt: rotate user, grow backoff, sleep (ctx-aware).

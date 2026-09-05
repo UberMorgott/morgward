@@ -38,7 +38,7 @@ func fakeGitHub(t *testing.T, tag string, bin, sums []byte) *httptest.Server {
 					ChecksumsAsset, srv.URL)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"tag_name":%q,"assets":[%s]}`, tag, assets)
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[%s]}`, tag, assets)
 		case "/bin":
 			_, _ = w.Write(bin)
 		case "/sums":
@@ -251,7 +251,7 @@ func TestApplyReplacesBinary(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	got, err := os.ReadFile(exe)
+	got, err := os.ReadFile(exe) //nolint:gosec // G304 false positive: exe is this test's own t.TempDir() path.
 	if err != nil {
 		t.Fatalf("read replaced exe: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestApplyRefusesTamperedAsset(t *testing.T) {
 	if !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Errorf("error = %q, want a checksum mismatch", err)
 	}
-	got, err := os.ReadFile(exe)
+	got, err := os.ReadFile(exe) //nolint:gosec // G304 false positive: exe is this test's own t.TempDir() path.
 	if err != nil {
 		t.Fatalf("read exe: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestApplyRefusesUnlistedAsset(t *testing.T) {
 	if err := rel.Apply(context.Background(), exe); err == nil {
 		t.Fatal("Apply installed an asset that checksums.txt does not list")
 	}
-	got, _ := os.ReadFile(exe)
+	got, _ := os.ReadFile(exe) //nolint:gosec // G304 false positive: exe is this test's own t.TempDir() path.
 	if string(got) != "old binary" {
 		t.Fatalf("running binary was modified by a refused update: %q", got)
 	}

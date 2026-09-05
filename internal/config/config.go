@@ -117,14 +117,14 @@ func (c *Config) validateHostKeyPin() error {
 	}
 	if kh != "" {
 		if _, err := os.Stat(kh); err != nil {
-			return fmt.Errorf("%w: %q: %v", ErrKnownHostsPath, kh, err)
+			return fmt.Errorf("%w: %q: %w", ErrKnownHostsPath, kh, err)
 		}
 	}
 	if _, err := sshx.ParseHostKeyPin(kh, fp); err != nil {
 		if kh != "" {
-			return fmt.Errorf("%w: %q: %v", ErrKnownHostsParse, kh, err)
+			return fmt.Errorf("%w: %q: %w", ErrKnownHostsParse, kh, err)
 		}
-		return fmt.Errorf("%w, got %q: %v", ErrBadFingerprint, fp, err)
+		return fmt.Errorf("%w, got %q: %w", ErrBadFingerprint, fp, err)
 	}
 	return nil
 }

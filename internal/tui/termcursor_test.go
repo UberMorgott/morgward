@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/UberMorgott/morgward/internal/ui"
 )
 
 // termCursorOf renders the terminal frame and returns its native cursor (nil = no
@@ -121,8 +123,13 @@ func TestTerminalCursorPastTrimmedContent(t *testing.T) {
 	m.termPinIfFollowing()
 
 	snap := termSnap(m)
-	if w := lipgloss.Width(snap.screen[snap.cursorY]); w >= snap.cursorX {
-		t.Fatalf("precondition: row renders %d wide, need it TRIMMED shorter than cursorX=%d", w, snap.cursorX)
+	// The row's VISIBLE content must end left of the cursor column. ultraviolet's
+	// Line.Render no longer trims the trailing blank cells itself, so trim them here —
+	// the invariant under test is "cursor sits past the last non-blank cell", not
+	// whichever of the two trims the padding.
+	row := strings.TrimRight(ui.StripControlAndANSI(snap.screen[snap.cursorY]), " ")
+	if w := lipgloss.Width(row); w >= snap.cursorX {
+		t.Fatalf("precondition: row holds %d visible cells, need content shorter than cursorX=%d", w, snap.cursorX)
 	}
 
 	cur := termCursorOf(m)

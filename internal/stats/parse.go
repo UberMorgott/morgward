@@ -9,7 +9,7 @@ import (
 // by a data line like "2831052 30828540". Returns (0,0) if the data line is
 // missing or malformed.
 func parseDiskKB(out string) (used, total int64) {
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(l)
 		if len(f) != 2 {
 			continue
@@ -35,7 +35,7 @@ func parsePkgCount(out string) int {
 // parsePingMs extracts the avg field from a ping summary line like
 // "rtt min/avg/max/mdev = 10.2/12.1/14.0/1.3 ms". Returns 0 if absent.
 func parsePingMs(out string) float64 {
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		i := strings.Index(l, "=")
 		if i < 0 || !strings.Contains(l, "/") {
 			continue
@@ -58,7 +58,7 @@ func parsePingMs(out string) float64 {
 // parseSSHD reads effective sshd config lines (from `sshd -T`) for
 // permitrootlogin and passwordauthentication. keyOnly = passwordauthentication==no.
 func parseSSHD(out string) (rootLogin string, keyOnly bool) {
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(strings.ToLower(strings.TrimSpace(l)))
 		if len(f) < 2 {
 			continue
@@ -77,7 +77,7 @@ func parseSSHD(out string) (rootLogin string, keyOnly bool) {
 // (case-insensitive) matches label, e.g. "Mem:" or "Swap:".
 func freeKB(out, label string) int64 {
 	label = strings.ToLower(label)
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(l)
 		if len(f) < 2 {
 			continue
@@ -106,7 +106,7 @@ func parseSwapKB(out string) int64 { return freeKB(out, "Swap:") }
 func parsePorts(addrs string) []string {
 	seen := make(map[string]bool)
 	var ports []string
-	for _, local := range strings.Fields(addrs) {
+	for local := range strings.FieldsSeq(addrs) {
 		i := strings.LastIndex(local, ":")
 		if i < 0 || i == len(local)-1 {
 			continue
@@ -129,7 +129,7 @@ func parsePorts(addrs string) []string {
 func parseSnapshot(raw string) *Snapshot {
 	s := &Snapshot{}
 	var sshdLines strings.Builder
-	for _, l := range strings.Split(raw, "\n") {
+	for l := range strings.SplitSeq(raw, "\n") {
 		key, val, ok := strings.Cut(l, "\t")
 		if !ok {
 			continue

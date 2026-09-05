@@ -144,7 +144,7 @@ func TestStartPasswordPathShowsPreRunKey(t *testing.T) {
 	m.command = "run"
 
 	next, _ := m.start()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseKey {
 		t.Fatalf("password-path run did not show the pre-run key modal; phase=%v", mm.phase)
 	}
@@ -179,7 +179,7 @@ func TestStartKeyPathSkipsPreRunKey(t *testing.T) {
 	m.command = "run"
 
 	next, _ := m.start()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase == phaseKey {
 		t.Fatalf("--key path wrongly showed the key modal")
 	}
@@ -221,12 +221,12 @@ func TestPreRunKeyEscAborts(t *testing.T) {
 	m.inputs[fPass].SetValue("secret")
 	m.command = "run"
 	next, _ := m.start()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseKey || !mm.keyPreRun {
 		t.Fatalf("precondition: expected pre-run key modal")
 	}
 	n2, _ := mm.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m2 := n2.(model)
+	m2 := asModel(t, n2)
 	if m2.phase != phaseForm {
 		t.Fatalf("Esc on pre-run key modal → phase %v, want phaseForm", m2.phase)
 	}
@@ -309,7 +309,7 @@ func TestSummaryHomeButtonClick(t *testing.T) {
 		t.Fatalf("click one row below the home button wrongly hit it")
 	}
 	next, _ := m.summaryGoHome()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseForm {
 		t.Fatalf("home (no dashboard facts) → phase %v, want phaseForm", mm.phase)
 	}
@@ -345,7 +345,7 @@ func TestSummaryKeyShowRow(t *testing.T) {
 		t.Fatalf("key-show row click did not hit (y=%d rightX=%d)", y, rightX)
 	}
 	next, _ := m.Update(mouseClickAt(rightX, y))
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseKey {
 		t.Fatalf("key-show click → phase %v, want phaseKey", mm.phase)
 	}

@@ -103,7 +103,7 @@ func TestTerminalReconnectKeyRedials(t *testing.T) {
 	gen0, dead := m.termGen, m.term
 
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	mm := next.(model)
+	mm := asModel(t, next)
 	defer func() {
 		if mm.term != nil {
 			mm.term.close()
@@ -148,7 +148,7 @@ func TestTerminalReconnectKeyRetriesDialError(t *testing.T) {
 	m.inputs[fUser].SetValue("tester")
 
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	mm := next.(model)
+	mm := asModel(t, next)
 	defer func() {
 		if mm.term != nil {
 			mm.term.close()

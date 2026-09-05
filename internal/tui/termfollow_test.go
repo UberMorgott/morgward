@@ -32,14 +32,14 @@ func TestTerminalFollowSurvivesTabRoundTrip(t *testing.T) {
 
 	// Терминал → Главная. The session stays alive, but the in-flight tick retires here.
 	next, _ := m.navTo(navHome)
-	mm := next.(model)
+	mm := asModel(t, next)
 	if _, cmd := mm.Update(termTickMsg{gen: mm.termGen}); cmd != nil {
 		t.Fatal("a tick delivered on the Dashboard must retire (phase gate), not re-schedule")
 	}
 
 	// Главная → Терминал over the same live session.
 	next, cmd := mm.navTo(navTerminal)
-	mm = next.(model)
+	mm = asModel(t, next)
 	if cmd == nil {
 		t.Fatal("re-entering Терминал returned no cmd: the repaint tick is dead, so follow mode never re-pins again")
 	}
@@ -52,7 +52,7 @@ func TestTerminalFollowSurvivesTabRoundTrip(t *testing.T) {
 		t.Fatalf("re-entry cmd produced %T, want termTickMsg", msg)
 	}
 	next, _ = mm.Update(tick)
-	mm = next.(model)
+	mm = asModel(t, next)
 
 	if want := max(mm.termBodyLen()-rows, 0); mm.termScroll != want {
 		t.Fatalf("after the tab round-trip follow mode left termScroll=%d, want bottom %d", mm.termScroll, want)
@@ -78,7 +78,7 @@ func TestTerminalReentryFirstFrameIsAtBottom(t *testing.T) {
 
 	// Park on Главная; the heartbeat retires there.
 	next, _ := m.navTo(navHome)
-	mm := next.(model)
+	mm := asModel(t, next)
 
 	// Output keeps arriving while parked — nothing re-pins it.
 	mm.term.write([]byte("MARKER-ZZ\r\n"))
@@ -88,7 +88,7 @@ func TestTerminalReentryFirstFrameIsAtBottom(t *testing.T) {
 
 	// Back to Терминал. No tick pumped: this is the first frame.
 	next, _ = mm.navTo(navTerminal)
-	mm = next.(model)
+	mm = asModel(t, next)
 
 	if want := max(mm.termBodyLen()-rows, 0); mm.termScroll != want {
 		t.Fatalf("first frame after re-entry at termScroll=%d, want bottom %d", mm.termScroll, want)

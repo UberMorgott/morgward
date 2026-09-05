@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,9 @@ func TestUpdateCheckMsgValueCopy(t *testing.T) {
 	if msg.ver != "0.2.0" {
 		t.Fatalf("updateCheckMsg copy not isolated: src mutated to %q", msg.ver)
 	}
+	if cp.ver != "9.9.9" {
+		t.Fatalf("the copy did not keep its own value: %q", cp.ver)
+	}
 
 	m := newModel()
 	m.updateState = updAvailable
@@ -34,6 +38,10 @@ func TestUpdateCheckMsgValueCopy(t *testing.T) {
 		t.Fatalf("model copy not isolated: update fields shared (state=%d ver=%q want=%v)",
 			m.updateState, m.updateVer, m.wantUpdate)
 	}
+	if m2.updateState != updCurrent || m2.updateVer != "1.0.0" || m2.wantUpdate {
+		t.Fatalf("the copy did not keep its own values (state=%d ver=%q want=%v)",
+			m2.updateState, m2.updateVer, m2.wantUpdate)
+	}
 }
 
 // TestUpdateCheckMsgHandler drives Update() with each updateCheckMsg outcome and
@@ -43,7 +51,7 @@ func TestUpdateCheckMsgHandler(t *testing.T) {
 	// found=true → updAvailable + version captured
 	m := newModel()
 	out, _ := m.Update(updateCheckMsg{found: true, ver: "0.2.0"})
-	got := out.(model)
+	got := asModel(t, out)
 	if got.updateState != updAvailable {
 		t.Fatalf("found=true: state=%d want updAvailable", got.updateState)
 	}
@@ -53,7 +61,7 @@ func TestUpdateCheckMsgHandler(t *testing.T) {
 
 	// found=false → updCurrent (up-to-date), version cleared
 	out, _ = got.Update(updateCheckMsg{found: false})
-	got = out.(model)
+	got = asModel(t, out)
 	if got.updateState != updCurrent {
 		t.Fatalf("found=false: state=%d want updCurrent", got.updateState)
 	}
@@ -63,7 +71,7 @@ func TestUpdateCheckMsgHandler(t *testing.T) {
 
 	// err != nil → updErr
 	out, _ = got.Update(updateCheckMsg{err: errors.New("network")})
-	got = out.(model)
+	got = asModel(t, out)
 	if got.updateState != updErr {
 		t.Fatalf("err: state=%d want updErr", got.updateState)
 	}
@@ -150,7 +158,7 @@ func TestUpdateButtonActivation(t *testing.T) {
 	m.updateVer = "0.2.0"
 	m.focus = rowUpdateButton
 	out, cmd := m.updateForm(tea.KeyPressMsg{Code: tea.KeyEnter})
-	got := out.(model)
+	got := asModel(t, out)
 	if !got.wantUpdate {
 		t.Fatal("Enter on update button did not set wantUpdate")
 	}
@@ -168,7 +176,7 @@ func TestUpdateButtonNotActivatedWhenUnavailable(t *testing.T) {
 	m.updateState = updCurrent
 	m.focus = rowUpdateButton
 	out, _ := m.updateForm(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if out.(model).wantUpdate {
+	if asModel(t, out).wantUpdate {
 		t.Fatal("Enter set wantUpdate while updateState != updAvailable")
 	}
 }
@@ -202,7 +210,7 @@ func TestUpdateButtonClick(t *testing.T) {
 		t.Fatalf("click at (%d,%d) did not hit frUpdate: %+v", x, y, hit)
 	}
 	out, cmd := m.formClick(x, y)
-	if !out.(model).wantUpdate {
+	if !asModel(t, out).wantUpdate {
 		t.Fatal("click on update pill did not set wantUpdate")
 	}
 	if cmd == nil {
@@ -247,7 +255,7 @@ func TestGenGuard_StaleDropped(t *testing.T) {
 	// progress fields untouched and NO listener re-issued.
 	stale := genMsg{gen: 1, msg: progMsg(engine.Progress{Index: 7, Total: 9, ID: "A9"})}
 	out, cmd := m.Update(stale)
-	got := out.(model)
+	got := asModel(t, out)
 	if got.index != 0 || got.total != 0 || got.curID != "" {
 		t.Fatalf("stale genMsg mutated progress: index=%d total=%d id=%q", got.index, got.total, got.curID)
 	}
@@ -266,7 +274,7 @@ func TestGenGuard_CurrentHandled(t *testing.T) {
 
 	cur := genMsg{gen: 2, msg: progMsg(engine.Progress{Index: 3, Total: 9, ID: "A5", Status: "running"})}
 	out, cmd := m.Update(cur)
-	got := out.(model)
+	got := asModel(t, out)
 	if got.index != 3 || got.total != 9 || got.curID != "A5" {
 		t.Fatalf("current genMsg not handled: index=%d total=%d id=%q", got.index, got.total, got.curID)
 	}
@@ -289,7 +297,7 @@ func TestGenGuard_DoneRetiresListener(t *testing.T) {
 
 	done := genMsg{gen: 1, msg: progMsg(engine.Progress{Done: true})}
 	out, cmd := m.Update(done)
-	got := out.(model)
+	got := asModel(t, out)
 	if !got.haveSummary {
 		t.Fatal("Done did not set haveSummary")
 	}
@@ -299,10 +307,5 @@ func TestGenGuard_DoneRetiresListener(t *testing.T) {
 }
 
 func containsRow(rows []int, want int) bool {
-	for _, r := range rows {
-		if r == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rows, want)
 }

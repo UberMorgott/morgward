@@ -694,6 +694,8 @@ func (m model) dashboardClick(x, y int) (tea.Model, tea.Cmd) {
 		m.phase = phaseSecurity
 		m.dashScroll = 0 // security menu reuses dashScroll; start at the top
 		return m, nil
+	case dashBtnNone:
+		// No pill under the click — fall through to the audit-row hit-test below.
 	}
 	// Audit row → wiki detail for that tweak. Resolve the doc by the tweak's
 	// Probe.Step (matches wiki.Doc keys, e.g. "A2"); keep the specific tweak's

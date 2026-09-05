@@ -32,7 +32,7 @@ type fileEntry struct {
 // rather than strings.Fields(...)+join.
 func parseListing(out string) []fileEntry {
 	var entries []fileEntry
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if line == "" {
 			continue
 		}
@@ -55,9 +55,9 @@ func parseListing(out string) []fileEntry {
 			name:    name,
 		}
 		if e.isLink {
-			if i := strings.Index(name, " -> "); i >= 0 {
-				e.name = name[:i]
-				e.target = name[i+len(" -> "):]
+			if before, after, ok := strings.Cut(name, " -> "); ok {
+				e.name = before
+				e.target = after
 			}
 		}
 		// Remote filenames are UNTRUSTED: a name/target may carry ANSI escapes or C0

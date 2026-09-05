@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"net"
 	"strings"
@@ -41,7 +42,7 @@ func TestTerminalKeyForwarding(t *testing.T) {
 	defer m.term.close()
 
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.term == nil {
 		t.Fatal("terminal session dropped after a normal keypress")
 	}
@@ -57,7 +58,7 @@ func TestTerminalExitKey(t *testing.T) {
 	m, fs := termModel(t, 100, 40)
 
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("after ctrl+q phase = %v, want phaseDashboard (termReturn)", mm.phase)
 	}
@@ -78,7 +79,7 @@ func TestTerminalCtrlCPassesThrough(t *testing.T) {
 	defer m.term.close()
 
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseTerminal {
 		t.Fatalf("ctrl+c changed phase to %v — it must pass through to the shell, not exit", mm.phase)
 	}
@@ -105,7 +106,7 @@ func TestTerminalDialErrorView(t *testing.T) {
 
 	// Esc returns to termReturn.
 	next, _ := m.terminalKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase != phaseDashboard {
 		t.Fatalf("esc on error notice → phase %v, want phaseDashboard", mm.phase)
 	}
@@ -118,7 +119,7 @@ func TestTerminalResizeForwards(t *testing.T) {
 	defer m.term.close()
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 50})
-	mm := next.(model)
+	mm := asModel(t, next)
 	wantCols, wantRows := mm.termContentSize()
 	if w := mm.term.emu.Width(); w != wantCols {
 		t.Errorf("emulator width = %d after resize, want %d", w, wantCols)
@@ -164,7 +165,8 @@ func startLoopbackSSH(t *testing.T) (addr string, stop func()) {
 	cfg := &ssh.ServerConfig{NoClientAuth: true}
 	cfg.AddHostKey(signer)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -217,7 +219,7 @@ func TestTerminalTeardownClosesClient(t *testing.T) {
 	}
 	port := atoiDefault(portStr, 0)
 
-	cli, err := sshx.Dial(host, port, "tester", "", nil)
+	cli, err := sshx.Dial(context.Background(), host, port, "tester", "", nil)
 	if err != nil {
 		t.Fatalf("dial loopback ssh: %v", err)
 	}
@@ -253,7 +255,7 @@ func TestTerminalTeardownClosesClient(t *testing.T) {
 	}
 
 	// Idempotent: a second close must not panic (double Close / double nil).
-	m = m.closeTerminal()
+	_ = m.closeTerminal()
 }
 
 // TestGoBackClosesTerminalClient proves the defensive goBack path also closes the dialed
@@ -265,7 +267,7 @@ func TestGoBackClosesTerminalClient(t *testing.T) {
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port := atoiDefault(portStr, 0)
-	cli, err := sshx.Dial(host, port, "tester", "", nil)
+	cli, err := sshx.Dial(context.Background(), host, port, "tester", "", nil)
 	if err != nil {
 		t.Fatalf("dial loopback ssh: %v", err)
 	}
@@ -280,7 +282,7 @@ func TestGoBackClosesTerminalClient(t *testing.T) {
 	<-fs.started
 
 	next, _ := m.goBack()
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.termClient != nil {
 		t.Fatal("goBack did not nil termClient — client leaked on home-navigation")
 	}

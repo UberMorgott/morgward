@@ -80,7 +80,7 @@ func TestXferDoneMsgHandling(t *testing.T) {
 
 	// Failure path.
 	n, _ := m.Update(fmXferDoneMsg{err: os.ErrPermission, label: "download x"})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if mm.files.transferring {
 		t.Fatal("fmXferDoneMsg must clear the transferring flag")
 	}
@@ -91,7 +91,7 @@ func TestXferDoneMsgHandling(t *testing.T) {
 	// Success path.
 	mm.files.transferring = true
 	n, _ = mm.Update(fmXferDoneMsg{err: nil, upload: false, label: "downloaded x"})
-	mm = n.(model)
+	mm = asModel(t, n)
 	if mm.files.transferring {
 		t.Fatal("success must clear the transferring flag")
 	}
@@ -107,21 +107,21 @@ func TestDownloadPromptOnlyRegularFiles(t *testing.T) {
 	// On "..": no prompt.
 	m.files.sel = 0
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'w'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("download on '..' must be a no-op")
 	}
 	// On a directory: no prompt.
 	m.files.sel = 1
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'w'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("download on a directory must be a no-op")
 	}
 	// On a regular file: prompt opens, seeded with the resolved local dest, kind=fpDownload.
 	m.files.sel = 2
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'w'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.promptKind != fpDownload {
 		t.Fatalf("'w' on a file must open the download prompt: kind=%d", m.files.promptKind)
 	}
@@ -136,12 +136,12 @@ func TestTransferTriggersBlockedWhileInFlight(t *testing.T) {
 	m.files.sel = 0
 	m.files.transferring = true
 	n, _ := m.filesKey(tea.KeyPressMsg{Code: 'w'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("'w' must not open a prompt while transferring")
 	}
 	n, _ = m.filesKey(tea.KeyPressMsg{Code: 'u'})
-	m = n.(model)
+	m = asModel(t, n)
 	if m.files.prompting() {
 		t.Fatal("'u' must not open a prompt while transferring")
 	}
@@ -153,7 +153,7 @@ func TestXferDoneUploadReloads(t *testing.T) {
 	m := filesKeyModel(nil)
 	m.files.transferring = true
 	n, _ := m.Update(fmXferDoneMsg{err: nil, upload: true, label: "uploaded y"})
-	mm := n.(model)
+	mm := asModel(t, n)
 	if mm.files.transferring {
 		t.Fatal("upload-done must clear the flag")
 	}

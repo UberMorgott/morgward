@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -131,7 +132,9 @@ func (m model) openTerminal(from phase, initialTab wsTab) (tea.Model, tea.Cmd) {
 		keyPEM = b
 	}
 
-	cli, err := sshx.Dial(host, port, user, password, keyPEM)
+	// No run-scoped ctx here: openTerminal is a top-level TUI entry and the session's
+	// own lifetime is governed by termClient.Close() / termSession.close().
+	cli, err := sshx.Dial(context.Background(), host, port, user, password, keyPEM)
 	if err != nil {
 		m.termErr = t(m.lang, kTermDialFail) + ": " + err.Error()
 		return m, nil

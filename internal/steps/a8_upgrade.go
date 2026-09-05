@@ -124,7 +124,7 @@ exit $__rc`)
 	// `reboot` drops the connection; ignore the resulting transport error.
 	ctx.Cli.Sudo("(sleep 1; systemctl reboot) >/dev/null 2>&1 &")
 
-	newID, err := ctx.Cli.WaitForReboot(pre, 10*time.Minute, func(msg string) {
+	newID, err := ctx.Cli.WaitForReboot(ctx.Ctx, pre, 10*time.Minute, func(msg string) {
 		ctx.Log.Detail("%s", msg)
 	})
 	if err != nil {

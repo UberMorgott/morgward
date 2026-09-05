@@ -302,6 +302,8 @@ func (m model) scrollBy(d int) model {
 		if m.terminalScrollable() {
 			m.termScrollBy(d)
 		}
+	case phaseForm:
+		// The landing form has no scroll region.
 	}
 	return m
 }
@@ -356,6 +358,9 @@ func (m model) scrollGeom() (topRow, viewH, total, off int, ok bool) {
 		}
 		_, rows := m.termContentSize()
 		return summaryBodyTopRow, rows, m.termBodyLen(), m.termScroll, true
+	case phaseForm, phaseRun:
+		// No scrollbar region: the form does not scroll and the run screen owns its
+		// own viewport (m.vp), which draws its scrollbar itself.
 	}
 	return 0, 0, 0, 0, false
 }

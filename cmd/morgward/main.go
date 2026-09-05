@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -137,15 +138,13 @@ func main() {
 		result, err := tui.Run()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tui error:", err)
+			//nolint:gocritic // exitAfterDefer: restoreOnPanic only acts on a panic (recover()==nil returns); a clean exit deliberately skips it.
 			os.Exit(1)
 		}
 		// The operator may have asked to self-update from the landing strip. Do it
 		// AFTER Run() returns so the alt-screen has fully torn down, then relaunch.
 		if result.DoUpdate {
-			if err := performUpdate(result.TargetVer); err != nil {
-				fmt.Fprintln(os.Stderr, "update failed:", err)
-				os.Exit(1)
-			}
+			performUpdate(result.TargetVer) // never returns
 		}
 		return
 	}
@@ -299,32 +298,49 @@ func cleanupOldBinary() {
 // the running exe cannot be deleted, so self-update renames it aside;
 // the next launch's cleanupOldBinary() sweeps that leftover. targetVer is the
 // version the operator saw on the strip (informational; applyUpdate re-detects).
-func performUpdate(targetVer string) error {
+// It NEVER returns: the relaunched child's exit code (or 1 on failure) becomes
+// ours. The download/relaunch work lives in relaunchAfterUpdate so THIS function
+// holds no defers — os.Exit here cannot skip one (gocritic exitAfterDefer).
+func performUpdate(targetVer string) {
+	code, err := relaunchAfterUpdate(targetVer)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "update failed:", err)
+		os.Exit(1)
+	}
+	os.Exit(code)
+}
+
+// relaunchAfterUpdate applies the update and runs the replaced binary to
+// completion, returning the exit code the caller should exit with. Every
+// deferred cleanup (the 60s download-deadline cancel) runs before it returns.
+func relaunchAfterUpdate(targetVer string) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	newVer, err := applyUpdate(ctx, targetVer)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Locate the (now-replaced) executable to relaunch the updated binary.
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate executable: %w", err)
+		return 0, fmt.Errorf("locate executable: %w", err)
 	}
 	fmt.Printf("%s: обновлено до v%s — перезапуск.\n", version.Name, newVer)
-	c := exec.Command(exe, os.Args[1:]...) // #nosec G204 G702 -- args are the local operator's own launch argv; no shell; binary path from os.Executable(); update authenticity is enforced by the F01 checksum validator
+	// context.Background(), NOT ctx: ctx carries the 60s DOWNLOAD deadline and the
+	// relaunched process must outlive it — the operator now owns that session.
+	c := exec.CommandContext(context.Background(), exe, os.Args[1:]...) // #nosec G204 G702 -- args are the local operator's own launch argv; no shell; binary path from os.Executable(); update authenticity is enforced by the F01 checksum validator
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
 		// Propagate the relaunched process's exit code when it failed cleanly.
-		if ee, ok := err.(*exec.ExitError); ok {
-			os.Exit(ee.ExitCode())
+		ee := &exec.ExitError{}
+		if errors.As(err, &ee) {
+			return ee.ExitCode(), nil
 		}
-		return fmt.Errorf("relaunch: %w", err)
+		return 0, fmt.Errorf("relaunch: %w", err)
 	}
-	os.Exit(0)
-	return nil
+	return 0, nil
 }
 
 // printKeyBlock writes the generated SSH private key PEM to stdout, fenced by a
@@ -414,9 +430,11 @@ func promptPassword(label string) (string, error) {
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
-		// Fallback for non-terminal stdin (piped input).
+		// Fallback for non-terminal stdin (piped input). A ReadPassword failure here
+		// is EXPECTED (stdin is a pipe, not a tty), not an error to propagate.
 		r := bufio.NewReader(os.Stdin)
 		line, _ := r.ReadString('\n')
+		//nolint:nilerr // deliberate: non-tty stdin is a supported input mode, not a failure.
 		return strings.TrimSpace(line), nil
 	}
 	return strings.TrimSpace(string(b)), nil

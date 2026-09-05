@@ -18,7 +18,7 @@ func TestCtrl3SwitchesToFiles(t *testing.T) {
 	// here. No live connection is needed: the tab flip + session creation don't touch it.
 	m.termClient = &sshx.Client{}
 	next, _ := m.Update(tea.KeyPressMsg{Code: '3', Mod: tea.ModCtrl})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.wsTab != wsFiles {
 		t.Fatal("ctrl+3 must switch to the Files tab")
 	}
@@ -32,7 +32,7 @@ func TestCtrlQExitsFromFilesTab(t *testing.T) {
 	m, _ := termModel(t, 100, 40)
 	m.wsTab = wsFiles
 	next, _ := m.Update(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
-	mm := next.(model)
+	mm := asModel(t, next)
 	if mm.phase == phaseTerminal {
 		t.Fatal("ctrl+q on the Files tab must leave phaseTerminal (close the workspace)")
 	}
@@ -49,12 +49,12 @@ func TestFilesStatePersistsAcrossSwitch(t *testing.T) {
 	m.files = newFileSession(m.termClient, "/var/log", langRU)
 	m.wsTab = wsFiles
 	n1, _ := m.Update(tea.KeyPressMsg{Code: '2', Mod: tea.ModCtrl})
-	m = n1.(model)
+	m = asModel(t, n1)
 	if m.wsTab != wsTerminal {
 		t.Fatal("ctrl+2 must switch to Terminal")
 	}
 	n2, _ := m.Update(tea.KeyPressMsg{Code: '3', Mod: tea.ModCtrl})
-	m = n2.(model)
+	m = asModel(t, n2)
 	if m.files == nil || m.files.cwd != "/var/log" {
 		t.Fatal("Files cwd must survive a tab round-trip")
 	}
