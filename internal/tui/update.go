@@ -989,6 +989,13 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 		close(m.abort)
 		m.abort = nil
 	}
+	// Retire EVERY message still in flight for the session we are leaving. Cancelling
+	// the bgAudit above is not enough on its own: a cancelled engine.Execute still
+	// returns, so its bgAuditMsg lands with a partial Summary — and with the generation
+	// unchanged it passes Update's gen check and repopulates dashFacts with the OLD
+	// server's facts, after which a failed connect to a DIFFERENT host can show that
+	// stale Dashboard. Bumping here makes every such straggler stale by construction.
+	m.runGen++
 	m.phase = phaseForm
 	m.finished = false
 	m.finalErr = nil
@@ -1124,7 +1131,14 @@ func (m model) dashHome() (tea.Model, tea.Cmd) {
 // StatusFail/StatusSkip steps are left exactly as the last audit found them — this is
 // grounded in what the engine reported, not blanket optimism. Only the DISPLAY set is
 // touched; dashAuditRaw keeps the true probe verdicts the Security screen reads.
+//
+// DIRECTION MATTERS: a `revert` also reports StatusOK per reverted step, but that OK
+// means "the tweak is GONE". Folding it in as Applied=true showed reverted tweaks as
+// applied, so the sign is taken from the command — apply for run/step, un-apply for
+// revert (Err untouched: an unmeasurable probe stays unknown either way). The bgAudit
+// that follows replaces both with the measured truth.
 func (m model) markStepsApplied(sum engine.Summary) model {
+	applied := m.command != "revert"
 	ok := make(map[string]bool, len(sum.Results))
 	for _, r := range sum.Results {
 		if r.Status == steps.StatusOK {
@@ -1138,21 +1152,21 @@ func (m model) markStepsApplied(sum engine.Summary) model {
 	// shared with dashAuditRaw's caller — mutating in place would rewrite history.
 	upd := make([]tweaks.Result, len(m.dashAuditResults))
 	copy(upd, m.dashAuditResults)
-	applied := 0
+	tally := 0
 	for i := range upd {
 		// A probe whose CHECK could not run (Err set) is UNKNOWN, not applied — an OK
 		// step says the apply succeeded, it says nothing about a measurement that never
 		// happened. Clearing Err here manufactured a green ✓ out of a "?" row; such rows
 		// stay "?" until bgAudit measures them for real.
 		if ok[upd[i].Probe.Step] && upd[i].Err == "" {
-			upd[i].Applied = true
+			upd[i].Applied = applied
 		}
 		if dashRowSatisfied(upd[i]) {
-			applied++
+			tally++
 		}
 	}
 	m.dashAuditResults = upd
-	m.dashAuditApplied = applied
+	m.dashAuditApplied = tally
 	return m
 }
 
@@ -1186,14 +1200,26 @@ func (m model) bgAudit() (model, tea.Cmd) {
 	return m, func() tea.Msg {
 		defer cancel() // release the ctx once the audit is done, however it ended
 		var sum engine.Summary
-		e := engine.Execute(auditCtx, cfg, "audit", nil, engine.Hooks{
-			OnProgress: func(p engine.Progress) {
-				if p.Done {
-					sum = p.Summary
-				}
-			},
-		})
+		e := engine.Execute(auditCtx, cfg, "audit", nil, auditHooks(&sum))
 		return genMsg{gen, bgAuditMsg{sum: sum, err: e}}
+	}
+}
+
+// auditHooks is the hook set for the out-of-band dashboard audit: capture the final
+// Summary, and DISCARD the log stream. The discarding Sink is mandatory, not
+// cosmetic — with Hooks.Sink nil the engine's ui.Logger falls back to printing to
+// stdout, and this audit runs while the Bubble Tea alt-screen owns the terminal, so
+// every log line and every streamed remote line would be painted over the frame.
+// OnConnect stays nil on purpose (the engine null-checks it): the background audit
+// must not start a live sampler.
+func auditHooks(sum *engine.Summary) engine.Hooks {
+	return engine.Hooks{
+		Sink: func(string) {},
+		OnProgress: func(p engine.Progress) {
+			if p.Done {
+				*sum = p.Summary
+			}
+		},
 	}
 }
 
@@ -1413,6 +1439,18 @@ func (m model) launchEngine(cfg *config.Config) (tea.Model, tea.Cmd) {
 	// one channel. goBack swaps in fresh channels for its abort path; this guards the
 	// no-goBack re-run path that reuses them.
 	m.runGen++
+
+	// …and give this run its OWN channels. Bumping the generation alone is not enough
+	// on a re-run that skipped goBack (retry via `r`, apply-tweaks, startSteps,
+	// startRevert): a listener parked from the previous run is still blocked on the
+	// SAME channel, so it can win the race for the single one-shot connMsg, tag it with
+	// the OLD generation and have Update drop it — the retry would then never start the
+	// monitor or capture the generated key. Fresh channels make the stale listener
+	// unreachable instead of a competitor.
+	m.logs = make(chan string, 4096)
+	m.done = make(chan error, 1)
+	m.connCh = make(chan monitor.ConnInfo, 1)
+	m.progCh = make(chan engine.Progress, 256)
 
 	// Reset per-run completion/progress state (BUG 1) so a SECOND run never inherits
 	// the prior run's finished/summary flags.
