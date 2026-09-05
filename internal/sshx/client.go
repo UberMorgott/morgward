@@ -730,14 +730,32 @@ func (c *Client) BootID() string {
 	return c.Run("cat /proc/sys/kernel/random/boot_id").Out()
 }
 
+// sleepCtx waits d, or returns ctx.Err() as soon as ctx is done. Every wait inside
+// the reboot poll goes through it so a cancelled run unwinds within a scheduler tick
+// instead of holding the goroutine for the remainder of a 5s/8s fixed sleep.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 // WaitForReboot polls the SSH port until the box answers AND boot_id differs
 // from preBootID. Returns the new boot_id, or an error on timeout (box may be
 // bricked — caller must escalate, not claim rollback).
 func (c *Client) WaitForReboot(ctx context.Context, preBootID string, timeout time.Duration, onTick func(string)) (string, error) {
 	deadline := time.Now().Add(timeout)
 	c.Close()
-	// Give the box a moment to actually go down before polling.
-	time.Sleep(8 * time.Second)
+	// Give the box a moment to actually go down before polling. Every wait honours
+	// ctx: a cancelled run (operator went Back / quit the TUI) must not keep a
+	// goroutine parked in a fixed sleep for the rest of the reboot window.
+	if err := sleepCtx(ctx, 8*time.Second); err != nil {
+		return "", err
+	}
 	// rebootAuthFailMax: consecutive auth rejections tolerated before concluding
 	// our credentials genuinely no longer work. Early in boot an auth rejection
 	// can be TRANSIENT — e.g. a late-mounted /home leaves authorized_keys
@@ -747,6 +765,9 @@ func (c *Client) WaitForReboot(ctx context.Context, preBootID string, timeout ti
 	const rebootAuthFailMax = 5
 	authFails := 0
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if err := c.connect(ctx); err != nil {
 			// Distinguish "box still down" (connection refused / TCP timeout — keep
 			// polling) from "box is back UP but rejected our credentials". The latter
@@ -767,7 +788,9 @@ func (c *Client) WaitForReboot(ctx context.Context, preBootID string, timeout ti
 			if onTick != nil {
 				onTick("waiting for SSH…")
 			}
-			time.Sleep(5 * time.Second)
+			if err := sleepCtx(ctx, 5*time.Second); err != nil {
+				return "", err
+			}
 			continue
 		}
 		bid := c.BootID()
@@ -778,7 +801,9 @@ func (c *Client) WaitForReboot(ctx context.Context, preBootID string, timeout ti
 			onTick("SSH up, boot_id unchanged — still rebooting…")
 		}
 		c.Close()
-		time.Sleep(5 * time.Second)
+		if err := sleepCtx(ctx, 5*time.Second); err != nil {
+			return "", err
+		}
 	}
 	return "", fmt.Errorf("SSH never reconnected with a new boot_id within %s — box may be bricked; recover via provider console", timeout)
 }

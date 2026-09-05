@@ -1,6 +1,7 @@
 package sshx
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -232,5 +233,27 @@ func TestTeeLinesSecretMarkerNeverEmitted(t *testing.T) {
 	// But the marker line IS captured, so the value remains extractable downstream.
 	if !strings.Contains(capture.String(), SecretMarkerPrefix+secret) {
 		t.Fatalf("capture missing marker line; got %q", capture.String())
+	}
+}
+
+// WaitForReboot must honour ctx: its fixed 8s/5s waits used to be bare time.Sleep,
+// so a cancelled run (operator hit Back / quit) kept a goroutine parked for the rest
+// of the reboot window. Cancelled ctx ⇒ returns ctx.Err() within a tick.
+func TestWaitForRebootHonoursContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c := &Client{}
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.WaitForReboot(ctx, "old-boot-id", time.Minute, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WaitForReboot err = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("WaitForReboot ignored the cancelled context (still sleeping)")
 	}
 }
