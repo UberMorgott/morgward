@@ -1,9 +1,39 @@
 package steps
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// The 26.04 branch installs nothing. An EMPTY `else` body is a bash SYNTAX ERROR
+// that kills the WHOLE script, so the chrony drop-in and the timedatectl fallback
+// would never run and a6.chrony would report a bare "na". Checked structurally and
+// — where a bash is actually available — with the real parser (`bash -n`).
+func TestTimeSyncScriptShellSyntax(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	for name, s := range map[string]string{
+		"26.04 (no install)": timeSyncScript(false),
+		"24.04 (install)":    timeSyncScript(true),
+	} {
+		if strings.Contains(s, "else\nfi") || strings.Contains(s, "else\n\nfi") {
+			t.Errorf("%s: empty else body is a bash syntax error:\n%s", name, s)
+		}
+		if bash == "" {
+			continue
+		}
+		p := filepath.Join(t.TempDir(), "s.sh")
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		if out, err := exec.CommandContext(t.Context(), bash, "-n", p).CombinedOutput(); err != nil {
+			t.Errorf("%s: bash -n rejected the script: %v\n%s\n---\n%s", name, err, out, s)
+		}
+	}
+}
 
 // M06: chrony is INSTALLED only on 22.04/24.04 (26.04 ships it), and never when it
 // is already active. Either way the script falls back to `timedatectl set-ntp true`,

@@ -43,6 +43,12 @@ func timeSyncScript(installChrony bool) string {
 		"else\n"
 	if installChrony {
 		s += aptPrelude() + aptInstallOptional("chrony")
+	} else {
+		// 26.04 already ships chrony, so there is nothing to install here — but bash
+		// forbids an EMPTY else body: `else\nfi` is a syntax error that kills the
+		// WHOLE script, so the drop-in and the timedatectl fallback below would never
+		// run. The no-op keeps the branch legal.
+		s += "  :\n"
 	}
 	s += "fi\n" +
 		"if [ -d /etc/chrony/conf.d ]; then\n" +
@@ -77,7 +83,12 @@ systemctl daemon-reexec
 
 	// M06: chrony is installed on 22.04/24.04 (26.04 already ships it) and verified
 	// everywhere. Non-fatal by construction — see timeSyncScript.
-	ctx.Cli.Sudo(timeSyncScript(ctx.Facts.Is2204 || ctx.Facts.Is2404))
+	// Non-fatal, but NOT silent: a rc!=0 here means the chrony drop-in and/or the
+	// timedatectl fallback did not land, which the a6.chrony probe would later report
+	// as a bare "na" with no explanation.
+	if r := ctx.Cli.Sudo(timeSyncScript(ctx.Facts.Is2204 || ctx.Facts.Is2404)); r.RC != 0 {
+		ctx.Log.Warn("time sync setup rc=%d (continuing): %s", r.RC, firstLine(r.Stderr))
+	}
 	track := ctx.Cli.Sudo("chronyc tracking 2>/dev/null | head -1").Out()
 	timeNote := "ntp on"
 	if track != "" {
