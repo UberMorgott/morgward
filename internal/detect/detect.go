@@ -17,12 +17,21 @@ import (
 
 // Facts is the resolved environment the steps condition on.
 type Facts struct {
-	ID          string // os-release ID (expect "ubuntu")
-	VersionID   string // "24.04" | "26.04"
-	Codename    string // "noble" | "resolute"
-	Is2604      bool
-	Is2404      bool
-	IsUbuntu    bool
+	ID        string // os-release ID (expect "ubuntu")
+	VersionID string // "22.04" | "24.04" | "26.04"
+	Codename  string // "jammy" | "noble" | "resolute"
+	Is2604    bool
+	Is2404    bool
+	Is2204    bool
+	IsUbuntu  bool
+	// SSHDMajor/SSHDMinor are the box's REAL OpenSSH version (from `sshd -V`,
+	// falling back to `ssh -V`), 0 when the probe failed. Every sshd directive that
+	// is version-sensitive gates on SSHDAtLeast so a box whose OpenSSH does not
+	// match its release's stock version (backport, PPA, off-target release) is
+	// still handled correctly; the Ubuntu-release flags stay as the fallback.
+	SSHDMajor int
+	SSHDMinor int
+
 	Virt        string // systemd-detect-virt (none = bare metal)
 	Kernel      string // uname -r
 	EgressIface string
@@ -97,6 +106,35 @@ func (f *Facts) ManagesIPTables() bool {
 	}
 }
 
+// openSSHVersionRe matches the OpenSSH banner both `sshd -V` and `ssh -V` print,
+// e.g. "OpenSSH_9.6p1 Ubuntu-3ubuntu13.14, OpenSSL 3.0.13".
+var openSSHVersionRe = regexp.MustCompile(`OpenSSH_(\d+)\.(\d+)`)
+
+// parseOpenSSHVersion extracts (major, minor) from an OpenSSH version banner.
+// Returns (0, 0) when no banner is present, which every SSHDAtLeast caller reads
+// as "unknown" and falls back to the Ubuntu-release gate.
+func parseOpenSSHVersion(out string) (major, minor int) {
+	m := openSSHVersionRe.FindStringSubmatch(out)
+	if m == nil {
+		return 0, 0
+	}
+	major, _ = strconv.Atoi(m[1])
+	minor, _ = strconv.Atoi(m[2])
+	return major, minor
+}
+
+// SSHDAtLeast reports whether the box's OpenSSH is >= major.minor. It is FALSE
+// when the version probe failed (SSHDMajor == 0) so an unknown version never
+// causes an option the local sshd might reject to be emitted — `sshd -t` would
+// fail the whole A2 step. Callers pair it with the release flags (`Is2404 ||
+// Is2604 || SSHDAtLeast(...)`) so a confirmed release still gates as before.
+func (f *Facts) SSHDAtLeast(major, minor int) bool {
+	if f.SSHDMajor == 0 {
+		return false
+	}
+	return f.SSHDMajor > major || (f.SSHDMajor == major && f.SSHDMinor >= minor)
+}
+
 // ListenService is one public listening socket: its protocol, port, the owning
 // process name (empty when ss could not attribute one), the owning PID, and a
 // universal Origin tag classified by PROVENANCE (the listener's cgroup + a docker
@@ -125,6 +163,11 @@ func Run(c *sshx.Client) *Facts {
 	f.IsUbuntu = f.ID == "ubuntu"
 	f.Is2604 = strings.HasPrefix(f.VersionID, "26.04")
 	f.Is2404 = strings.HasPrefix(f.VersionID, "24.04")
+	f.Is2204 = strings.HasPrefix(f.VersionID, "22.04")
+
+	// Real OpenSSH version. `sshd -V` exists from OpenSSH 8.4 and prints the banner
+	// on stderr; `ssh -V` is the universal fallback (same source package on Ubuntu).
+	f.SSHDMajor, f.SSHDMinor = parseOpenSSHVersion(c.Sudo("{ sshd -V || ssh -V ; } 2>&1 | head -2").Stdout)
 
 	f.Virt = c.Run("systemd-detect-virt").Out()
 	f.Kernel = c.Run("uname -r").Out()

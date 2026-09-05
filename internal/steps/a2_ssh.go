@@ -394,7 +394,7 @@ func cryptoBlock(ctx *Context) string {
 	// newest — the 24.04 KEX list is valid on 26.04 too, so a glitched os-release
 	// probe degrades safely instead of emitting OpenSSH-10-only tokens.
 	kex := "sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256"
-	if ctx.Facts.Is2604 {
+	if ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 9) {
 		kex = "mlkem768x25519-sha256," + kex
 	}
 	fmt.Fprintf(&b, "KexAlgorithms %s\n", kex)
@@ -405,11 +405,11 @@ PubkeyAcceptedAlgorithms sk-ssh-ed25519-cert-v01@openssh.com,ssh-ed25519-cert-v0
 CASignatureAlgorithms sk-ssh-ed25519@openssh.com,ssh-ed25519,rsa-sha2-512,rsa-sha2-256
 `)
 	// RequiredRSASize: OpenSSH >= 9.1 only. 24.04 noble (9.6p1) and 26.04 (10.x)
-	// ship it; off-target <24.04 boxes (e.g. 22.04 jammy / 8.9p1) do NOT and
-	// `sshd -t` rejects an unknown option, aborting A2. F20: gate on a CONFIRMED
-	// 24.04 OR 26.04 — a glitched os-release probe (both false) conservatively
-	// omits it so the fallback config validates on the oldest realistic sshd.
-	if ctx.Facts.Is2404 || ctx.Facts.Is2604 {
+	// ship it; 22.04 jammy (8.9p1) does NOT and `sshd -t` rejects an unknown
+	// option, aborting A2. F20: gate on a CONFIRMED 24.04/26.04 — or on a probed
+	// sshd >= 9.1 (a backport on an older release). Neither confirmed ⇒ omitted, so
+	// the fallback config validates on the oldest supported sshd (8.9 / 22.04).
+	if ctx.Facts.Is2404 || ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 1) {
 		b.WriteString("RequiredRSASize 3072\n")
 	}
 	b.WriteString(`LogLevel VERBOSE
@@ -420,10 +420,11 @@ MaxStartups 10:30:60
 HostKey /etc/ssh/ssh_host_ed25519_key
 HostKey /etc/ssh/ssh_host_rsa_key
 `)
-	// PerSourcePenalties: OpenSSH >= 9.8 only (26.04). 9.6p1 (24.04) rejects them.
-	// F20: confirmed 26.04 only — an unknown version conservatively omits them
-	// (sshd -t on a pre-9.8 box would otherwise reject the directive).
-	if ctx.Facts.Is2604 {
+	// PerSourcePenalties: OpenSSH >= 9.8 only (26.04). 9.6p1 (24.04) and 8.9p1
+	// (22.04) reject them. F20: confirmed 26.04 or a probed sshd >= 9.8 — an
+	// unknown version conservatively omits them (sshd -t on a pre-9.8 box would
+	// otherwise reject the directive).
+	if ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 8) {
 		b.WriteString("PerSourcePenalties authfail:30 noauth:15 grace-exceeded:120\n")
 		if ctx.Facts.ClientIP != "" {
 			fmt.Fprintf(&b, "PerSourcePenaltyExemptList %s\n", ctx.Facts.ClientIP)

@@ -350,9 +350,10 @@ func prepare(ctx context.Context, cfg *config.Config, log *ui.Logger, allowBrown
 	// was confirmed (off-target release, or a glitched os-release probe) the steps
 	// degrade to the oldest-supported-sshd crypto set and drop the 26.04-only knobs.
 	// Say so, or the operator believes they got the 26.04 hardening they did not get.
-	if !facts.Is2404 && !facts.Is2604 {
-		log.Warn("OS version not confirmed as 24.04/26.04 (VERSION_ID=%q) — applying the CONSERVATIVE compatibility set: "+
-			"OpenSSH 8.9-safe crypto, NO mlkem768 post-quantum KEX, NO PerSourcePenalties, NO RequiredRSASize", facts.VersionID)
+	if !facts.Is2204 && !facts.Is2404 && !facts.Is2604 {
+		log.Warn("OS version not confirmed as 22.04/24.04/26.04 (VERSION_ID=%q) — applying the CONSERVATIVE compatibility set: "+
+			"OpenSSH 8.9-safe crypto plus whatever the probed sshd %d.%d actually supports",
+			facts.VersionID, facts.SSHDMajor, facts.SSHDMinor)
 	}
 	if facts.EgressIface == "" || facts.EgressIface == "lo" {
 		return nil, cleanup, fmt.Errorf("egress interface detection failed (got %q) — aborting per §2", facts.EgressIface)

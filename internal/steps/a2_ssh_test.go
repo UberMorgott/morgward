@@ -119,6 +119,37 @@ func TestCryptoBlockVersionGate(t *testing.T) {
 	}
 }
 
+// TestCryptoBlockSSHDVersionGate covers the 22.04 support range: the sshd knobs
+// gate on the PROBED OpenSSH version as well as the release flag, so jammy
+// (8.9p1) gets none of them and a backported sshd on an unconfirmed release gets
+// exactly the ones its version supports.
+func TestCryptoBlockSSHDVersionGate(t *testing.T) {
+	ctx := newTestCtx()
+	mk := func(is2204 bool, maj, min int) string {
+		ctx.Facts.Is2404, ctx.Facts.Is2604 = false, false
+		ctx.Facts.Is2204 = is2204
+		ctx.Facts.SSHDMajor, ctx.Facts.SSHDMinor = maj, min
+		return cryptoBlock(ctx)
+	}
+
+	// 22.04 jammy / OpenSSH 8.9p1 — none of the version-gated directives.
+	jammy := mk(true, 8, 9)
+	for _, forbidden := range []string{"mlkem768x25519-sha256", "PerSourcePenalties", "RequiredRSASize"} {
+		if strings.Contains(jammy, forbidden) {
+			t.Errorf("22.04 / sshd 8.9 must NOT emit %q:\n%s", forbidden, jammy)
+		}
+	}
+	// Backported sshd 9.8 on an unconfirmed release: RequiredRSASize (9.1+) and
+	// PerSourcePenalties (9.8+) yes, mlkem (9.9+) no.
+	bp := mk(false, 9, 8)
+	if !strings.Contains(bp, "RequiredRSASize 3072") || !strings.Contains(bp, "PerSourcePenalties") {
+		t.Errorf("sshd 9.8 must emit RequiredRSASize + PerSourcePenalties:\n%s", bp)
+	}
+	if strings.Contains(bp, "mlkem768x25519-sha256") {
+		t.Errorf("sshd 9.8 must NOT emit mlkem (9.9+):\n%s", bp)
+	}
+}
+
 // TestA2SSHBuild99NoLockdown guards the security invariant: the full-run A2SSH
 // step is crypto-only — build99 must NEVER impose the access lockdown (no
 // AllowGroups and no PermitRootLogin line at all), so the default `run` can't lock

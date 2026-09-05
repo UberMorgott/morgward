@@ -7,6 +7,33 @@ import (
 	"testing"
 )
 
+func TestParseOpenSSHVersionAndAtLeast(t *testing.T) {
+	cases := []struct {
+		in         string
+		maj, min   int
+		atLeast91  bool
+		atLeast910 bool
+	}{
+		{"OpenSSH_8.9p1 Ubuntu-3ubuntu0.10, OpenSSL 3.0.2", 8, 9, false, false},
+		{"OpenSSH_9.6p1 Ubuntu-3ubuntu13.14, OpenSSL 3.0.13", 9, 6, true, false},
+		{"OpenSSH_10.0p2 Ubuntu-1, OpenSSL 3.5.0", 10, 0, true, true},
+		{"sshd: unknown option -- V", 0, 0, false, false}, // probe failed ⇒ unknown
+	}
+	for _, c := range cases {
+		maj, min := parseOpenSSHVersion(c.in)
+		if maj != c.maj || min != c.min {
+			t.Errorf("parseOpenSSHVersion(%q) = (%d,%d), want (%d,%d)", c.in, maj, min, c.maj, c.min)
+		}
+		f := &Facts{SSHDMajor: maj, SSHDMinor: min}
+		if got := f.SSHDAtLeast(9, 1); got != c.atLeast91 {
+			t.Errorf("%q SSHDAtLeast(9,1) = %v, want %v", c.in, got, c.atLeast91)
+		}
+		if got := f.SSHDAtLeast(9, 10); got != c.atLeast910 {
+			t.Errorf("%q SSHDAtLeast(9,10) = %v, want %v", c.in, got, c.atLeast910)
+		}
+	}
+}
+
 func TestPortFromLocal(t *testing.T) {
 	cases := []struct {
 		in   string
