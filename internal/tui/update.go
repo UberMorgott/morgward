@@ -15,7 +15,9 @@ import (
 	"github.com/UberMorgott/morgward/internal/engine"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/sshx"
+	"github.com/UberMorgott/morgward/internal/steps"
 	"github.com/UberMorgott/morgward/internal/termsize"
+	"github.com/UberMorgott/morgward/internal/tweaks"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -226,11 +228,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Only the "Back to main" button is clickable (when finished); it opens
 			// the summary the same way enter/esc does.
 			if m.backToMainAtClick(mc.X, mc.Y) {
-				if m.finished && m.haveSummary {
-					m.phase = phaseSummary
-					return m, nil
-				}
-				return m.goBack()
+				return m.runExitHome()
 			}
 		case phaseKey:
 			// The "Copy key" button copies the PEM. On the PRE-RUN modal the pill splits
@@ -509,15 +507,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// run/done phase
 		switch s {
-		case "enter", "esc", "b":
-			// First advance from a FINISHED run opens the stats summary (the sampler
-			// keeps living so the monitor footer stays alive on the summary screen).
-			if m.finished && m.haveSummary {
-				m.phase = phaseSummary
-				return m, nil
+		case "r":
+			// Retry a FAILED run with the same command + step selection, without going
+			// through the connect form (the credentials are still in the form fields).
+			if m.finished && m.finalErr != nil {
+				return m.retryRun()
 			}
+		case "enter", "esc", "b":
 			if m.finished {
-				return m.goBack()
+				return m.runExitHome()
 			}
 			// Run still in flight (dialing / auditing): esc or b aborts back to the
 			// form so a stuck or slow connection attempt is never a dead end. enter is
@@ -569,6 +567,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// operator to read, and on phaseRun so a generated-key view isn't yanked away.
 		if m.haveSummary && m.phase == phaseRun {
 			m = m.advanceFromRun()
+		}
+		return m, nil
+
+	case bgAuditMsg:
+		// The background dashboard refresh landed. On success it REPLACES the marks
+		// folded in from the run's step results with the real on-box verdicts; on
+		// failure we keep those marks and say nothing (the operator did not ask for
+		// this audit — it must never steal the screen or nag).
+		if msg.err == nil {
+			m.captureAudit(msg.sum)
 		}
 		return m, nil
 
@@ -1046,6 +1054,145 @@ func (m model) advanceFromRun() model {
 	return m
 }
 
+// needsReconnect reports whether an engine error means the SSH session is gone (or was
+// never usable) and only a fresh connect can recover — as opposed to a step that simply
+// failed on a box we are still logged into. Only the transport/credential sentinels
+// qualify; everything else keeps the session.
+func needsReconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, sshx.ErrHostKeyChanged) ||
+		errors.Is(err, sshx.ErrHostKeyMismatch) ||
+		errors.Is(err, sshx.ErrRebootAuthFailed) ||
+		errors.Is(err, sshx.ErrNoMutualAuth) ||
+		errors.Is(err, sshx.ErrNoConn)
+}
+
+// runExitHome is the ONE exit from a finished run screen (Enter/Esc/b and the
+// "Back to main" button). A run that ended with a summary opens it as before. A run
+// that ended in an ERROR used to fall through to goBack() — the whole session torn
+// down and the operator back on the connect form retyping a password because one step
+// failed. Now the session is kept: the Dashboard is re-entered with a localized notice
+// carrying the failure detail, and only a real transport/credential loss (or a failure
+// before we ever had a session) goes back to the form — where the host/user/port/key
+// fields are still filled in, since goBack never clears them.
+func (m model) runExitHome() (tea.Model, tea.Cmd) {
+	if m.haveSummary {
+		m.phase = phaseSummary
+		return m, nil
+	}
+	if m.dashFacts != nil && !needsReconnect(m.finalErr) {
+		if m.finalErr != nil {
+			m.dashNotice = fmt.Sprintf(t(m.lang, kDashRunFailed), m.finalErr.Error())
+		}
+		return m.dashHome()
+	}
+	return m.goBack()
+}
+
+// retryRun relaunches the SAME command + step selection after a failure, reusing the
+// form's credentials — the operator does not have to walk back through the connect
+// screen to re-try one failed step.
+func (m model) retryRun() (tea.Model, tea.Cmd) {
+	m.dashNotice = ""
+	return m.start()
+}
+
+// dashHome returns to the Dashboard, refreshing it AFTER a mutating run without making
+// the operator watch a reconnect: the finished run's real per-step results are folded
+// into the grid right away (markStepsApplied — only steps that actually reported OK),
+// the Dashboard renders immediately, and the honest audit runs in the BACKGROUND,
+// silently replacing the optimistic marks when it lands (bgAuditMsg → captureAudit).
+func (m model) dashHome() (tea.Model, tea.Cmd) {
+	m.phase = phaseDashboard
+	m.dashScroll = 0
+	if !m.dashStale {
+		return m, nil
+	}
+	m.dashStale = false
+	m = m.markStepsApplied(m.summary)
+	return m, m.bgAudit()
+}
+
+// markStepsApplied folds a finished MUTATING run's real results into the Dashboard
+// grid: every probe belonging to a step that reported StatusOK is shown satisfied.
+// StatusFail/StatusSkip steps are left exactly as the last audit found them — this is
+// grounded in what the engine reported, not blanket optimism. Only the DISPLAY set is
+// touched; dashAuditRaw keeps the true probe verdicts the Security screen reads.
+func (m model) markStepsApplied(sum engine.Summary) model {
+	ok := make(map[string]bool, len(sum.Results))
+	for _, r := range sum.Results {
+		if r.Status == steps.StatusOK {
+			ok[r.ID] = true
+		}
+	}
+	if len(ok) == 0 || len(m.dashAuditResults) == 0 {
+		return m
+	}
+	// Copy: the model is value-copied every Update, but the slice's BACKING ARRAY is
+	// shared with dashAuditRaw's caller — mutating in place would rewrite history.
+	upd := make([]tweaks.Result, len(m.dashAuditResults))
+	copy(upd, m.dashAuditResults)
+	applied := 0
+	for i := range upd {
+		if ok[upd[i].Probe.Step] {
+			upd[i].Applied = true
+			upd[i].Err = ""
+		}
+		if dashRowSatisfied(upd[i]) {
+			applied++
+		}
+	}
+	m.dashAuditResults = upd
+	m.dashAuditApplied = applied
+	return m
+}
+
+// bgAudit runs a read-only audit OUT OF BAND: no phase change, no run log, no
+// spinner — just a one-shot engine.Execute whose final Summary comes back as a
+// bgAuditMsg. It is tagged with the current run generation like every streamed
+// message, so a result that lands after the operator started another run is dropped
+// instead of overwriting fresher state. Returns nil when the form has no usable
+// config (nothing to audit with).
+func (m model) bgAudit() tea.Cmd {
+	cfg, err := m.formConfig()
+	if err != nil {
+		return nil
+	}
+	gen := m.runGen
+	return func() tea.Msg {
+		var sum engine.Summary
+		e := engine.Execute(context.Background(), cfg, "audit", nil, engine.Hooks{
+			OnProgress: func(p engine.Progress) {
+				if p.Done {
+					sum = p.Summary
+				}
+			},
+		})
+		return genMsg{gen, bgAuditMsg{sum: sum, err: e}}
+	}
+}
+
+// formConfig builds the validated engine config from the connect form's current
+// values. Shared by start(), confirmPreRunKey() and the background audit so the three
+// can never disagree about what a run connects with.
+func (m model) formConfig() (*config.Config, error) {
+	cfg := &config.Config{
+		Host:      strings.TrimSpace(m.inputs[fHost].Value()),
+		User:      strings.TrimSpace(m.inputs[fUser].Value()),
+		Password:  m.inputs[fPass].Value(),
+		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
+		AdminUser: defaultAdminUser,
+		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
+		Lang:      m.langCode(), // engine-streamed messages follow the active UI language
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 // captureAudit folds the audit's final Summary into the Dashboard state: the server
 // facts, the full per-tweak results, and the applied/total tally. Called when an
 // "audit" command finishes (its Done carries Summary.Facts + Summary.Tweaks).
@@ -1104,16 +1251,8 @@ func (m *model) refocus() tea.Cmd {
 // (which never generates a key), it launches the engine immediately. The CLI is
 // unaffected (it never calls this).
 func (m model) start() (tea.Model, tea.Cmd) {
-	cfg := &config.Config{
-		Host:      strings.TrimSpace(m.inputs[fHost].Value()),
-		User:      strings.TrimSpace(m.inputs[fUser].Value()),
-		Password:  m.inputs[fPass].Value(),
-		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
-		AdminUser: defaultAdminUser,
-		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
-		Lang:      m.langCode(), // engine-streamed messages follow the active UI language
-	}
-	if err := cfg.Validate(); err != nil {
+	cfg, err := m.formConfig()
+	if err != nil {
 		m.errMsg = m.localizeValidateErr(err)
 		return m, nil
 	}
@@ -1185,16 +1324,8 @@ func (m model) dismissKeyViewer() model {
 // log view replaces the modal. Any validation regression here returns to the form
 // with a localized error rather than launching half-formed.
 func (m model) confirmPreRunKey() (tea.Model, tea.Cmd) {
-	cfg := &config.Config{
-		Host:      strings.TrimSpace(m.inputs[fHost].Value()),
-		User:      strings.TrimSpace(m.inputs[fUser].Value()),
-		Password:  m.inputs[fPass].Value(),
-		KeyPath:   strings.TrimSpace(m.inputs[fKey].Value()),
-		AdminUser: defaultAdminUser,
-		Port:      atoiDefault(strings.TrimSpace(m.inputs[fPort].Value()), 22),
-		Lang:      m.langCode(),
-	}
-	if err := cfg.Validate(); err != nil {
+	cfg, err := m.formConfig()
+	if err != nil {
 		m.keyPreRun = false
 		m.pendingKey = nil
 		m.phase = phaseForm
@@ -1229,6 +1360,7 @@ func (m model) resetRunState() model {
 	m.dashAuditDone = false
 	m.dashAuditTotal = 0
 	m.dashAuditApplied = 0
+	m.dashNotice = "" // a new run supersedes the previous failure notice
 	return m
 }
 

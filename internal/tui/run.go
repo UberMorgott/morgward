@@ -131,6 +131,11 @@ func (m model) runHints() string {
 	if m.running && !m.finished {
 		return t(m.lang, kRunHintRunning)
 	}
+	// A FAILED run keeps the session and offers a retry, so say so — the generic idle
+	// hint only mentions going back.
+	if m.finished && m.finalErr != nil {
+		return t(m.lang, kRunHintErr)
+	}
 	return t(m.lang, kRunHintIdle)
 }
 

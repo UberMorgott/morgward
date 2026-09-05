@@ -209,6 +209,10 @@ const (
 	kDashIPv6         // "IPv6"
 	kDashHint         // dashboard control hint
 	kDashApplyConfirm // A8 reboot warning shown before applying tweaks
+	kDashRunFailed    // notice on the dashboard after a failed run: "Прогон завершился ошибкой: %s"
+	kDashUnknown      // legend for probes whose check itself failed: "? неизвестно: %d"
+	kRunHintErr       // run-screen hint after a FAILED run: back / retry
+	kProbeErrPrefix   // security-row prefix for a probe whose check errored: "проверка не удалась: %s"
 
 	// --- FEATURE A: detected-services right column in the server card ----
 	kDashServicesTitle // services right-column header: "Сервисы" / "Services"
@@ -477,6 +481,10 @@ var tr = map[stringKey][2]string{
 	kDashIPv6:         {"IPv6", "IPv6"},
 	kDashHint:         {"↑/↓ прокрутка · enter описание твика · esc назад", "↑/↓ scroll · enter tweak detail · esc back"},
 	kDashApplyConfirm: {"Включает полное обновление и перезагрузку (A8) — несколько минут. Enter — применить, esc — отмена.", "Includes a full upgrade and reboot (A8) — several minutes. Enter to apply, esc to cancel."},
+	kDashRunFailed:    {"⚠ прогон завершился ошибкой: %s", "⚠ the run failed: %s"},
+	kDashUnknown:      {"неизвестно %d", "unknown %d"},
+	kRunHintErr:       {"enter — на панель · r — повторить · ↑/↓ прокрутка · q — выход", "enter — dashboard · r — retry · ↑/↓ scroll · q — quit"},
+	kProbeErrPrefix:   {"проверка не удалась: %s", "probe failed: %s"},
 
 	kDashServicesTitle: {"Сервисы", "Services"},
 	kDashServicesMore:  {"… +%d ещё", "… +%d more"},

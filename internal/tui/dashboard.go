@@ -241,6 +241,12 @@ func (m model) dashFixedLines(innerW int) []string {
 	fixed = append(fixed, m.dashButtonsLine())
 	fixed = append(fixed, "") // spacer so the buttons row doesn't blend into the status line
 	fixed = append(fixed, m.dashStatusLine(innerW))
+	// Failure notice from a run the session SURVIVED (runExitHome). Appended AFTER the
+	// status line so no fixed row index above it moves; absent by default, so the
+	// standard Dashboard layout is byte-identical.
+	if m.dashNotice != "" {
+		fixed = append(fixed, dashNoticeStyle.Render(truncDisplay(m.dashNotice, innerW)))
+	}
 	return fixed
 }
 
@@ -252,7 +258,15 @@ func (m model) dashFixedLines(innerW int) []string {
 // tweak it reaches 0 rather than sticking on the unmanaged A2 rows.
 func (m model) dashStatusLine(innerW int) string {
 	applied, total := m.dashAuditApplied, m.dashAuditTotal
-	canApply := max(total-applied, 0)
+	unknown := 0
+	for _, r := range m.dashAuditResults {
+		if dashRowUnknown(r) {
+			unknown++
+		}
+	}
+	// A "?" row is neither applied nor applicable — leaving it in canApply would nag the
+	// operator to re-apply something whose state we simply could not read.
+	canApply := max(total-applied-unknown, 0)
 	label := t(m.lang, kDashAuditLabel)
 	if m.dashAuditRunning && !m.dashAuditDone {
 		label += " " + string(spinnerFrames[m.spin%len(spinnerFrames)])
@@ -262,6 +276,9 @@ func (m model) dashStatusLine(innerW int) string {
 		fmt.Sprintf(t(m.lang, kDashAuditStatus), applied, total),
 		fmt.Sprintf(t(m.lang, kDashCanApply), canApply),
 	)
+	if unknown > 0 {
+		status += " · ? " + fmt.Sprintf(t(m.lang, kDashUnknown), unknown)
+	}
 	return truncDisplay(status, innerW)
 }
 
@@ -323,13 +340,25 @@ func dashRowSatisfied(r tweaks.Result) bool {
 	return r.Applied || isSecurityStep(r.Probe.Step)
 }
 
+// dashRowUnknown reports whether the PROBE ITSELF failed (the command errored), so the
+// row's state is unknown — neither applied nor "can apply". Shown as "?" and counted
+// separately, because reporting an unknown as "not applied" invites the operator to
+// re-apply a tweak that may already be in place. A satisfied row wins: a probe that
+// answered is never unknown.
+func dashRowUnknown(r tweaks.Result) bool {
+	return r.Err != "" && !dashRowSatisfied(r)
+}
+
 // dashAuditCellText is the PLAIN (uncolored) cell text "  ✓/•  name" truncated to
 // colWidth — the single source for the cell's rendered display width, used by the
 // hit-test (lipgloss.Width over this) so a click only lands within the real text.
 func (m model) dashAuditCellText(r tweaks.Result, colWidth int) string {
 	glyph := "•"
-	if dashRowSatisfied(r) {
+	switch {
+	case dashRowSatisfied(r):
 		glyph = "✓"
+	case dashRowUnknown(r):
+		glyph = "?"
 	}
 	name := localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
 	return truncDisplay("  "+glyph+" "+name, colWidth)
@@ -340,8 +369,11 @@ func (m model) dashAuditCellText(r tweaks.Result, colWidth int) string {
 // does not change the display width — the pad is computed from the plain text.
 func (m model) dashAuditCell(r tweaks.Result, colWidth int) string {
 	glyph := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("•")
-	if dashRowSatisfied(r) {
+	switch {
+	case dashRowSatisfied(r):
 		glyph = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓")
+	case dashRowUnknown(r):
+		glyph = dashNoticeStyle.Render("?")
 	}
 	name := localTweakName(m.lang, r.Probe.ID, r.Probe.Name)
 	colored := truncDisplay("  "+glyph+" "+name, colWidth)
