@@ -29,7 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `morgward` — a portable single-binary Go executor that applies an SSH hardening +
 tuning sequence to an Ubuntu 24.04/26.04 VPS.
-It connects to an Ubuntu 24.04/26.04 VPS (fresh OR already running services) over an
+It connects to an Ubuntu 22.04/24.04/26.04 VPS (fresh OR already running services) over an
 **embedded** SSH client (`golang.org/x/crypto/ssh` — no external `ssh`/`sshpass`/
 Docker/web UI) and applies the runbook's hardening + tuning sequence, coexisting with
 detected services on a brownfield box (see Brownfield coexistence below).
@@ -133,6 +133,70 @@ path → check the other.
   count — they all take `/var/cache/apt/archives/lock`. The ONE exemption is
   `apt-get -s` (simulation: the pending-upgrade probes in `detect.go`, A7, A8), which
   acquires no lock and stays bare.
+
+- **Supported range is 22.04 / 24.04 / 26.04 — gate sshd knobs on the PROBED version.**
+  `detect.Facts` carries `Is2204`/`Is2404`/`Is2604` **and** the real OpenSSH version
+  (`SSHDMajor`/`SSHDMinor`, from `sshd -V` falling back to `ssh -V`) behind
+  `Facts.SSHDAtLeast(major, minor)`. Every version-sensitive sshd directive gates on
+  *release flag OR probed version*, so a backport or an off-target release is handled
+  correctly and 22.04 (8.9p1) never gets an option `sshd -t` would reject — which aborts
+  A2: `RequiredRSASize` ⇒ 24.04/26.04 or ≥ 9.1; `UnusedConnectionTimeout` /
+  `ChannelTimeout` ⇒ 24.04/26.04 or ≥ 9.2; `PerSourcePenalties` ⇒ 26.04 or ≥ 9.8;
+  mlkem KEX ⇒ 26.04 or ≥ 9.9. `SSHDAtLeast` is **false when the probe failed**, so an
+  unknown version still degrades to the conservative 8.9-safe set (F20). Confirmed
+  24.04/26.04 output stays byte-identical. Same rule for sysctl: a key absent on a 5.15
+  kernel must be written behind a `test -e /proc/sys/…` gate, never blind — one unknown
+  key fails the whole `sysctl --system`.
+
+- **apt prelude contract — once-per-boot index refresh, and NEVER `stdbuf`.** Every
+  remote script that touches apt/dpkg starts with `aptPrelude()`, which (a) exports the
+  non-interactive env (`DEBIAN_FRONTEND`, `NEEDRESTART_MODE=a` **+
+  `NEEDRESTART_SUSPEND=1`**, `UCF_FORCE_CONFFOLD`), (b) lands the needrestart drop-in,
+  and (c) **refreshes the apt index ONCE PER BOOT** — marker
+  `/run/morgward-apt-updated` (`AptUpdateMarker`), stamped only on a SUCCESSFUL refresh
+  and otherwise swallowed (`|| true`, so it can't trip a caller's `set -e`). Without (c)
+  a fresh image's EMPTY index made any install that skipped PRE die with "Package
+  iptables-persistent is not available" (A1) / "Unable to locate package fail2ban" (A3).
+  PRE keeps its own unconditional refresh — the one place a failed refresh must ABORT —
+  and stamps the marker. `aptConfOpts` now also carries `-o Dpkg::Use-Pty=0`.
+  **`stdbuf` is banned**: it works via `LD_PRELOAD=libstdbuf.so`, which apt leaks into
+  every child it spawns (dpkg → maintainer postinst → update-initramfs); on 26.04
+  (rust-coreutils) those children can't resolve it and ld.so spams the whole run. A8's
+  `Dir::Bin::dpkg` wrapper existed only to contain that leak and is gone with it.
+
+- **A lost SSH transport is NOT a lockout (B3).** `transportLost(sshx.Result)`
+  (rc = -1, or `Err != nil`) tells a dropped transport from a command that ran and
+  exited non-zero. `freshLoginVerify` is the single second-session verify entry point
+  (A1 both paths, A2/A2-danger, A5) and retries the independent key login ONCE after 5s.
+  A1 additionally calls `Cli.Reconnect(ctx)` when its iptables-persistent install lost
+  the transport — an operator's stuck dpkg dialog used to kill the session and make A1
+  roll the firewall back reporting a lockout that never happened — and words that
+  failure as a transport failure. `sshx.Client.Reconnect` redials with the same identity
+  and keeps the in-run host-key pin.
+
+- **`tweaks.Result.Err` — an unmeasurable probe is "?", never red (C2).** It is set when
+  the probe ITSELF could not run (the audit round-trip lost the transport, or a probe
+  emitted no `id<TAB>…` line). `Applied` stays false but the value is UNKNOWN, not
+  "unset": renderers must show "?" / "probe error: …", and `Tally` counts such rows as
+  neither applied nor applicable (exactly like `Informational`).
+
+- **New tweaks — one line each.** M01 `kernel.io_uring_disabled=1` (A5,
+  `60-morgward-iouring.conf`, only where the ≥6.6 key exists). M02 `kernel.panic=10` +
+  `panic_on_oops=1` (A5, `60-morgward-panic.conf`). M03 ICMP rate limits added to A4's
+  `99-net-tune.conf` (`tcp_syncookies`/`tcp_max_syn_backlog` were already there — the
+  existing 8192 backlog is deliberately NOT lowered to the proposed 2048). M04
+  `nf_conntrack_max` sized by RAM behind `DockerSeen||NatRules`, skipped on a kubelet
+  box, never lowering an existing value, `hashsize=max/4` via `/etc/modprobe.d`. M05
+  `fstrim.timer` where `lsblk --discard` reports support (A6). M06 chrony installed on
+  22.04/24.04 (shipped on 26.04) with `/etc/chrony/conf.d/90-morgward.conf` — optional
+  install, `timedatectl` fallback in every branch (A6). M07 `UnusedConnectionTimeout
+  600` always + `ChannelTimeout session:*=1800` **greenfield only** (A2). M13
+  systemd-coredump `Storage=none`/`ProcessSizeMax=0` drop-in where the package exists
+  (A5 — that package rewrites `core_pattern` on every upgrade, so the sysctl alone is
+  not enough). INFO-only probes, no apply: `a2.socket_activation` (M23),
+  `a5.apparmor_userns`, `a5.lockdown`, `a6.tmp_tmpfs`. Every new knob is idempotent via
+  `putFile`/`AppendLineIfMissing` (no heredocs), carries a probe under the SAME gate as
+  its apply, and is covered by the step's revert.
 
 - **§A1 stdin caveat — NEVER use heredocs in remote scripts.** The script itself is
   piped to `bash` over stdin, so a heredoc would contend for that stdin. Deliver all
@@ -307,7 +371,7 @@ path → check the other.
 - **Secrets:** read from env `VPS_PASSWORD` / `VPS_HOST` when flags omitted; password
   is cleared after key auth works and never written to the log file.
 
-- **Version drift:** detect 24.04 vs 26.04 and branch — `mlkem768x25519-sha256` KEX +
+- **Version drift** (see also the supported-range bullet above): detect 24.04 vs 26.04 and branch — `mlkem768x25519-sha256` KEX +
   PerSourcePenalties only on 26.04; forwarding/CVE knobs on 24.04. **Conservative
   fallback (F20):** `cryptoBlock` gates the OpenSSH-10-only tokens strictly on a
   *confirmed* `Is2604`; a glitched os-release probe (both `Is2404`/`Is2604` false)
