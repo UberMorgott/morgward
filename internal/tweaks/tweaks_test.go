@@ -26,6 +26,37 @@ func TestA1SSHAcceptDportAnchored(t *testing.T) {
 	}
 }
 
+// a6.fstrim: `systemctl is-enabled` prints "disabled" and exits 1, so a bare
+// `|| echo na` glued it into "disabled\nna" — a value no branch of Want accepts and
+// nobody can read. The group wrapper keeps the three real outcomes distinct.
+func TestFstrimProbeOutcomes(t *testing.T) {
+	p := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, &config.Config{Port: 22}))["a6.fstrim"]
+	if strings.Contains(p.Cmd, "fstrim.timer 2>/dev/null || echo na") {
+		t.Errorf("is-enabled must not be followed by a bare `|| echo na`:\n%s", p.Cmd)
+	}
+	for out, want := range map[string]bool{"enabled": true, "na": true, "disabled": false, "": false, "disabled\nna": false} {
+		if got := p.Want(out); got != want {
+			t.Errorf("a6.fstrim Want(%q) = %v, want %v", out, got, want)
+		}
+	}
+}
+
+// M01 io_uring is greenfield-only (a brownfield box may run io_uring consumers), so
+// the probe must report "na" there instead of a red "not applied".
+func TestIOUringProbeBrownfieldIsNA(t *testing.T) {
+	green := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, &config.Config{Port: 22}))["a5.io_uring"]
+	brown := ids(Registry(&detect.Facts{Is2404: true}, &config.Config{Port: 22}))["a5.io_uring"]
+	if !strings.Contains(green.Cmd, "kernel.io_uring_disabled") {
+		t.Errorf("greenfield must still read the knob:\n%s", green.Cmd)
+	}
+	if strings.TrimSpace(brown.Cmd) != "echo na" {
+		t.Errorf("brownfield a5.io_uring must be a static na, got:\n%s", brown.Cmd)
+	}
+	if !brown.Want("na") {
+		t.Error("a5.io_uring must accept na")
+	}
+}
+
 func TestPredicates(t *testing.T) {
 	if !eq("1")(" 1 ") {
 		t.Fatal("eq should trim and match")

@@ -89,6 +89,17 @@ func rpFilterWant(facts *detect.Facts) func(string) bool {
 	return eq("1")
 }
 
+// ioUringProbeCmd mirrors A5's M01 apply gate: the knob is restricted only on a
+// GREENFIELD box with a >= 6.6 kernel. On a brownfield box A5 leaves io_uring alone
+// (existing consumers), so the probe reports "na" — a knob we deliberately did not
+// apply must not read as "not applied".
+func ioUringProbeCmd(facts *detect.Facts) string {
+	if !facts.Greenfield {
+		return "echo na"
+	}
+	return "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled 2>/dev/null || echo na"
+}
+
 // fileExists is the shell snippet for "is this path present".
 func fileExists(path string) string {
 	return fmt.Sprintf("test -e %s && echo 1 || echo 0", path)
@@ -249,9 +260,11 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 		Probe{ID: "a5.thp", Step: "A5", Name: "THP madvise",
 			Cmd: "cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null", Want: has("[madvise]")},
 		// M01: the key only exists from kernel 6.6, so an older kernel reports "na"
-		// (not applicable) rather than a red "not applied".
+		// (not applicable) rather than a red "not applied". A BROWNFIELD box is "na"
+		// too — A5 deliberately leaves io_uring alone there (existing consumers), so
+		// the dashboard must not show a knob we chose not to apply as missing.
 		Probe{ID: "a5.io_uring", Step: "A5", Name: "io_uring restricted",
-			Cmd:  "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled 2>/dev/null || echo na",
+			Cmd:  ioUringProbeCmd(facts),
 			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "1" || o == "2" || o == "na" }},
 		// M02: a wedged kernel on a console-less VPS must reboot itself.
 		Probe{ID: "a5.panic", Step: "A5", Name: "panic auto-reboot",
@@ -282,8 +295,12 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 		Probe{ID: "a6.ntp", Step: "A6", Name: "NTP enabled",
 			Cmd: "timedatectl show -p NTP --value 2>/dev/null", Want: has("yes")},
 		// M05: enabled only where the storage reports discard support; "na" otherwise.
+		// `is-enabled` prints "disabled" AND exits 1, so it must be wrapped in a group
+		// that always succeeds — a bare `|| echo na` after it would append "na" to that
+		// output and the probe would compare against the nonsense "disabled\nna".
+		// The trailing `|| echo na` therefore fires for the discard check ALONE.
 		Probe{ID: "a6.fstrim", Step: "A6", Name: "fstrim.timer enabled",
-			Cmd:  `lsblk --discard -n -o DISC-GRAN 2>/dev/null | grep -qv '^\s*0B\s*$' && systemctl is-enabled fstrim.timer 2>/dev/null || echo na`,
+			Cmd:  `lsblk --discard -n -o DISC-GRAN 2>/dev/null | grep -qv '^\s*0B\s*$' && { systemctl is-enabled fstrim.timer 2>/dev/null || true; } || echo na`,
 			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "enabled" || o == "na" }},
 		// M06: chrony is installed on 22.04/24.04 and shipped on 26.04; a box left on
 		// systemd-timesyncd (no chrony candidate) reports "na", not a failure.
