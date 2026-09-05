@@ -75,15 +75,22 @@ const (
 //     recurring LPE surface) while leaving CAP_SYS_ADMIN users working — value 2
 //     would break privileged containers. The key exists from kernel 6.6, so 22.04's
 //     5.15 GA kernel does not have it: writing it unconditionally would make
-//     `sysctl --system` fail. Landed only when the key is actually present.
+//     `sysctl --system` fail. Landed only when the key is actually present AND the
+//     box is GREENFIELD: a brownfield box may already run io_uring consumers
+//     (modern PostgreSQL/nginx/QEMU, any Rust async runtime on io_uring), and
+//     disabling it under them degrades or breaks a service morgward did not install.
+//     Brownfield leaves the knob untouched entirely (probe reports "na").
 //   - M02 kernel.panic=10 + panic_on_oops=1 turn a wedged kernel into a reboot,
 //     which is the only useful outcome on a console-less VPS. Universal.
 //   - M13 the systemd-coredump policy, only where systemd-coredump exists.
-func extraSysctlScript() string {
-	return "mkdir -p /etc/sysctl.d\n" +
-		"if [ -e /proc/sys/kernel/io_uring_disabled ]; then\n" +
-		putFile(ioUringConf, "kernel.io_uring_disabled = 1\n", "0644") +
-		"else\n  rm -f " + ioUringConf + "\nfi\n" +
+func extraSysctlScript(greenfield bool) string {
+	s := "mkdir -p /etc/sysctl.d\n"
+	if greenfield {
+		s += "if [ -e /proc/sys/kernel/io_uring_disabled ]; then\n" +
+			putFile(ioUringConf, "kernel.io_uring_disabled = 1\n", "0644") +
+			"else\n  rm -f " + ioUringConf + "\nfi\n"
+	}
+	return s +
 		putFile(panicConf, panicConfBody, "0644") +
 		"if [ -x /usr/lib/systemd/systemd-coredump ] || [ -x /lib/systemd/systemd-coredump ] || command -v coredumpctl >/dev/null 2>&1; then\n" +
 		"  mkdir -p /etc/systemd/coredump.conf.d\n" +
@@ -103,7 +110,7 @@ func (a A5Kernel) Run(ctx *Context) (Status, string, error) {
 	// Version/feature-gated extras (io_uring, panic-on-oops, coredump policy). Their
 	// keys/units are not present on every supported release, so the script probes for
 	// each one rather than emitting a sysctl `sysctl --system` would reject.
-	if r := ctx.Cli.Sudo(extraSysctlScript()); r.RC != 0 {
+	if r := ctx.Cli.Sudo(extraSysctlScript(ctx.Facts.Greenfield)); r.RC != 0 {
 		ctx.Log.Warn("kernel sysctl extras rc=%d (continuing): %s", r.RC, firstLine(r.Stderr))
 	}
 
@@ -154,9 +161,11 @@ fi`
 	if !strings.Contains(thpNow, "[madvise]") {
 		thpNote = "THP NOT madvise (" + firstLine(thpNow) + ") — takes effect after reboot if grub was updated"
 	}
-	iou := ctx.Cli.Run("sysctl -n kernel.io_uring_disabled 2>/dev/null").Out()
-	if iou == "" {
-		iou = "n/a (<6.6 kernel)"
+	iou := "n/a (brownfield: existing io_uring consumers left alone)"
+	if ctx.Facts.Greenfield {
+		if iou = ctx.Cli.Run("sysctl -n kernel.io_uring_disabled 2>/dev/null").Out(); iou == "" {
+			iou = "n/a (<6.6 kernel)"
+		}
 	}
 	return StatusOK, "sysctl hardening applied (core_pattern=" + cp + ", rp_filter=" + rpf +
 		", panic=10, io_uring_disabled=" + iou + "), " + thpNote, nil

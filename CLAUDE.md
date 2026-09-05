@@ -181,7 +181,10 @@ path → check the other.
   neither applied nor applicable (exactly like `Informational`).
 
 - **New tweaks — one line each.** M01 `kernel.io_uring_disabled=1` (A5,
-  `60-morgward-iouring.conf`, only where the ≥6.6 key exists). M02 `kernel.panic=10` +
+  `60-morgward-iouring.conf`, only where the ≥6.6 key exists **AND
+  `ctx.Facts.Greenfield`** — a brownfield box may run io_uring consumers, so the whole
+  block is skipped there, not even removing an existing file; probe `a5.io_uring` and
+  the §V row report `na`/skip-with-reason instead of red). M02 `kernel.panic=10` +
   `panic_on_oops=1` (A5, `60-morgward-panic.conf`). M03 ICMP rate limits added to A4's
   `99-net-tune.conf` (`tcp_syncookies`/`tcp_max_syn_backlog` were already there — the
   existing 8192 backlog is deliberately NOT lowered to the proposed 2048). M04
@@ -410,6 +413,17 @@ path → check the other.
     marker-tagged lines before `swapon -a`, so it never re-enables swap the operator
     deliberately disabled before morgward ran. Both seds stay single-logical-line (no
     heredoc).
+  - **A5 live knobs:** `sysctl --system` cannot restore `kernel.panic` /
+    `panic_on_oops` (no distro file names them, so the applied live values would
+    survive the drop-in removal), so the revert resets them explicitly with
+    `sysctl -w kernel.panic=0 kernel.panic_on_oops=0 || true`.
+    `kernel.io_uring_disabled` is **one-way** — the kernel refuses to lower it — so it
+    can only clear on reboot, and the revert SAYS so instead of pretending.
+  - **Deliberately incomplete reverts must say what stayed** via `revertDetail`
+    (`revert.go`, falls back to plain `"reverted"`). Today: **A5** (io_uring lifts
+    after reboot) and **A6** — the A6 revert leaves `fstrim.timer` ENABLED on purpose:
+    it is Ubuntu's own baseline on discard-capable storage, so disabling it would
+    leave the box worse than morgward found it.
 
 ## Known minor
 

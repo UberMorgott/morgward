@@ -31,7 +31,7 @@ func TestKernelHardenConfRouting(t *testing.T) {
 // coredump drop-in is meaningless without systemd-coredump. panic/panic_on_oops is
 // universal and is written unconditionally.
 func TestExtraSysctlScriptGates(t *testing.T) {
-	s := extraSysctlScript()
+	s := extraSysctlScript(true)
 	if !strings.Contains(s, "if [ -e /proc/sys/kernel/io_uring_disabled ]; then") {
 		t.Errorf("io_uring conf must be gated on the key existing (5.15 kernels lack it):\n%s", s)
 	}
@@ -50,6 +50,21 @@ func TestExtraSysctlScriptGates(t *testing.T) {
 	}
 	if strings.Contains(s, "<<") {
 		t.Errorf("no heredoc may appear in a remote script (§A1 stdin caveat):\n%s", s)
+	}
+}
+
+// A BROWNFIELD box may already run io_uring consumers (modern PostgreSQL/nginx/
+// QEMU, Rust async runtimes), so M01 must not touch the knob there at all — not
+// even to remove a file. panic/coredump stay universal.
+func TestExtraSysctlScriptBrownfieldKeepsIOUring(t *testing.T) {
+	s := extraSysctlScript(false)
+	if strings.Contains(s, ioUringConf) {
+		t.Errorf("brownfield must not write OR remove the io_uring drop-in:\n%s", s)
+	}
+	for _, path := range []string{panicConf, coredumpConf} {
+		if !strings.Contains(s, path) {
+			t.Errorf("brownfield must still write %s:\n%s", path, s)
+		}
 	}
 }
 

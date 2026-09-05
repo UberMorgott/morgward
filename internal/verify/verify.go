@@ -143,6 +143,17 @@ func firewallChecks(facts *detect.Facts, port int) []Check {
 	}
 }
 
+// ioUringVerifyCmd mirrors A5's M01 apply gate: the knob is restricted only on a
+// GREENFIELD box. A nil facts means "treated as greenfield" (same defensive contract
+// as firewallChecks) so the row stays byte-identical to its pre-facts behaviour; an
+// explicitly brownfield box emits a marker the NA hook turns into a skip-with-reason.
+func ioUringVerifyCmd(facts *detect.Facts) string {
+	if facts != nil && !facts.Greenfield {
+		return "echo __brownfield__"
+	}
+	return "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled || echo __noiouring__"
+}
+
 // Run executes the matrix and prints an aligned result table (one row per check).
 // facts may be nil (defensive); a nil facts is treated as managed iptables so the
 // matrix degrades to its original byte-identical behavior.
@@ -168,14 +179,18 @@ func Run(c *sshx.Client, log *ui.Logger, port int, facts *detect.Facts) Result {
 		{Name: "kernel panic reboot", Cmd: "sysctl -n kernel.panic", Want: equals("10"), Lockout: false},
 		{
 			Name:    "io_uring restricted",
-			Cmd:     "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled || echo __noiouring__",
+			Cmd:     ioUringVerifyCmd(facts),
 			Want:    contains("1"),
 			Lockout: false,
 			// The knob only exists from kernel 6.6, so 22.04's 5.15 GA kernel has no
-			// io_uring restriction to assert — a skip-with-reason, not a warning.
+			// io_uring restriction to assert — a skip-with-reason, not a warning. Same
+			// for a brownfield box, where A5 deliberately never applied it.
 			NA: func(out string) (string, bool) {
-				if strings.TrimSpace(out) == "__noiouring__" {
+				switch strings.TrimSpace(out) {
+				case "__noiouring__":
 					return "kernel has no io_uring_disabled knob (< 6.6)", true
+				case "__brownfield__":
+					return "brownfield: io_uring left alone (existing consumers)", true
 				}
 				return "", false
 			},
