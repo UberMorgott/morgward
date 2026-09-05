@@ -42,6 +42,13 @@ func encodeKey(k tea.Key, appCursor bool) []byte {
 		}
 	}
 
+	// Shift+Tab is BackTab (CSI Z, terminfo kcbt), NOT a plain Tab: bubbletea delivers it
+	// as Code=KeyTab + ModShift, which would otherwise collapse to '\t' and leave
+	// backwards field navigation dead in every curses dialog (whiptail, debconf, nano).
+	if k.Code == tea.KeyTab && k.Mod&tea.ModShift != 0 {
+		return withAlt([]byte("\x1b[Z"), alt)
+	}
+
 	// Named special keys: canonical byte/escape sequences that do NOT vary with Text
 	// (Text is empty for most of them anyway).
 	if b, ok := specialKeyBytes(k.Code); ok {
