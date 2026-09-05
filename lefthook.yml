@@ -43,8 +43,31 @@
 # [PASS] lines earn their keep, which is why this is not a global default.
 pre-commit:
   jobs:
-    - name: quality-gate
+    - &quality_gate
+      name: quality-gate
       run: 'if uname -o 2>/dev/null | grep -q Msys; then qgate.cmd -All -Full -Quiet; else qgate -All -Full -Quiet; fi'
+
+# A merge that commits on its own does NOT run pre-commit: git runs
+# pre-merge-commit for that. Measured on git 2.53 -- with only pre-commit
+# installed, `git merge --no-ff` lands the merge commit and NO hook runs at all.
+# Two branches that are each clean can merge into a tree that does not build (both
+# sides adding the same field is a clean textual merge and a redeclaration), so the
+# break walks onto main and the next ordinary commit is the one that gets blocked,
+# by a failure it did not cause.
+#
+# The YAML anchor is deliberate: one run line, two hooks. Duplicating that
+# carefully-won string is how the two would drift apart, which has already happened
+# once in this repo between the template and the advice printed next to it.
+#
+# Not covered here, because git offers nothing to cover it with: `git cherry-pick`
+# and `git revert` run neither hook (measured -- only prepare-commit-msg and
+# post-commit fire). prepare-commit-msg CAN abort them, but it receives source
+# "message" for an ordinary commit too, so wiring the gate there would run it twice
+# on every normal commit. `git commit --amend` and `git merge --squash` both go
+# through pre-commit and are already covered.
+pre-merge-commit:
+  jobs:
+    - *quality_gate
 
 # The agent Stop hook is deliberately NOT generated through lefthook's `ai:`
 # key. Measured on 2.1.12: the generated command is `lefthook run <hook>`, which
