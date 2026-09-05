@@ -547,14 +547,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case doneMsg:
 		m.finished = true
-		m.vp.SetHeight(m.vpHeight())
 		m.finalErr = msg.err
 		// The finished tail is NOT baked into m.content (frozen scrollback) — it is
 		// rendered fresh from m.lang in runView each frame (see finishedTail) so a
 		// post-finish language switch re-renders it. We still want the viewport
-		// pinned to the bottom of the streamed log.
-		m.vp.SetContent(m.wrapped())
-		m.vp.GotoBottom()
+		// pinned to the bottom of the streamed log. syncFinishedViewport re-budgets the
+		// viewport AFTER finalErr is set — the tail's row count depends on it, and a
+		// height computed before would leave the "Back to main" hit-test a row off.
+		m = m.syncFinishedViewport()
 		// v2: no SetWindowTitle Cmd — stash the title KIND; View() builds the
 		// localized title per-frame so the chrome follows a live language switch.
 		if msg.err != nil {
@@ -645,6 +645,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = p.Summary
 			m.haveSummary = true
 			m.running = false
+			// The summary grows the finished tail (bench line, per-skip reasons), and it
+			// can land AFTER doneMsg — re-budget the viewport so the drawn tail and the
+			// "Back to main" hit-test row stay in step. No-op while not finished.
+			m = m.syncFinishedViewport()
 			// Audit (read-only) lands on the Dashboard, carrying the server facts +
 			// the full tweak audit. Capture them from the final Done's Summary.
 			if m.command == "audit" {
@@ -1325,6 +1329,22 @@ func (m model) launchEngine(cfg *config.Config) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		m.listen(), m.listenConn(), m.listenProg(), tickEvery(),
 	)
+}
+
+// syncFinishedViewport re-budgets the run viewport for the CURRENT finished tail and
+// re-pins it to the bottom. The tail's height is data-dependent — the error line, the
+// bench line, one row per skip reason — and those inputs (finalErr, summary) arrive on
+// two different channels in either order. vpHeight() reserves exactly finishedTailRows()
+// rows, and backToMainRow() adds vp.Height() back, so a viewport sized against a stale
+// tail puts the drawn button and its hit-test on DIFFERENT rows (clicks stop working)
+// and overflows the frame. Call it after every change to a tail input. No-op pre-finish.
+func (m model) syncFinishedViewport() model {
+	if m.finished {
+		m.vp.SetHeight(m.vpHeight())
+	}
+	m.vp.SetContent(m.wrapped())
+	m.vp.GotoBottom()
+	return m
 }
 
 // localizeValidateErr maps config.Validate()'s sentinel errors to a localized
