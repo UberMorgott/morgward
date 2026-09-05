@@ -38,8 +38,23 @@ findtime = 600
 bantime  = 3600
 `, strings.Join(ignore, " "))
 
+	// fail2ban lives in `universe`; a minimal/container image can ship with that
+	// component disabled, and then `apt-get install` dies with "Unable to locate
+	// package" (the symptom seen on 26.04). Probe the candidate first and, when it is
+	// missing, enable universe + refresh once before giving up. Still missing ⇒ SKIP
+	// with the reason, not a run-aborting FAIL: fail2ban is defense-in-depth, and A1
+	// already closed the box down.
+	if !fail2banAvailable(ctx) {
+		ctx.Log.Detail("fail2ban has no install candidate — enabling `universe` and refreshing…")
+		ctx.Cli.Sudo(aptPrelude() + "add-apt-repository -y universe >/dev/null 2>&1 || true\n" +
+			"stdbuf -oL -eL " + aptGet + " update >/dev/null 2>&1 || true\n")
+		if !fail2banAvailable(ctx) {
+			return StatusSkip, "fail2ban has no install candidate in this release's enabled repos (universe unavailable) — skipped", nil
+		}
+	}
+
 	port := ctx.Cfg.Port
-	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+	script := aptPrelude() +
 		aptInstall("fail2ban python3-systemd") +
 		putFile("/etc/fail2ban/jail.local", jail, "0644")
 	if port != 22 {
@@ -57,4 +72,13 @@ bantime  = 3600
 		return StatusFail, "fail2ban sshd jail not active", nil
 	}
 	return StatusOK, fmt.Sprintf("fail2ban active, sshd jail loaded, %d whitelisted IP(s)", len(ignore)), nil
+}
+
+// fail2banAvailable reports whether apt has an installable candidate for fail2ban on
+// this box (already-installed counts too). `apt-cache policy` prints "Candidate:
+// (none)" when the package is known but unavailable, and nothing at all when it is not
+// in any enabled index — both read as unavailable here.
+func fail2banAvailable(ctx *Context) bool {
+	cand := ctx.Cli.Run("apt-cache policy fail2ban 2>/dev/null | awk '/Candidate:/{print $2}'").Out()
+	return cand != "" && cand != "(none)"
 }
