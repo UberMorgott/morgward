@@ -687,6 +687,22 @@ func (c *Client) SwitchUser(ctx context.Context, user string) error {
 	return nil
 }
 
+// Reconnect drops the current transport and dials again with the SAME identity
+// (user and auth material already loaded). A step whose long-running command lost
+// the transport for reasons unrelated to what it changed — an operator's stuck
+// dpkg lock killing the session, a NAT idle-timeout, a keepalive miss — can heal
+// its own executor before deciding that its change locked the session out. The
+// pinned host key carries over, so a redial presenting a different key is still
+// refused with ErrHostKeyChanged.
+func (c *Client) Reconnect(ctx context.Context) error {
+	old := c.detachConn()
+	err := c.connect(ctx)
+	if old != nil {
+		_ = old.Close()
+	}
+	return err
+}
+
 // UseKey switches the active connection from password auth to key auth. The
 // pinned host key carries over so the re-dial verifies the same host.
 func (c *Client) UseKey(ctx context.Context, keyPEM []byte) error {

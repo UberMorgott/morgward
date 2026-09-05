@@ -90,7 +90,7 @@ func applyCryptoHardening(ctx *Context, write string, handoff bool, okDetail str
 
 	// Second-session key verify as the admin user.
 	ctx.Log.Detail("verifying key login as %s in a fresh session…", admin)
-	if err := freshLogin(ctx, admin); err != nil {
+	if err := freshLoginVerify(ctx, admin); err != nil {
 		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh hardening locked out admin")
 	}
 
@@ -200,7 +200,7 @@ func (A2Danger) Run(ctx *Context) (Status, string, error) {
 	// 4. Second-session key-only verify as admin (AllowGroups now active) BEFORE we
 	// lock root — if the admin can't get back in, abort and let ssh-revert restore.
 	ctx.Log.Detail("verifying key login as %s in a fresh session before locking root…", admin)
-	if err := freshLogin(ctx, admin); err != nil {
+	if err := freshLoginVerify(ctx, admin); err != nil {
 		return StatusFail, "admin key login verify failed: " + err.Error() + " (ssh-revert will restore in <300s)", fmt.Errorf("ssh lockdown locked out admin")
 	}
 

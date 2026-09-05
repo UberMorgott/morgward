@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
@@ -211,6 +212,38 @@ func AppendLineIfMissing(file, line string) string {
 	return fmt.Sprintf(
 		"__L=$(echo '%s' | base64 -d); grep -qxF \"$__L\" '%s' 2>/dev/null || printf '%%s\\n' \"$__L\" >> '%s'\n",
 		b64, file, file)
+}
+
+// transportLost reports whether a command Result reflects a LOST SSH TRANSPORT
+// (rc = -1, or a transport error) as opposed to a command that ran to completion
+// and exited non-zero. The distinction matters for every step that follows a long
+// command with a reachability verify: a dropped transport says nothing about what
+// the step changed, so it must not be reported as a lockout.
+func transportLost(r sshx.Result) bool { return r.RC == -1 || r.Err != nil }
+
+// freshLoginRetryDelay is how long freshLoginVerify waits before its single retry —
+// long enough for sshd to finish a restart or for a transient network blip to clear,
+// short enough to stay far inside the 300s fail-safe timers.
+const freshLoginRetryDelay = 5 * time.Second
+
+// freshLoginVerify is freshLogin with ONE retry after a short pause. Every step
+// that gates a lockout-capable change on "can I still log in?" goes through it: a
+// single immediate dial turns any transient transport hiccup — an sshd still
+// restarting, a NAT blip, a session killed by an operator's stuck dpkg dialog —
+// into a false lockout verdict that rolls back a change which was in fact fine.
+// A cancelled run skips the wait and reports the first error.
+func freshLoginVerify(ctx *Context, user string) error {
+	err := freshLogin(ctx, user)
+	if err == nil {
+		return nil
+	}
+	ctx.Log.Warn("second-session verify failed (%v) — retrying once in %s", err, freshLoginRetryDelay)
+	select {
+	case <-ctx.Ctx.Done():
+		return err
+	case <-time.After(freshLoginRetryDelay):
+	}
+	return freshLogin(ctx, user)
 }
 
 // freshLogin opens an INDEPENDENT new SSH session (the runbook's [LOCAL]

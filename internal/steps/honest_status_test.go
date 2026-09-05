@@ -1,9 +1,11 @@
 package steps
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/verify"
 )
 
@@ -96,6 +98,27 @@ func TestAptPreludeContract(t *testing.T) {
 	for _, s := range []string{p, aptInstall("x"), aptInstallOptional("x")} {
 		if strings.Contains(s, "stdbuf") {
 			t.Errorf("stdbuf must not be used (LD_PRELOAD spam on rust-coreutils): %q", s)
+		}
+	}
+}
+
+// A lost SSH transport (rc=-1 / a transport error) must be told apart from a
+// command that ran and exited non-zero — the two lead to different verdicts when a
+// step follows a long command with a reachability verify (B3).
+func TestTransportLost(t *testing.T) {
+	cases := []struct {
+		name string
+		r    sshx.Result
+		want bool
+	}{
+		{"clean exit", sshx.Result{RC: 0}, false},
+		{"command failed", sshx.Result{RC: 100}, false},
+		{"transport gone", sshx.Result{RC: -1}, true},
+		{"transport error", sshx.Result{RC: 0, Err: errors.New("connection lost")}, true},
+	}
+	for _, c := range cases {
+		if got := transportLost(c.r); got != c.want {
+			t.Errorf("%s: transportLost = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

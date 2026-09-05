@@ -86,7 +86,7 @@ sysctl -w net.ipv6.route.flush=1 >/dev/null 2>&1`
 	// Verify the session survives the applied rp_filter from a fresh connection, then
 	// disarm. On failure revert to the SAME context-appropriate baseline as the armed
 	// timer (loose=2 when forwarding, strict=1 otherwise) — never blindly to loose.
-	if err := freshLogin(ctx, ctx.Cli.User); err != nil {
+	if err := freshLoginVerify(ctx, ctx.Cli.User); err != nil {
 		ctx.Cli.Sudo(fmt.Sprintf("sysctl -w net.ipv4.conf.all.rp_filter=%[1]d net.ipv4.conf.default.rp_filter=%[1]d net.ipv4.route.flush=1", rpfRevert))
 		return StatusFail, fmt.Sprintf("session lost after rp_filter apply — reverted to rp_filter=%d: %s", rpfRevert, err.Error()), nil
 	}

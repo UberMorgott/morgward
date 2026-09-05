@@ -140,15 +140,35 @@ chmod +x /usr/local/sbin/fw-rollback.sh
 echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debconf-set-selections
 ` + aptInstall("iptables-persistent")
 	persistInstallFailed := false
+	lostTransport := false
 	if r := ctx.Cli.Sudo(persistInstall); r.RC != 0 {
 		persistInstallFailed = true
+		lostTransport = transportLost(r)
 		ctx.Log.Warn("iptables-persistent install rc=%d (continuing to verify)", r.RC)
+	}
+
+	// B3: the install can lose the SSH TRANSPORT for reasons that have nothing to do
+	// with the ruleset — most often an operator's own `apt` holding the dpkg lock
+	// behind a stuck dialog until the session is torn down. The executor connection is
+	// then dead, so the reachability verify below would fail and A1 would report a
+	// firewall LOCKOUT that never happened. Heal the executor first, and remember that
+	// the transport (not the firewall) is what dropped so the failure detail says so.
+	if lostTransport {
+		ctx.Log.Warn("SSH transport dropped during the iptables-persistent install — reconnecting before the reachability verify")
+		if err := ctx.Cli.Reconnect(ctx.Ctx); err != nil {
+			ctx.Log.Warn("reconnect after the install failed: %v", err)
+		}
 	}
 
 	// 4. Second-session [LOCAL] verify BEFORE disarming.
 	ctx.Log.Detail("verifying reachability from an independent session…")
-	if err := freshLogin(ctx, ctx.Cli.User); err != nil {
+	if err := freshLoginVerify(ctx, ctx.Cli.User); err != nil {
 		ctx.Cli.Sudo("/usr/local/sbin/fw-rollback.sh")
+		if lostTransport {
+			return StatusFail, "SSH transport dropped during the iptables-persistent install and did not come back: " + err.Error() +
+					" — firewall rolled back (transport failure, NOT a firewall lockout; check for a held dpkg lock and re-run `step A1`)",
+				fmt.Errorf("ssh transport lost during the A1 install")
+		}
 		return StatusFail, "second-session verify FAILED, firewall rolled back: " + err.Error(), fmt.Errorf("firewall locked out the session")
 	}
 
@@ -206,7 +226,7 @@ func (a A1Firewall) runUFW(ctx *Context, port int) (Status, string, error) {
 
 	// Cheap insurance: prove the session still reaches us from an independent login.
 	ctx.Log.Detail("verifying reachability from an independent session…")
-	if err := freshLogin(ctx, ctx.Cli.User); err != nil {
+	if err := freshLoginVerify(ctx, ctx.Cli.User); err != nil {
 		return StatusFail, "second-session verify FAILED after ufw allow: " + err.Error(), fmt.Errorf("ufw allow locked out the session")
 	}
 
