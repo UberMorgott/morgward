@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -110,7 +111,14 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	// `reboot` drops the connection; ignore the resulting transport error.
 	ctx.Cli.Sudo("(sleep 1; systemctl reboot) >/dev/null 2>&1 &")
 
-	newID, err := ctx.Cli.WaitForReboot(ctx.Ctx, pre, 10*time.Minute, func(msg string) {
+	// From here on the box is OURS to bring back. An Esc in the TUI cancels ctx.Ctx,
+	// which would make every connect() inside WaitForReboot fail instantly: the loop
+	// would give up, restoreServices would never run, and a brownfield box we just
+	// rebooted would be left with its `restart: no` containers and non-enabled units
+	// DOWN. So the reconnect+restore phase runs under a non-cancellable copy of the
+	// context (values kept, cancellation dropped). WaitForReboot's own 10-minute
+	// deadline still bounds it, and the UI cancel still aborts every SUBSEQUENT step.
+	newID, err := ctx.Cli.WaitForReboot(rebootCtx(ctx.Ctx), pre, 10*time.Minute, func(msg string) {
 		ctx.Log.Detail("%s", msg)
 	})
 	if err != nil {
@@ -148,6 +156,17 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 
 	return StatusOK, fmt.Sprintf("rebooted (new boot_id %s, system %s), firewall reloaded UPGRADED_COUNT=%s%s",
 		short(newID), health, upCount, tail), nil
+}
+
+// rebootCtx strips cancellation from the run context for the post-reboot
+// reconnect+restore phase (see A8Upgrade.Run). Values survive, so anything the
+// engine threads through the context still works; only the Done channel is cut.
+// nil-tolerant for tests.
+func rebootCtx(parent context.Context) context.Context {
+	if parent == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(parent)
 }
 
 // restoreServices restarts the snapshot containers/units that did not come back
