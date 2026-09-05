@@ -18,6 +18,10 @@ type A4Network struct{}
 func (A4Network) ID() string    { return "A4" }
 func (A4Network) Title() string { return "Network tuning (BBR, buffers, I/O sched) + benchmark" }
 
+// M03 note on icmp_ratemask: the mask names the ICMP types icmp_ratelimit applies
+// to. Bit 0 is ECHO REPLY, and it is deliberately CLEAR — setting it (88089) caps
+// ping replies at ~50/s, which every uptime monitor reads as phantom packet loss.
+// 88088 keeps the error types (bits 3,4,11,12,13,14,16) throttled and ping honest.
 const netTuneConf = `net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.ipv4.tcp_rmem = 4096 87380 16777216
@@ -29,7 +33,7 @@ net.ipv4.tcp_syncookies = 1
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.icmp_ratelimit = 20
-net.ipv4.icmp_ratemask = 88089
+net.ipv4.icmp_ratemask = 88088
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 vm.dirty_ratio = 10
 vm.dirty_background_ratio = 5

@@ -11,6 +11,27 @@ func sample(speed, size float64, url string) string {
 	return fmt.Sprintf("SAMPLE %g %g 1.0 %s", speed, size, url)
 }
 
+// M03: icmp_ratemask must never set bit 0 (echo reply) — that throttles ping
+// replies to icmp_ratelimit (~50/s) and reads as phantom packet loss on every
+// uptime monitor. The error types (bits 3,4,11,12,13,14,16) stay throttled.
+func TestICMPRatemaskLeavesEchoReplyUnthrottled(t *testing.T) {
+	var mask uint
+	for line := range strings.SplitSeq(netTuneConf, "\n") {
+		if _, err := fmt.Sscanf(strings.TrimSpace(line), "net.ipv4.icmp_ratemask = %d", &mask); err == nil {
+			break
+		}
+	}
+	if mask == 0 {
+		t.Fatalf("no icmp_ratemask line in netTuneConf:\n%s", netTuneConf)
+	}
+	if mask&1 != 0 {
+		t.Errorf("icmp_ratemask = %d sets bit 0 (echo reply) — ping would be rate-limited", mask)
+	}
+	if mask != 88088 {
+		t.Errorf("icmp_ratemask = %d, want 88088", mask)
+	}
+}
+
 // M04: the conntrack sizing script must carry all three brownfield guards — leave a
 // k8s box alone, never lower an existing value, and persist both the sysctl and the
 // modprobe hashsize — and must contain no heredoc (§A1 stdin caveat).
