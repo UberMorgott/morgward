@@ -225,6 +225,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case phaseRun:
+			// The global tab bar is live DURING a run (row 1, same geometry as every hub
+			// screen): a click routes through navTo, which switches phase only — it never
+			// touches runGen, the cancel func or the engine's client (the Terminal tab dials
+			// its OWN session), so the run keeps streaming and Главная brings this screen
+			// back with its scrollback.
+			if target, ok := m.navTabAtClick(mc.X, mc.Y); ok {
+				return m.navTo(target)
+			}
 			// Only the "Back to main" button is clickable (when finished); it opens
 			// the summary the same way enter/esc does.
 			if m.backToMainAtClick(mc.X, mc.Y) {
@@ -503,7 +511,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case phaseForm, phaseRun, phaseTerminal:
 			// Not handled here: the form has its own key path, and run/done keys fall
-			// through to the shared handler below.
+			// through to the shared handler below — except the global tab-bar keys, which
+			// mirror the bar the run screen now draws (ctrl+1 Главная is a no-op self-switch
+			// while the run is in flight; ctrl+2/3 open the workspace on its own session).
+			if m.phase == phaseRun {
+				switch s {
+				case navHomeKey:
+					return m.navTo(navHome)
+				case wsSwitchTerminalKey:
+					return m.navTo(navTerminal)
+				case wsSwitchFilesKey:
+					return m.navTo(navFiles)
+				}
+			}
 		}
 		// run/done phase
 		switch s {

@@ -280,9 +280,10 @@ func (m model) navTabStripLine(b lipgloss.Border, innerW int) string {
 }
 
 // navActiveTab reports which bar cell is active in the current frame: Главная on the
-// Dashboard, else Терминал/Файлы per the workspace tab.
+// Dashboard and on the run screen (which IS "home" while a run is in flight — see
+// homePhase), else Терминал/Файлы per the workspace tab.
 func (m model) navActiveTab() navTarget {
-	if m.phase == phaseDashboard {
+	if m.phase == phaseDashboard || m.phase == phaseRun {
 		return navHome
 	}
 	if m.wsTab == wsFiles {

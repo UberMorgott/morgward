@@ -22,9 +22,13 @@ func (m model) runView() string {
 	sb.WriteString(titledTop(b, " "+version.Name+" v"+version.Version+" ", bw))
 	sb.WriteByte('\n')
 
-	// First content line (screen row 1): the RU/EN switcher, right-aligned — so the
-	// language is switchable during a run too, and the click hit-test row matches.
-	sb.WriteString(m.switcherLine(b, innerW))
+	// First content line (screen row 1): the global tab bar (Главная · Терминал · Файлы)
+	// with the RU/EN switcher right-aligned on the same line — same geometry switcherLine
+	// drew (langZones is unchanged), so the language hit-test row still matches. The bar
+	// stays live DURING a run so the operator can open the Terminal tab and look at the box
+	// while a step sits silent (e.g. apt waiting on the dpkg lock); switching tabs neither
+	// cancels nor pauses the run — it keeps streaming into this screen under its runGen.
+	sb.WriteString(m.navTabStripLine(b, innerW))
 	sb.WriteByte('\n')
 
 	// Progress / summary line.

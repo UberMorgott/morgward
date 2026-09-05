@@ -195,13 +195,25 @@ const (
 func (m model) navTo(target navTarget) (tea.Model, tea.Cmd) {
 	switch target {
 	case navHome:
-		m.phase = phaseDashboard
+		m.phase = m.homePhase()
 		return m, nil
 	case navFiles:
-		return m.openTerminal(phaseDashboard, wsFiles)
+		return m.openTerminal(m.homePhase(), wsFiles)
 	default: // navTerminal
-		return m.openTerminal(phaseDashboard, wsTerminal)
+		return m.openTerminal(m.homePhase(), wsTerminal)
 	}
+}
+
+// homePhase is the screen the Главная cell (and a workspace exit) returns to: the RUN
+// screen while a run is still in flight, so leaving for the Terminal tab mid-run and
+// coming back shows the live log with its scrollback instead of dropping the operator on
+// the Dashboard; the Dashboard otherwise. The run keeps streaming either way (its
+// listeners are generation-tagged, not phase-tagged) — navigation never cancels it.
+func (m model) homePhase() phase {
+	if m.running && !m.finished {
+		return phaseRun
+	}
+	return phaseDashboard
 }
 
 // ensureFiles lazily creates the Files session over the shared terminal transport
