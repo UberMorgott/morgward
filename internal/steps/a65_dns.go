@@ -37,8 +37,8 @@ mkdir -p /etc/systemd/resolved.conf.d
 # release — so try the real name first and fall back to the old one. If dig is still
 # missing we fall back to hardcoded defaults rather than failing the step.
 if ! command -v dig >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive ` + aptGet + ` install -y -q bind9-dnsutils >/dev/null 2>&1 ||
-  DEBIAN_FRONTEND=noninteractive ` + aptGet + ` install -y -q dnsutils >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a UCF_FORCE_CONFFOLD=1 ` + aptGet + ` install -y -q` + aptConfOpts + ` bind9-dnsutils >/dev/null 2>&1 ||
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a UCF_FORCE_CONFFOLD=1 ` + aptGet + ` install -y -q` + aptConfOpts + ` dnsutils >/dev/null 2>&1 || true
 fi
 
 write_conf() {

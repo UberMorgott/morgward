@@ -20,7 +20,7 @@ Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 `
 
 func (a A9Unattended) Run(ctx *Context) (Status, string, error) {
-	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+	script := aptPrelude() +
 		aptInstall("unattended-upgrades") +
 		putFile("/etc/apt/apt.conf.d/20auto-upgrades", autoUpgrades, "0644") +
 		putFile("/etc/apt/apt.conf.d/52-unattended-upgrades-local", unattendedLocal, "0644")

@@ -136,8 +136,7 @@ chmod +x /usr/local/sbin/fw-rollback.sh
 	}
 
 	// 3. Install persistence package (debconf decline auto-save; finalize later).
-	persistInstall := `export DEBIAN_FRONTEND=noninteractive
-echo 'iptables-persistent iptables-persistent/autosave_v4 boolean false' | debconf-set-selections
+	persistInstall := aptPrelude() + `echo 'iptables-persistent iptables-persistent/autosave_v4 boolean false' | debconf-set-selections
 echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debconf-set-selections
 ` + aptInstall("iptables-persistent")
 	persistInstallFailed := false

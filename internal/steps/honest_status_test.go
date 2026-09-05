@@ -91,7 +91,7 @@ func TestDNSScriptTriesBothDnsutilsNames(t *testing.T) {
 // missing on a newer release must not abort the required install.
 func TestA10SplitsTransitionalPackage(t *testing.T) {
 	req := aptInstall("auditd")
-	if !strings.Contains(req, " install -y auditd\n") {
+	if !strings.HasSuffix(req, " auditd\n") || !strings.Contains(req, " install -y") {
 		t.Fatalf("auditd must be installed alone, got %q", req)
 	}
 }

@@ -37,7 +37,7 @@ fi
 	// nice-to-have. Installed on separate lines so a missing/renamed earlyoom cannot
 	// take the zram install down with it — and so the failure message can name which
 	// of the two actually did not land.
-	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+	script := aptPrelude() +
 		aptInstall("systemd-zram-generator") +
 		aptInstallOptional("earlyoom") +
 		putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +

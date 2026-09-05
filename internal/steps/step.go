@@ -84,11 +84,37 @@ type Step interface {
 // invocation from this const (or from aptInstall) so the flag cannot be forgotten.
 const aptGet = "apt-get -o DPkg::Lock::Timeout=300"
 
+// needrestartConf is the needrestart drop-in every apt-invoking step lands before it
+// touches apt. `restart = 'a'` auto-restarts affected services instead of drawing the
+// ncurses "Which services should be restarted?" checklist, and `kernelhints = -1`
+// suppresses the "Pending kernel upgrade" message box — which NEEDRESTART_MODE=a does
+// NOT cover. Our remote scripts are piped to bash over stdin with no tty (§A1), so a
+// dialog that tries to read the terminal takes the whole step down with it.
+const needrestartConf = "$nrconf{restart} = 'a';\n$nrconf{kernelhints} = -1;\n"
+
+// aptPrelude is the shell prelude EVERY remote script that invokes apt-get/dpkg must
+// start with — the ONE place the non-interactive contract is defined. Env covers the
+// invocation (debconf, needrestart, ucf); the drop-in covers anything apt spawns
+// later and a selective `step` run that never went through PRE. Idempotent; all
+// callers run it through Cli.Sudo (root). Pair with aptConfOpts on any subcommand
+// that unpacks packages (install / upgrade / full-upgrade / purge / autoremove).
+func aptPrelude() string {
+	return "export DEBIAN_FRONTEND=noninteractive\n" +
+		"export NEEDRESTART_MODE=a\n" +
+		"export UCF_FORCE_CONFFOLD=1\n" +
+		"mkdir -p /etc/needrestart/conf.d\n" +
+		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644")
+}
+
+// aptConfOpts stops dpkg from ever prompting about a modified conffile: keep the
+// installed file, take the package default where there is no local change.
+const aptConfOpts = ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"`
+
 // aptInstall returns the streamed non-interactive install line for pkgs (a
 // space-separated package list), terminated by a newline. stdbuf keeps apt's
 // progress line-buffered so it streams live.
 func aptInstall(pkgs string) string {
-	return "stdbuf -oL -eL " + aptGet + " install -y " + pkgs + "\n"
+	return "stdbuf -oL -eL " + aptGet + " install -y" + aptConfOpts + " " + pkgs + "\n"
 }
 
 // aptInstallOptional is aptInstall for a package whose absence must NOT fail the

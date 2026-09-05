@@ -80,7 +80,7 @@ func (a A10Detection) Run(ctx *Context) (Status, string, error) {
 	// auditd is REQUIRED. audispd-plugins is a TRANSITIONAL package (absent on newer
 	// releases) — installing it on the same line would make its absence abort the
 	// whole install, so it gets its own best-effort line.
-	script := "export DEBIAN_FRONTEND=noninteractive\n" +
+	script := aptPrelude() +
 		aptInstall("auditd") +
 		aptInstallOptional("audispd-plugins") +
 		"mkdir -p /etc/audit/rules.d\n" +
