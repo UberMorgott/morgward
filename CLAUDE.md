@@ -442,4 +442,3 @@ path → check the other.
   *different* boot_id, so a too-short sleep can't make it act on the pre-reboot kernel.
   Keep boot_id inequality as the gate; don't trust first-reconnect on the strength of
   the sleep alone.
-
