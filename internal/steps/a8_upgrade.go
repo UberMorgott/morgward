@@ -54,25 +54,14 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 
 	// Full upgrade.
 	//
-	// stdbuf on apt-get keeps apt's own progress line-buffered so it streams live.
-	// But stdbuf works via LD_PRELOAD=libstdbuf.so (+ _STDBUF_*), which apt would
-	// otherwise leak into every child it spawns (dpkg → maintainer postinst →
-	// update-initramfs / dracut). On rust-coreutils (uutils) boxes those children
-	// can't resolve libstdbuf.so in their context, so ld.so spams a harmless but
-	// alarming "object '…/libstdbuf.so' from LD_PRELOAD cannot be preloaded …
-	// ignored" for the whole upgrade.
-	//
-	// Fix: keep stdbuf on apt-get, but point apt at a tiny dpkg wrapper via
-	// Dir::Bin::dpkg (apt.conf: the location of the dpkg program apt execs — the
-	// same args, --status-fd/--configure/--unpack/…, are forwarded). The wrapper
-	// scrubs the stdbuf env vars before exec'ing the real dpkg, so dpkg and all
-	// maintainer scripts run without LD_PRELOAD → no spam. The wrapper lives in
-	// /usr/local/sbin (root-owned, exec-allowed) — never /tmp, which a hardened box
-	// may mount noexec. The earlier `apt-get update` keeps plain stdbuf: it spawns
-	// no postinst triggers, so it has no children to leak into.
-	const dpkgWrapper = "/usr/local/sbin/morgward-dpkg"
-	wrapperBody := "#!/bin/sh\n" +
-		`exec env -u LD_PRELOAD -u _STDBUF_O -u _STDBUF_E -u _STDBUF_I /usr/bin/dpkg "$@"` + "\n"
+	// NO `stdbuf` and no dpkg wrapper any more. stdbuf worked via
+	// LD_PRELOAD=libstdbuf.so, which apt leaked into every child it spawned (dpkg →
+	// maintainer postinst → update-initramfs / dracut); on rust-coreutils (uutils)
+	// boxes those children cannot resolve libstdbuf.so and ld.so spams "object
+	// '…/libstdbuf.so' from LD_PRELOAD cannot be preloaded … ignored" for the whole
+	// upgrade. The Dir::Bin::dpkg wrapper that used to scrub those env vars existed
+	// ONLY to contain that leak, so dropping stdbuf drops the wrapper with it.
+	// aptConfOpts carries `Dpkg::Use-Pty=0` for the output shape instead.
 
 	// Count the packages a full-upgrade WOULD install/upgrade, BEFORE running it
 	// (simulation; heredoc-free). `apt-get -s full-upgrade` lists each change as an
@@ -82,11 +71,8 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 		"DEBIAN_FRONTEND=noninteractive apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst' || echo 0").Out()
 
 	ctx.Log.Detail("apt-get full-upgrade (this can take several minutes)…")
-	up := ctx.Cli.Sudo(aptPrelude() + putFile(dpkgWrapper, wrapperBody, "0755") + `stdbuf -oL -eL ` + aptGet + ` update
-stdbuf -oL -eL ` + aptGet + ` full-upgrade -y -o Dir::Bin::dpkg=` + dpkgWrapper + aptConfOpts + `
-__rc=$?
-rm -f ` + dpkgWrapper + `
-exit $__rc`)
+	up := ctx.Cli.Sudo(aptPrelude() + aptGet + ` update
+` + aptGet + ` full-upgrade -y` + aptConfOpts)
 	if up.RC != 0 {
 		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
 	}

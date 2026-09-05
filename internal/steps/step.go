@@ -92,29 +92,60 @@ const aptGet = "apt-get -o DPkg::Lock::Timeout=300"
 // dialog that tries to read the terminal takes the whole step down with it.
 const needrestartConf = "$nrconf{restart} = 'a';\n$nrconf{kernelhints} = -1;\n"
 
+// AptUpdateMarker is the per-boot marker file that records "this box's apt index
+// has already been refreshed by morgward in this boot". It lives under /run, which
+// is a tmpfs, so it disappears on reboot and the next run refreshes again.
+const AptUpdateMarker = "/run/morgward-apt-updated"
+
+// aptUpdateOnce refreshes the apt index ONCE per boot, before any install. A fresh
+// cloud image ships an EMPTY apt index, so an install issued before the first
+// `apt-get update` dies with "Package iptables-persistent is not available" /
+// "Unable to locate package fail2ban" — which is exactly how a selective `step A1`
+// / `step A3` run (one that never went through PRE) used to fail. Every failure
+// mode is swallowed (`|| true`): the marker is only created on a SUCCESSFUL
+// refresh, so a transient mirror outage just means the next step tries again, and
+// the compound never trips a caller's `set -e`.
+const aptUpdateOnce = "if [ ! -e " + AptUpdateMarker + " ]; then " +
+	aptGet + " update >/dev/null 2>&1 && : > " + AptUpdateMarker + " || true; fi\n"
+
 // aptPrelude is the shell prelude EVERY remote script that invokes apt-get/dpkg must
 // start with — the ONE place the non-interactive contract is defined. Env covers the
 // invocation (debconf, needrestart, ucf); the drop-in covers anything apt spawns
-// later and a selective `step` run that never went through PRE. Idempotent; all
-// callers run it through Cli.Sudo (root). Pair with aptConfOpts on any subcommand
+// later and a selective `step` run that never went through PRE; the once-per-boot
+// index refresh guarantees an install never runs against an empty index. Idempotent;
+// all callers run it through Cli.Sudo (root). Pair with aptConfOpts on any subcommand
 // that unpacks packages (install / upgrade / full-upgrade / purge / autoremove).
+//
+// NEEDRESTART_SUSPEND=1 sits alongside NEEDRESTART_MODE=a on purpose: MODE=a still
+// runs needrestart (auto-restarting services), SUSPEND=1 makes it a no-op — belt and
+// braces against the ncurses checklist on a box whose needrestart ignores the mode.
 func aptPrelude() string {
 	return "export DEBIAN_FRONTEND=noninteractive\n" +
 		"export NEEDRESTART_MODE=a\n" +
+		"export NEEDRESTART_SUSPEND=1\n" +
 		"export UCF_FORCE_CONFFOLD=1\n" +
 		"mkdir -p /etc/needrestart/conf.d\n" +
-		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644")
+		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644") +
+		aptUpdateOnce
 }
 
-// aptConfOpts stops dpkg from ever prompting about a modified conffile: keep the
-// installed file, take the package default where there is no local change.
-const aptConfOpts = ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"`
+// aptConfOpts stops dpkg from ever prompting about a modified conffile (keep the
+// installed file, take the package default where there is no local change) and
+// keeps dpkg off a pty (`Dpkg::Use-Pty=0`): on a pty dpkg draws a redrawing
+// progress bar full of control sequences, which is noise in a piped, non-interactive
+// session and defeats line-oriented streaming.
+const aptConfOpts = ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -o Dpkg::Use-Pty=0`
 
-// aptInstall returns the streamed non-interactive install line for pkgs (a
-// space-separated package list), terminated by a newline. stdbuf keeps apt's
-// progress line-buffered so it streams live.
+// aptInstall returns the non-interactive install line for pkgs (a space-separated
+// package list), terminated by a newline.
+//
+// NO `stdbuf`: it works via LD_PRELOAD=libstdbuf.so, which apt leaks into every
+// child it spawns (dpkg → maintainer postinst → update-initramfs). On Ubuntu 26.04
+// (rust-coreutils/uutils) those children cannot resolve libstdbuf.so and ld.so spams
+// "object '…/libstdbuf.so' from LD_PRELOAD cannot be preloaded … ignored" for the
+// whole install. Dpkg::Use-Pty=0 in aptConfOpts covers the output shape instead.
 func aptInstall(pkgs string) string {
-	return "stdbuf -oL -eL " + aptGet + " install -y" + aptConfOpts + " " + pkgs + "\n"
+	return aptGet + " install -y" + aptConfOpts + " " + pkgs + "\n"
 }
 
 // aptInstallOptional is aptInstall for a package whose absence must NOT fail the

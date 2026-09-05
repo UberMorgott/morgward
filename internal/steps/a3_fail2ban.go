@@ -47,7 +47,7 @@ bantime  = 3600
 	if !fail2banAvailable(ctx) {
 		ctx.Log.Detail("fail2ban has no install candidate — enabling `universe` and refreshing…")
 		ctx.Cli.Sudo(aptPrelude() + "add-apt-repository -y universe >/dev/null 2>&1 || true\n" +
-			"stdbuf -oL -eL " + aptGet + " update >/dev/null 2>&1 || true\n")
+			aptGet + " update >/dev/null 2>&1 || true\n")
 		if !fail2banAvailable(ctx) {
 			return StatusSkip, "fail2ban has no install candidate in this release's enabled repos (universe unavailable) — skipped", nil
 		}

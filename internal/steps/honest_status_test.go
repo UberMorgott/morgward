@@ -76,6 +76,30 @@ func TestOptionalInstallDoesNotFailTheScript(t *testing.T) {
 	}
 }
 
+// The shared apt contract: refresh the index once per boot BEFORE any install (a
+// fresh image ships an empty index), keep dpkg off a pty, suspend needrestart, and
+// never wire stdbuf (LD_PRELOAD spam on rust-coreutils boxes).
+func TestAptPreludeContract(t *testing.T) {
+	p := aptPrelude()
+	for _, want := range []string{AptUpdateMarker, aptGet + " update", "NEEDRESTART_SUSPEND=1", "NEEDRESTART_MODE=a"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("apt prelude must contain %q:\n%s", want, p)
+		}
+	}
+	// The refresh must never trip a caller's `set -e` nor stamp the marker on failure.
+	if !strings.Contains(p, "&& : > "+AptUpdateMarker+" || true") {
+		t.Errorf("index refresh must stamp the marker only on success and swallow failure:\n%s", p)
+	}
+	if !strings.Contains(aptConfOpts, "Dpkg::Use-Pty=0") {
+		t.Errorf("apt conf opts must keep dpkg off a pty: %s", aptConfOpts)
+	}
+	for _, s := range []string{p, aptInstall("x"), aptInstallOptional("x")} {
+		if strings.Contains(s, "stdbuf") {
+			t.Errorf("stdbuf must not be used (LD_PRELOAD spam on rust-coreutils): %q", s)
+		}
+	}
+}
+
 func TestDNSScriptTriesBothDnsutilsNames(t *testing.T) {
 	i := strings.Index(dnsCalibrateScript, "bind9-dnsutils")
 	j := strings.Index(dnsCalibrateScript, " dnsutils")
