@@ -435,7 +435,9 @@ HostKey /etc/ssh/ssh_host_rsa_key
 	// — a run must never silently start cutting an existing workflow's sessions. Note
 	// the pattern is `session:*` deliberately: it never matches forwarded-tcpip /
 	// direct-tcpip, so port forwards and VPN-style tunnels are untouched either way.
-	if (ctx.Facts.Is2404 || ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 2)) && ctx.Facts.Greenfield {
+	// SSHTimeoutsSet: a box morgward hardened reads as brownfield by its own markers;
+	// keep the knobs morgward itself wrote instead of dropping them on a re-run.
+	if (ctx.Facts.Is2404 || ctx.Facts.Is2604 || ctx.Facts.SSHDAtLeast(9, 2)) && (ctx.Facts.Greenfield || ctx.Facts.SSHTimeoutsSet) {
 		b.WriteString("UnusedConnectionTimeout 600\n")
 		b.WriteString("ChannelTimeout session:*=1800\n")
 	}

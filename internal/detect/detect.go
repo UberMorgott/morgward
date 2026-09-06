@@ -76,6 +76,12 @@ type Facts struct {
 
 	AlreadyHardened bool     // box already carries this runbook's hardening markers
 	HardenMarkers   []string // which markers were found
+
+	// SSHTimeoutsSet: morgward's own 99-hardening.conf already carries the M07
+	// greenfield-only idle timeouts. A box morgward hardened flips to brownfield by
+	// its own markers, so A2 re-applies (and the probes verify) the knobs it wrote
+	// itself instead of silently dropping them on a re-run.
+	SSHTimeoutsSet bool
 }
 
 // ManagesIPTables reports whether morgward itself owns the box's raw iptables
@@ -272,7 +278,8 @@ done`
 iptables -S INPUT 2>/dev/null | grep -q -- '-P INPUT DROP' && echo m:input-drop
 systemctl is-active fail2ban >/dev/null 2>&1 && echo m:fail2ban
 [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo m:bbr
-[ -f /etc/sysctl.d/99-zz-kernel-harden.conf ] && echo m:kernel-harden`
+[ -f /etc/sysctl.d/99-zz-kernel-harden.conf ] && echo m:kernel-harden
+grep -qs '^UnusedConnectionTimeout' /etc/ssh/sshd_config.d/99-hardening.conf && echo m:ssh-timeouts`
 	// The `-P INPUT DROP` policy is only a morgward marker when morgward owns the
 	// raw iptables ruleset. On a ufw/firewalld/nftables box that policy is the
 	// MANAGER's own (ufw's ufw-user-input chain, etc.), so counting it would
@@ -281,6 +288,10 @@ systemctl is-active fail2ban >/dev/null 2>&1 && echo m:fail2ban
 	for line := range strings.SplitSeq(c.Sudo(markerScript).Stdout, "\n") {
 		if m, ok := strings.CutPrefix(strings.TrimSpace(line), "m:"); ok && m != "" {
 			if m == "input-drop" && !managesIPT {
+				continue
+			}
+			if m == "ssh-timeouts" { // origin fact, not a hardened-box marker
+				f.SSHTimeoutsSet = true
 				continue
 			}
 			f.HardenMarkers = append(f.HardenMarkers, m)

@@ -42,15 +42,17 @@ func TestFstrimProbeOutcomes(t *testing.T) {
 }
 
 // M01 io_uring is greenfield-only (a brownfield box may run io_uring consumers), so
-// the probe must report "na" there instead of a red "not applied".
+// the probe must report "na" there instead of a red "not applied" — unless morgward's
+// own drop-in exists (a box morgward hardened reads as brownfield by its own markers).
 func TestIOUringProbeBrownfieldIsNA(t *testing.T) {
 	green := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, &config.Config{Port: 22}))["a5.io_uring"]
 	brown := ids(Registry(&detect.Facts{Is2404: true}, &config.Config{Port: 22}))["a5.io_uring"]
 	if !strings.Contains(green.Cmd, "kernel.io_uring_disabled") {
 		t.Errorf("greenfield must still read the knob:\n%s", green.Cmd)
 	}
-	if strings.TrimSpace(brown.Cmd) != "echo na" {
-		t.Errorf("brownfield a5.io_uring must be a static na, got:\n%s", brown.Cmd)
+	if !strings.HasPrefix(brown.Cmd, "test -e /etc/sysctl.d/60-morgward-iouring.conf || { echo na; exit 0; }") ||
+		!strings.Contains(brown.Cmd, "kernel.io_uring_disabled") {
+		t.Errorf("brownfield a5.io_uring must be na unless morgward's drop-in exists, got:\n%s", brown.Cmd)
 	}
 	if !brown.Want("na") {
 		t.Error("a5.io_uring must accept na")
@@ -179,6 +181,15 @@ func TestNewProbeGates(t *testing.T) {
 	}
 	if p.Cmd != "echo na" || !p.Want("na") {
 		t.Errorf("brownfield UnusedConnectionTimeout must report na, got cmd=%q", p.Cmd)
+	}
+	// A box morgward hardened reads as brownfield by its own markers: when its own
+	// 99-hardening.conf carries the directive (SSHTimeoutsSet) both probes stay live.
+	own := ids(Registry(&detect.Facts{Is2404: true, Greenfield: false, SSHTimeoutsSet: true}, cfg))
+	if _, ok := own["a2.channel_timeout"]; !ok {
+		t.Error("SSHTimeoutsSet brownfield must still probe ChannelTimeout (morgward wrote it)")
+	}
+	if u := own["a2.unused_timeout"]; u.Cmd == "echo na" {
+		t.Error("SSHTimeoutsSet brownfield must probe UnusedConnectionTimeout via sshd -T")
 	}
 	if g := ids(Registry(&detect.Facts{Is2404: true, Greenfield: true}, cfg))["a2.unused_timeout"]; !g.Want("600") || g.Cmd == "echo na" {
 		t.Errorf("greenfield UnusedConnectionTimeout must probe sshd -T, got cmd=%q", g.Cmd)

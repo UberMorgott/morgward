@@ -172,7 +172,11 @@ path → check the other.
   the transport — an operator's stuck dpkg dialog used to kill the session and make A1
   roll the firewall back reporting a lockout that never happened — and words that
   failure as a transport failure. `sshx.Client.Reconnect` redials with the same identity
-  and keeps the in-run host-key pin.
+  and keeps the in-run host-key pin. **`DialWithRetry` fails fast** after 2 attempts on
+  `attempted methods [none]` (`isNoMethodAvailable`: the server offers no method we hold
+  a credential for, e.g. password-only vs a key-only box) — every retry is a preauth
+  failure A3's fail2ban (maxretry 3) + PerSourcePenalties count against the OPERATOR's
+  own IP; a rejected key/password (`[none publickey]`) still retries as provisioning.
 
 - **`tweaks.Result.Err` — an unmeasurable probe is "?", never red (C2).** It is set when
   the probe ITSELF could not run (the audit round-trip lost the transport, or a probe
@@ -196,7 +200,12 @@ path → check the other.
   600` + `ChannelTimeout session:*=1800`, both **greenfield only** (A2 — OpenSSH does
   not count forwarding listeners as open channels, so `UnusedConnectionTimeout` reaps
   an idle `ssh -N -R` tunnel 600 s after connect; probe `a2.unused_timeout` reports
-  `na` on brownfield, `a2.channel_timeout` is not registered there). M13
+  `na` on brownfield, `a2.channel_timeout` is not registered there). **Own footprint
+  counts:** a morgward-hardened box flips to brownfield by its OWN markers, so
+  `Facts.SSHTimeoutsSet` (99-hardening.conf already carries the directive) keeps M07 on
+  an A2 re-run and keeps both probes live; io_uring verify/audit likewise test
+  `60-morgward-iouring.conf` before reporting na — never let a re-run silently drop a
+  knob morgward itself applied. M13
   systemd-coredump `Storage=none`/`ProcessSizeMax=0` drop-in where the package exists
   (A5 — that package rewrites `core_pattern` on every upgrade, so the sysctl alone is
   not enough). INFO-only probes, no apply: `a2.socket_activation` (M23),

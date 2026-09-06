@@ -146,10 +146,13 @@ func firewallChecks(facts *detect.Facts, port int) []Check {
 // ioUringVerifyCmd mirrors A5's M01 apply gate: the knob is restricted only on a
 // GREENFIELD box. A nil facts means "treated as greenfield" (same defensive contract
 // as firewallChecks) so the row stays byte-identical to its pre-facts behaviour; an
-// explicitly brownfield box emits a marker the NA hook turns into a skip-with-reason.
+// explicitly brownfield box emits a marker the NA hook turns into a skip-with-reason —
+// UNLESS morgward's own drop-in is present: a box morgward hardened flips to
+// brownfield by its own markers, and the knob it applied must still be verified.
 func ioUringVerifyCmd(facts *detect.Facts) string {
 	if facts != nil && !facts.Greenfield {
-		return "echo __brownfield__"
+		return "test -e /etc/sysctl.d/60-morgward-iouring.conf || { echo __brownfield__; exit 0; }; " +
+			"test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled || echo __noiouring__"
 	}
 	return "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled || echo __noiouring__"
 }

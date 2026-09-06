@@ -92,10 +92,12 @@ func rpFilterWant(facts *detect.Facts) func(string) bool {
 // ioUringProbeCmd mirrors A5's M01 apply gate: the knob is restricted only on a
 // GREENFIELD box with a >= 6.6 kernel. On a brownfield box A5 leaves io_uring alone
 // (existing consumers), so the probe reports "na" — a knob we deliberately did not
-// apply must not read as "not applied".
+// apply must not read as "not applied". A box morgward itself hardened reads as
+// brownfield by its own markers, so morgward's drop-in overrides the gate.
 func ioUringProbeCmd(facts *detect.Facts) string {
 	if !facts.Greenfield {
-		return "echo na"
+		return "test -e /etc/sysctl.d/60-morgward-iouring.conf || { echo na; exit 0; }; " +
+			"test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled 2>/dev/null || echo na"
 	}
 	return "test -e /proc/sys/kernel/io_uring_disabled && sysctl -n kernel.io_uring_disabled 2>/dev/null || echo na"
 }
@@ -188,14 +190,17 @@ func Registry(facts *detect.Facts, cfg *config.Config) []Probe {
 	// UnusedConnectionTimeout keeps a visible row that reports "na" on brownfield, so a
 	// knob we deliberately did not apply never reads as "not applied".
 	if facts.Is2404 || facts.Is2604 || facts.SSHDAtLeast(9, 2) {
+		// SSHTimeoutsSet: a box morgward hardened reads as brownfield by its own
+		// markers — the knobs morgward itself wrote are still probed (same gate as A2).
+		timeouts := facts.Greenfield || facts.SSHTimeoutsSet
 		unusedCmd := "echo na"
-		if facts.Greenfield {
+		if timeouts {
 			unusedCmd = "sshd -T 2>/dev/null | awk '/^unusedconnectiontimeout/{print $2}'"
 		}
 		ps = append(ps, Probe{ID: "a2.unused_timeout", Step: "A2", Name: "UnusedConnectionTimeout",
 			Cmd:  unusedCmd,
 			Want: func(o string) bool { o = strings.TrimSpace(o); return o == "600" || o == "na" }})
-		if facts.Greenfield {
+		if timeouts {
 			ps = append(ps, Probe{ID: "a2.channel_timeout", Step: "A2", Name: "ChannelTimeout (idle session)",
 				Cmd: "sshd -T 2>/dev/null | grep -i '^channeltimeout'", Want: has("session:*=1800")})
 		}
