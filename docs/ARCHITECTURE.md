@@ -1,220 +1,132 @@
-# morgward — Architecture Index
+# Architecture
 
-> Single source for navigating the code. Read this first; then jump to the file.
-> Per-session warnings (heredoc/stdin, Bubble Tea v2, concurrency, secrets,
-> version drift) live in [`../CLAUDE.md`](../CLAUDE.md#critical-gotchas) — load-bearing, keep open.
+- Start here for code navigation. [Contributor contracts](../CLAUDE.md) cover remote scripts,
+  SSH, transport, secrets, reverts and updates; [BROWNFIELD](BROWNFIELD.md) owns coexistence.
+- `morgward` runs locally and manages a VPS through embedded `golang.org/x/crypto/ssh`.
+  Installation, commands and flags: [README](../README.md).
 
-## 1. What it is
+## Execution
 
-`morgward` is a portable **single-binary Go executor** that hardens + tunes an
-Ubuntu VPS (hardening spec cached locally as [`../RUNBOOK.md`](../RUNBOOK.md), gitignored ~98 KB). It
-SSHes into a host over an **embedded** `golang.org/x/crypto/ssh` client (no external
-`ssh`/`sshpass`/Docker/web UI) and applies the runbook's Phase A hardening + tuning
-sequence, then verifies it (§V matrix). One entrypoint serves both a **CLI** and a
-**Bubble Tea v2 TUI**.
+- `engine.Execute(ctx, cfg, cmd, ids, Hooks)` dispatches `run`, `detect`, `verify`,
+  `step`, `audit`, `revert`. CLI and TUI share `internal/engine/engine.go`.
+- `prepare` loads credentials → dials → bootstraps a key unless `readOnly` → detects
+  facts → writes inventory unless `readOnly` → checks egress and confirmation gates
+  → builds `steps.Context`. Missing/loopback egress aborts. Before/after stats are best-effort.
+- Password bootstrap writes the generated public key to `/root/.ssh/authorized_keys`
+  via sudo, then calls `UseKey`. An existing `--key` skips generation.
+- Only `Audit` calls `prepare(..., true, true, ...)`: original credentials, no key
+  installation or inventory write. `DetectOnly` and `VerifyOnly` use `readOnly=false`:
+  both can bootstrap a key and write `/root/vps-inventory.md`; neither applies steps.
+  Verification runs the matrix plus `tweaks.Run`.
+- Full `Run` uses `orderedSteps()` then the verification matrix. `RunSteps` selects
+  from `resolvableSteps()` in canonical order, regardless of argument order.
+  [Confirmation gates](BROWNFIELD.md#gates) apply to a full run, not selective steps.
+- Each selected step executes; step-local checks may skip work. There is no checkpoint
+  or resume list. `detect.Run` derives state from the server on each invocation.
+- `runStepList` checks cancellation before each step. A non-nil step error aborts;
+  `StatusFail` alone does not. A8 uses `rebootCtx` without cancellation for reconnect
+  and service restoration after sending the reboot.
+- CLI passes `context.Background()` and `Hooks{OnKey: printKeyBlock}`. TUI supplies
+  cancelable context, `Sink`, `OnConnect`, `OnProgress` and optionally `PreparedKey`.
+- CLI `parseArgs` re-parses around positionals; `bindFlags` defines flag arity.
+  `VPS_HOST` / `VPS_PASSWORD` fill omitted flags. Bare invocation starts TUI;
+  `shell` has its own PTY path. TUI returns `Result{DoUpdate, TargetVer}` so main can
+  update after leaving the alternate screen.
 
-**Brownfield coexistence (not fresh-only):** it targets Ubuntu 22.04/24.04/26.04, fresh OR
-already running services. It detects greenfield vs brownfield and **refuses a blind full
-`run`** on a non-empty or already-hardened box unless `--assume-yes` — but once consent
-is given the steps apply in a **service-preserving** way (A1 keeps detected service ports
-and leaves the FORWARD policy untouched; A5 uses `rp_filter=2` when routing; A6.7 keeps
-disk swap; A2 adds existing key users to `sshusers`). Coexistence is automatic, driven by
-`detect.Facts` — no new flag. See [`BROWNFIELD.md`](BROWNFIELD.md) for the full
-detection set + per-step decision table. Read-only commands (`detect`/`verify`/`step`/
-`audit`) pass through. There is **no run state at all** — no checkpoint file, no skip
-list, nothing carried between invocations. Every run re-derives what it needs from
-`detect.Run`; the on-box configs are the only durable record.
+## Package map
 
-## 2. Execution flow
+| Path | Responsibility / entry points |
+|------|-------------------------------|
+| `cmd/morgward/` | CLI, PTY shell, update/relaunch; `main`, `parseArgs`, `bindFlags`, `applyUpdate` |
+| `internal/engine/` | Dispatch, preparation, ordered execution, `Hooks`, `Progress`, `Summary`; `revert.go` owns undo |
+| `internal/config/` | `Config.Validate`, `adminUserRe`, credential and host-pin validation |
+| `internal/detect/` | `Run`, `Facts`, inventory, listener/firewall classification; [coexistence facts](BROWNFIELD.md#facts) |
+| `internal/sshx/` | Embedded SSH, key generation, PTY/SFTP, host-key pins and transport lifecycle |
+| `internal/steps/` | `Step`, `Context`, `Status`, apply scripts and shared shell helpers |
+| `internal/verify/` | Effective-state matrix; `Run`, `Result`, `StatusUnknown`, `firewallChecks` |
+| `internal/tweaks/` | `Registry`, `Probe`, `Run`, `Result`, `Tally`; privileged batch audit |
+| `internal/tui/` | Bubble Tea UI, dashboard, terminal and file workspace |
+| `internal/monitor/`, `internal/stats/` | Live sampler; best-effort before/after `Capture` |
+| `internal/termsize/`, `internal/ui/` | `TrueSize`; logger and remote-output sanitizers |
+| `internal/selfupdate/` | Release discovery, checksum verification and executable replacement |
+| `internal/wiki/`, `internal/version/` | Localized fix docs; `Name`, `Version`, `Tagline` |
 
-`engine.Execute(ctx, cfg, cmd, ids, Hooks)` ([`internal/engine/engine.go`](../internal/engine/engine.go))
-is the single dispatch for `run | detect | verify | step | audit | revert`.
-`prepare()` is the shared front half of every command:
+## Step catalog
 
-```
-dial (DialWithRetry, 90s/5s backoff; key wins, else password)
-  └─ key bootstrap  (password path only; SKIPPED when readOnly/audit)
-        generate ed25519 → push to /root/.ssh/authorized_keys → UseKey → clear cfg.Password
-  └─ detect.Run(cli)  → §0.5/§2 discovery; writes /root/vps-inventory.md (skipped if readOnly)
-        egress-iface == "" | "lo"  ⇒ hard abort (§2)
-  └─ gates
-        AlreadyHardened (≥2 markers) ─┐  refuse full `run` unless --assume-yes
-        brownfield (non-greenfield)  ─┘  (read-only cmds set allowBrownfield=true → pass)
-  └─ build steps.Context {Ctx, Cli, Log, Cfg, Facts, AuthLine, KeyPEM, Bench}
-```
+Canonical `orderedSteps()` order; files under `internal/steps/`. [Coexistence](BROWNFIELD.md), [SSH variants](../CLAUDE.md#ssh-access-and-compatibility), [undo](../CLAUDE.md#revert-contract).
 
-Then per command:
+| ID | File | Responsibility |
+|----|------|----------------|
+| PRE | `precond.go` | Apt index, admin user, key and `sshusers` |
+| A1 | `a1_firewall.go` | Host firewall and persistence |
+| A8 | `a8_upgrade.go` | Full upgrade and reboot |
+| A2 | `a2_ssh.go` | SSH crypto/session hardening and executor handoff |
+| A2.5 | `a25_cloudinit.go` | Cloud-init neutralization |
+| A3 | `a3_fail2ban.go` | fail2ban with systemd backend and admin whitelist |
+| A4 | `a4_network.go` | BBR, buffers, ICMP limits, I/O scheduler, conntrack and benchmark |
+| A5 | `a5_kernel.go` | Kernel sysctls, THP, coredump policy, panic and io_uring controls |
+| A6 | `a6_maint.go` | Journald, needrestart, NOFILE, time sync and fstrim |
+| A6.5 | `a65_dns.go` | Resolved upstream calibration, DoT and DNSSEC |
+| A6.7 | `a67_mem.go` | ZRAM and earlyoom |
+| A7 | `a7_cleanup.go` | Guarded package purge and autoremove |
+| A9 | `a9_unattended.go` | Unattended security updates |
+| A10 | `a10_detection.go` | auditd, login notification and inbound-drop logging |
 
-- **run** → `runStepList(ctx, s, orderedSteps(), h)` → §V `verify.Run`. Every step runs;
-  there is no skip/resume path.
-  Each step writes drop-ins, runs `sshd -t` (fail-closed gate), arms a **300s ssh-revert
-  systemd timer**, restarts sshd, **verifies key login in a second independent session**
-  before disarming/locking root. A non-nil step error = lockout-capable ⇒ aborts the run.
-- **step `<IDs>`** → `RunSteps`, selective; still executes in canonical `orderedSteps()`
-  order, never arg order. `allowBrownfield=true`.
-- **verify** → `verify.Run` (§V matrix) + `tweaks.Run` audit. No mutation.
-- **detect** → discovery + inventory only.
-- **audit** → `prepare(readOnly=true)` (mutates **nothing**) + `tweaks.Run`; streams one
-  `Progress` per probe to the TUI Dashboard.
-- **revert** → `RunRevert` ([`internal/engine/revert.go`](../internal/engine/revert.go)),
-  best-effort per-ID undo (only OPENS access, never lockout-capable).
+- `extraSteps()` adds explicit `A2-safe` / `A2-danger`; `revertScript` supports A1, A2, A3, A4, A5, A6, A6.5, A6.7, A9, A10.
 
-**Cancellation (F03):** `runStepList` checks `ctx.Err()` **only at the boundary BEFORE
-each step**, never mid-step — so any SSH/firewall/sysctl lockdown sequence always runs to
-completion once begun; an abort halts at the next safe boundary (`ErrCanceled`), leaving a
-valid intermediate state. The CLI passes `context.Background()` + a zero `Hooks{}`; the TUI
-passes a **cancelable** ctx plus `Sink` (stream log lines), `OnConnect` (monitor footer),
-`OnProgress` (per-step + final `Done` summary), `OnKey` (ephemeral PEM — CLI only).
+## Audit results
 
-## 3. Entry points
+- `a2.socket_activation`, `a5.apparmor_userns`, `a5.lockdown`, `a6.tmp_tmpfs` are informational probes with no apply action.
 
-### CLI — [`cmd/morgward/main.go`](../cmd/morgward/main.go)
-Flag/env parsing (`parseArgs` re-parses around each positional so flags may follow step
-IDs; `fs` itself decides which flags take a value, so it can't drift from `bindFlags`),
-secrets from
-`VPS_PASSWORD`/`VPS_HOST`, interactive prompts when host absent, `cfg.Validate()`, then
-`engine.Execute(context.Background(), …, Hooks{OnKey: printKeyBlock})`. Also owns
-`performUpdate` (`internal/selfupdate`: detect → anti-downgrade gate → checksum-verified `Apply`
-→ relaunch). Bare invocation (no args) launches the TUI. `title_windows.go` / `title_other.go`
-set the console title (Windows-only).
+- `tweaks.Result.Err` is non-empty when the batch cannot run or a probe emits no
+  `id<TAB>...` line. `Applied=false` then means unknown: display `?` / `probe error`,
+  not an unapplied failure. `Tally` excludes both errors and `Informational` rows.
+- Matrix transport errors become `StatusUnknown` for non-lockout rows; lockout checks
+  still fail closed. Firewall-specific checks: [BROWNFIELD](BROWNFIELD.md#firewall-consumers).
 
-### TUI — [`internal/tui/`](../internal/tui/) (Bubble Tea v2, `charm.land/*`)
-`tui.Run()` returns a `Result{DoUpdate, TargetVer}` so `main` can self-update after the
-alt-screen tears down. Phases: `phaseForm`, `phaseRun`, `phaseSummary`, `phaseWiki`,
-`phaseKey`, `phaseMatrix`, `phaseDashboard`, `phaseSecurity`, `phaseTerminal`.
+## TUI contracts
 
-| File | Role |
-|------|------|
-| [`tui.go`](../internal/tui/tui.go) | model struct, `Run()`/`Result`, `Init`, `View()` dispatch, frame-fields, phase enum |
-| [`update.go`](../internal/tui/update.go) | `Update` — key/mouse/tick/engine-msg handling, run lifecycle, self-update strip |
-| [`dashboard.go`](../internal/tui/dashboard.go) | `phaseDashboard`: post-connect server card + live tweak audit + apply/security buttons |
-| [`form.go`](../internal/tui/form.go) | `phaseForm`: host/port/user/password-or-key entry |
-| [`run.go`](../internal/tui/run.go) | `phaseRun`: titled progress box + log viewport + monitor footer |
-| [`security.go`](../internal/tui/security.go) | `phaseSecurity`: access-state card + SAFE actions + DANGER key-only lock (drives A2-safe/A2-danger/A2.5) |
-| [`wiki.go`](../internal/tui/wiki.go) | `phaseWiki`: one fix's what/why/risk/OnBox/Revert page, clickable apply/revert |
-| [`summary.go`](../internal/tui/summary.go) | `phaseSummary`: post-finish stats + clickable fix list |
-| [`matrix.go`](../internal/tui/matrix.go) | `phaseMatrix`: per-tweak audit ("анализ") table |
-| [`keyview.go`](../internal/tui/keyview.go) | `phaseKey`: generated PEM + clipboard "Copy key" button |
-| [`terminal.go`](../internal/tui/terminal.go) + `term*.go` | `phaseTerminal` **Terminal\|Files workspace** (`wsTab`): an interactive SSH shell (PTY emulator) — `openTerminal` dials ONE `*sshx.Client` shared by both tabs; `ctrl+1`/`ctrl+2` switch tabs, `ctrl+q` exits. `terminalFrame` returns the frame AND its native `tea.Cursor` from ONE `cursorSnapshot` (no hand-spliced cursor block, no blink state) |
-| [`files_*.go`](../internal/tui/files_view.go) | **Files tab** (`wsFiles`): remote file manager over the shared client. `fileSession` (`filesession.go`) holds cwd/listing/selection/clipboard/prompt+menu state. **Listing + mutations are shell-exec** (`files_ops.go` `LC_ALL=C ls`, `files_mutate.go` mkdir/mv/rm/cp/chmod/chown/stat — every path `shQuote`'d); **byte transfer is sftp** (`files_xfer.go` async Download/Upload via `Client.SFTP()`, goroutine→`fmXferDoneMsg`). `files_view.go` renders, `files_key.go` routes keys, `files_menu.go` is the right-click/`m` context menu. Untrusted remote names are `ui.StripControlAndANSI`'d at parse |
-| [`render.go`](../internal/tui/render.go) | the SHARED frame builder: `frame{title,nav,fixed,body,viewH,scroll,pinned,hint}` + `framedScrollView` (8 screens), `chromeViewH(fixed,pinned)` — the single chrome-row arithmetic every screen's `*ViewH` wrapper and hit-test derives from, `clampScroll`, `scrollBy` (the one scroll entry point for every phase); `sanitizeStreamLine` — thin delegate to `ui.SanitizeStreamLine` (one hardened stripper shared with CLI/log) |
-| [`monitor_footer.go`](../internal/tui/monitor_footer.go) | CPU/RAM/DISK footer row rendering |
-| [`i18n.go`](../internal/tui/i18n.go) | `Lang` (RU default / EN), the `stringKey` enum + every localized string. Tables are `map[K][2]string` (`[0]`=RU, `[1]`=EN) read through the generic `pick`, so RU/EN sit on one line and a missing translation is impossible to introduce silently |
-| [`styles.go`](../internal/tui/styles.go) | lipgloss styles + box chrome |
-| [`util.go`](../internal/tui/util.go) | focus helpers, host/port parsing |
-
-**Rendered output is under golden test.** [`frames_golden_test.go`](../internal/tui/frames_golden_test.go)
-pins the exact frame of all **8** `framedScrollView` screens (12 states incl. the confirm
-overlays) at 100x40 and 60x20 into
-[`testdata/frames.golden`](../internal/tui/testdata/frames.golden) (ANSI stripped, so it is
-stable across colour profiles). A pure-rendering refactor must leave it byte-identical;
-`UPDATE_GOLDEN=1 go test ./internal/tui` regenerates it and is an INTENTIONAL layout change,
-never a way to make a red test go green.
-
-## 4. Package map
-
-| Package | Path | Responsibility | Key symbols |
-|---------|------|----------------|-------------|
-| main | [`cmd/morgward/`](../cmd/morgward/) | CLI flag/env parse, dispatch, self-update | `main`, `performUpdate`, `parseArgs`/`bindFlags`, `newUpdater`, `printKeyBlock` |
-| engine | [`internal/engine/`](../internal/engine/) | wires config → bootstrap → detect → ordered steps → verify; gates; revert map | `Execute`, `prepare`, `Run`, `RunSteps`, `VerifyOnly`, `DetectOnly`, `Audit`, `RunRevert`, `orderedSteps`, `Hooks`, `Progress`, `Summary`, `IsRevertable`, `ErrCanceled` |
-| config | [`internal/config/`](../internal/config/) | resolved run config + validation | `Config`, `Validate`, `adminUserRe` (`^[a-z_][a-z0-9_-]{0,31}$`), `Err*` sentinels |
-| sshx | [`internal/sshx/`](../internal/sshx/) | embedded SSH client (one-shot executor, base64 delivery), keygen; OS+protocol keepalive, in-run TOFU host-key pin | `Dial`, `DialWithRetry`, `Client.Run`/`Sudo`/`SwitchUser`/`UseKey`/`BootID`/`WaitForReboot`/`SetOutputSink`, `GenerateKeyPair`, `LoadKeyFile`, `SecretMarkerPrefix`, `ErrNoMutualAuth`, `ErrHostKeyChanged`, `ErrRebootAuthFailed` |
-| steps | [`internal/steps/`](../internal/steps/) | one Step per runbook block; stateless | `Step`, `Context`, `Status`, `BenchResult`, `putFile`/`pipeToBash`/`freshLogin`, `AppendLineIfMissing`, `RmSSHDropIns`, `aptGet`/`aptInstall`, `armTimer`/`disarmTimer`, `applyCryptoHardening`, `A1Firewall` … `A10Detection` |
-| detect | [`internal/detect/`](../internal/detect/) | §0.5/§2 discovery; greenfield/brownfield classify; coexistence facts; firewall-manager + service surfacing | `Run`, `Facts` (`Is2204`/`Is2404`/`Is2604`, `SSHDMajor`/`SSHDMinor` + `SSHDAtLeast(maj,min)` — the probed OpenSSH version every sshd knob gates on; `Is2604`, `EgressIface`, `ClientIP`, `Greenfield`, `AlreadyHardened`, `Inventory`; coexistence: `ListenPortsTCP`/`ListenPortsUDP`/`WireguardSeen`/`NatRules`/`Forwarding`/`DiskSwap`/`SSHKeyUsers`; round 2: `FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`), `ListenServices` `[]ListenService{Proto,Port,Process}`; round 3: `ManagesIPTables()` — true on Greenfield or `FirewallMgr` ∈ {iptables,none,""}, false on ufw/firewalld/nftables), `portFromLocal`, `ShQuote` (the ONE shell-quoting guard — steps and the TUI file manager both call it) |
-| verify | [`internal/verify/`](../internal/verify/) | §V verification matrix (effective behavior, not config text); firewall rows manager-aware via `*detect.Facts` | `Run(c, log, port, *detect.Facts)`, `firewallChecks`, `Result`, `Status` (`StatusPass`/`Warn`/`Fail`/`Skip`/`StatusUnknown`) |
-| tweaks | [`internal/tweaks/`](../internal/tweaks/) | per-tweak audit registry (one privileged round-trip); view-only. A probe that could not be EXECUTED comes back with `Result.Err` set (render as "?", never a red "not applied") and is excluded from `Tally` | `Run`, `Registry`, `Probe`, `Result` (`Applied`, `Detail`, `Err`, `Informational`), `Tally` |
-| monitor | [`internal/monitor/`](../internal/monitor/) | live CPU/RAM/DISK over its **OWN** SSH session; reconnects | `ConnInfo`, `Sample`, sampler loop |
-| termsize | [`internal/termsize/`](../internal/termsize/) | terminal-size trust boundary: Windows conhost reports the SCREEN BUFFER height (e.g. 3000) in a `WindowSizeMsg`, so every reported size is re-read from the console viewport. Filter only — `tui.resizeTick` is still the delivery mechanism (no SIGWINCH on Windows) | `TrueSize`, `Viewport` (var, stubbable) |
-| stats | [`internal/stats/`](../internal/stats/) | best-effort before/after snapshot (cosmetic) | `Capture`, `Snapshot`, `parse.go` parsers |
-| ui | [`internal/ui/`](../internal/ui/) | colored terminal + file logger; `SetSink` redirects to TUI; owns remote-output sanitizer (CLI print + log file + TUI all delegate) | `Logger`, `New`, `Step`/`OK`/`Skip`/`Fail`/`Stream`, `SetSink`, `SanitizeStreamLine`, `StripControlAndANSI` |
-| wiki | [`internal/wiki/`](../internal/wiki/) | localized what/why/risk/OnBox/Revert per fix (no TUI import) | `Doc`, `FixDoc`, `Lang` |
-| version | [`internal/version/`](../internal/version/) | program name/version/tagline (no `main` import) | `Name`, `Version`, `Tagline` |
-
-## 5. Step catalog
-
-One file per runbook block in [`internal/steps/`](../internal/steps/). Apply order is
-defined by `orderedSteps()` in [`engine.go`](../internal/engine/engine.go) and is
-**load-bearing** — selective `step <IDs>` runs still follow it. "Lockout-capable" =
-`Run` can return a non-nil error that **aborts the whole run**.
-
-"Brownfield" notes describe the coexistence path (`!Facts.Greenfield`); blank = same in
-both modes. Full table in [`BROWNFIELD.md`](BROWNFIELD.md#3-per-step-decision-table--greenfield-vs-brownfield).
-
-| ID | File | What it does | Lockout-capable | Brownfield (coexistence) |
-|----|------|-------------|:---:|--------------------------|
-| PRE | [`precond.go`](../internal/steps/precond.go) | §1 preconditions: apt index, admin user, key, sshusers group | yes | — |
-| A1 | [`a1_firewall.go`](../internal/steps/a1_firewall.go) | Firewall + fail-safe (iptables-nft, v4+v6) | yes | branches on `FirewallMgr`: `ufw`→`ufw allow` SSH+detected ports (allow-only); `firewalld`/`nftables`→defer, `StatusSkip` (untouched); `iptables`/`none`→coexist INPUT DROP, opens detected `ListenPortsTCP/UDP`, **FORWARD untouched**, chains/nat never flushed. [BROWNFIELD §7](BROWNFIELD.md#7-firewall-managers) |
-| A8 | [`a8_upgrade.go`](../internal/steps/a8_upgrade.go) | Full upgrade + reboot (boot_id verified) | yes | snapshots running docker containers + active-not-enabled systemd units before reboot, `docker start`/`systemctl start`s the ones that didn't auto-return after (never `compose up`); pre/post-reboot firewall gate is manager-aware (`ManagesIPTables`→`rules.v4`/INPUT-DROP; `ufw`→`ufw status` active; firewalld/nftables→skip) so a ufw box doesn't abort |
-| A2 | [`a2_ssh.go`](../internal/steps/a2_ssh.go) | SSH crypto hardening (drop-ins, crypto; access policy unchanged) — **crypto-only full-run** | yes | preserves image-default access — never locks out (the opt-in lockdown is A2-danger) |
-| A2.5 | [`a25_cloudinit.go`](../internal/steps/a25_cloudinit.go) | Cloud-init neutralization | no | — |
-| A3 | [`a3_fail2ban.go`](../internal/steps/a3_fail2ban.go) | fail2ban (systemd backend, admin whitelist) | no | — |
-| A4 | [`a4_network.go`](../internal/steps/a4_network.go) | Network tuning (BBR, buffers, ICMP rate limits, I/O sched) + benchmark; conntrack sizing | no | conntrack table sized by RAM when `DockerSeen \|\| NatRules`, skipped on a kubelet box, never lowers an existing value ([BROWNFIELD §3](BROWNFIELD.md#3-per-step-decision-table--greenfield-vs-brownfield)) |
-| A5 | [`a5_kernel.go`](../internal/steps/a5_kernel.go) | Kernel hardening (sysctl, THP=madvise, core_pattern, panic-reboot, io_uring, coredump policy) | no | `rp_filter=2` (loose) when `Forwarding` instead of 1 |
-| A6 | [`a6_maint.go`](../internal/steps/a6_maint.go) | Maintenance (journald, needrestart, NOFILE, chrony/ntp, fstrim.timer) | no | — |
-| A6.5 | [`a65_dns.go`](../internal/steps/a65_dns.go) | DNS hardening (calibrated upstream + DoT/DNSSEC); calibration runs via `pipeToBash` (no `/tmp` file — TOCTOU-safe) | no | skips if `systemd-resolved` inactive (custom resolver kept) |
-| A6.7 | [`a67_mem.go`](../internal/steps/a67_mem.go) | Memory mgmt (ZRAM zstd + earlyoom) | no | keeps pre-existing disk swap (no `swapoff`); zram still prio 100 |
-| A7 | [`a7_cleanup.go`](../internal/steps/a7_cleanup.go) | Cleanup (purge bloatware, apt-mark guard) | no | IRREVERSIBLE purge runs the same — exclude on a customized box |
-| A9 | [`a9_unattended.go`](../internal/steps/a9_unattended.go) | Unattended security updates | no | — |
-| A10 | [`a10_detection.go`](../internal/steps/a10_detection.go) | Detection (auditd, login-notify, inbound-drop logging) | no | inbound-drop `LOG` rule + `netfilter-persistent save` gated on `ManagesIPTables` (skipped, with reason, when a manager owns the firewall) |
-
-**A2 split** (not in `orderedSteps`, resolvable via `step`/TUI security menu, in
-[`a2_ssh.go`](../internal/steps/a2_ssh.go)): `A2-safe` (`A2Safe`) = crypto only, image-default
-access, **never locks anyone out** (default path); `A2-danger` (`A2Danger`) = opt-in lockdown
-(AllowGroups sshusers + PermitRootLogin no + key-only + `passwd -l root`), lockout-capable.
-`A2SSH` is the crypto-only full-run step (image-default access preserved).
-
-## 6. Safety model
-
-- **Crypto-only by default**: a `run` hardens SSH crypto and keeps a console-password
-  fallback (`PermitRootLogin prohibit-password`, root **not** locked, password login on)
-  — it never locks anyone out. The opt-in access lockdown (`AllowGroups sshusers`,
-  `PermitRootLogin no`, `passwd -l root`, SSH key-only) is the **A2-danger** step / TUI
-  security menu only.
-- **ssh-revert timer**: every SSH step `armSSHRevert` installs a **300s** `systemd-run`
-  unit that strips morgward's drop-ins + reloads sshd, then `disarmSSHRevert` only **after**
-  a verified second-session key login. A bad config self-heals in <300s.
-- **Fail-closed `sshd -t` gate**: `syntaxGate` runs `sshd -t` BEFORE any restart; on
-  rejection it removes the drop-ins it wrote and aborts — never restarts a broken config.
-- **Second-session verify**: `freshLogin` opens an **independent** SSH session with the key
-  and runs `true` before disarming the revert timer / locking root. A2-danger also runs
-  `assertAdminLoginable` (F04) up front (admin in `sshusers` + non-empty authorized_keys).
-- **Key bootstrap**: password path generates an ephemeral ed25519 in memory (`keygen.go`,
-  never written to disk by the package), pushes the public line, switches to key auth,
-  clears `cfg.Password`. The PEM is shown once (CLI stdout / TUI key screen) — secrets are
-  never streamed to the log (`SecretMarkerPrefix`, ui redaction).
-- **Root handoff**: executor connects as root, then `SwitchUser(admin)` so later steps run
-  as the admin + sudo. On a hardened box root SSH is blocked by `AllowGroups sshusers` —
-  reconnect as the admin user with its key for `detect`/`verify`/`step`.
-- **Self-update**: `ChecksumValidator{UniqueFilename: "checksums.txt"}` gates every download
-  (F01) — a release without `checksums.txt` **fails closed** (`ErrValidationAssetNotFound`)
-  rather than applying an unverified binary; plus an anti-downgrade `GreaterThan` gate (F08).
-- **No persisted state**: there is no checkpoint/resume machinery (the `internal/state`
-  package was removed as provably dead). Every run starts clean and re-derives everything
-  from `detect.Run`; the on-box configs are the only durable record.
-- **Transport liveness + host-key pin (v0.7.4)**: every `Client` runs OS keepalive + a
-  `keepalive@openssh.com` probe every 30s; 3 consecutive misses `Close()` the conn so a
-  blocked command/dead NAT surfaces a transport error instead of hanging the run. The
-  first dial pins the host key (in-run TOFU); any later redial presenting a different key
-  is refused with `ErrHostKeyChanged` (`HostKeyAlgorithms` ed25519-first so the pin
-  survives A2 removing the ECDSA host key + the A8 reboot). `WaitForReboot` distinguishes
-  `ErrRebootAuthFailed` (reachable, creds rejected — 5 consecutive) from the bricked-timeout.
-- **Untrusted remote output is sanitized**: `ui.SanitizeStreamLine`/`StripControlAndANSI`
-  strip ANSI/C0 control sequences from streamed server output before it reaches the CLI
-  terminal, the log file, OR the TUI pane — one shared stripper, no injection path.
-
-## 7. Known minor
-
-- **Greenfield classifier** can report `greenfield=true` on an already-hardened box (it only
-  checks listeners/docker/ip_forward, not hardening markers). Cosmetic — the separate
-  `AlreadyHardened` gate handles the real refusal.
-
-## 8. Pointers
-
-- [`../RUNBOOK.md`](../RUNBOOK.md) — cached upstream spec (gitignored, ~98 KB). Read before
-  changing any step's behavior; step files are direct translations of runbook blocks and the
-  apply order is load-bearing.
-- [`../audit-report.md`](../audit-report.md) — security/audit findings (the `F##` IDs
-  referenced throughout the code).
-- [`../CLAUDE.md`](../CLAUDE.md) — per-session **critical gotchas** (heredoc/stdin caveat,
-  Bubble Tea v2 `charm.land` path, `sshx.Client` not concurrency-safe, crypto-only default,
-  secrets handling, version drift). Keep open while editing.
+- Dependencies: `charm.land/bubbletea/v2 v2.0.9`, `charm.land/bubbles/v2 v2.2.1`,
+  `charm.land/lipgloss/v2 v2.0.6`. Use the `charm.land` module paths.
+- `tui.go` owns the value-copy `model`, `Run` and `View`; `update.go` owns events and
+  lifecycle. Do not store non-copyable values such as `strings.Builder` in the model;
+  use `m.content` (string). State shared with goroutines needs explicit ownership.
+- `View()` returns `tea.View` and sets `AltScreen`, `MouseMode`, `WindowTitle` and
+  `Cursor` every frame. Build the localized title through `windowTitle()` / `titleK`.
+  `terminalFrame()` returns body and native `*tea.Cursor` from one `cursorSnapshot`.
+- Events use `tea.KeyPressMsg`, `tea.MouseClickMsg`, `tea.MouseWheelMsg` and
+  `msg.Mouse()` coordinates. Use `viewport.New(viewport.WithWidth(...), viewport.WithHeight(...))`,
+  viewport `Width`/`SetHeight`/`ScrollUp`/`ScrollDown`, and `textinput.SetWidth`.
+- `frames_golden_test.go` pins framed screens in `testdata/frames.golden` at 100x40
+  and 60x20. Rendering refactors preserve these frames. Set `UPDATE_GOLDEN=1` only
+  for intentional layout changes and inspect the diff; never regenerate to hide a failure.
+- `chromeViewH(fixed, pinned)` in `render.go` owns row arithmetic. Each screen's named
+  height wrapper must serve both rendering and hit-tests. `vpHeight` uses
+  `chromeViewH(2, 0)` plus finished-state adjustments; `phaseRun` is covered separately
+  by `TestVPHeightMatchesLegacyChrome` / `TestRunViewRowsMatchChromeBudget`.
+- Route scrolling through `scrollBy(d)`. `snap.scrollback` must retain
+  `len == scrollbackLen` even when only visible entries contain rendered text;
+  `cursorBodyRow` depends on that full length.
+- Window dimensions pass through `termsize.TrueSize` in `WindowSizeMsg`; Windows
+  needs the console viewport, not screen-buffer height. `resizeTick` delivers updates.
+- `launchEngine` increments `runGen`; streaming listeners tag `genMsg`. `Update`
+  drops stale generations without reissuing their listeners. `connMsg` calls
+  `stopSampler` before replacing the stats channel. Mutating runs set `dashStale`;
+  returning to Dashboard re-audits and `captureAudit` refreshes state.
+- Dashboard applies `tweakBucketIDs()`; A2/A2.5 belong to Security. Display glyphs
+  (`dashRowSatisfied`) and `captureAudit` counts treat security rows as satisfied.
+  Keep `dashAuditRaw` unchanged for Security's real state; informational rows are
+  excluded from the dashboard display, not from the raw results.
+- Screens use named files (`form.go`, `dashboard.go`, `run.go`, etc.); `styles.go` owns styling, `i18n.go` localization (RU default, EN), `monitor_footer.go` the footer.
+- Terminal/Files share a workspace SSH client independent of the engine. `terminal.go`
+  / `termsession.go` own PTY rendering; `files_*` / `filesession.go` own file UI.
+  Listing/mutations use quoted shell commands; content transfer uses SFTP.
+- Local Open downloads under `openTempDir()` (`os.TempDir()/morgward-open`).
+  `openLocalDest` prefixes a sanitized basename with CRC32 of the remote path.
+  Keep `safeBaseName` and discrete `osOpenArgs`; Windows opens via `cmd /c start`.
+- One lazy `fsnotify.Watcher` per `*fileSession` forwards paths through `watchCh`;
+  its pump never dereferences session state. Main-loop handlers own debounce (600 ms)
+  and bookkeeping; transfer commands own SFTP clients and check remote mtime.
+  Conflict uses `sftpConflictErr` / `kFmConflict`; `P` explicitly forces upload.
+  Success threads `syncLocal` / `newMtime` back to refresh the baseline. Closing the
+  session closes the watcher and removes temps. Tests stub `openLocalFileFn`.

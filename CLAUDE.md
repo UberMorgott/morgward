@@ -21,433 +21,141 @@ qgate where   # install path + commit, paste this into the issue
 gh issue create --repo UberMorgott/quality-gate --title "<what broke>" --body "<qgate output, the command you ran, the file it blamed, `qgate where` output>"
 ```
 <!-- /quality-gate -->
-# CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# Contributor guide
 
-## What this is
+- Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) for execution flow, packages, steps and TUI contracts.
+- Read [BROWNFIELD.md](docs/BROWNFIELD.md) before changing detection or service coexistence.
+- Read the local, gitignored `RUNBOOK.md` before changing step behavior; `audit-report.md` records audit findings.
+- Preserve the invariants below across CLI and TUI. Keep each contract in its owning document.
 
-`morgward` — a portable single-binary Go executor that applies an SSH hardening +
-tuning sequence to an Ubuntu 24.04/26.04 VPS.
-It connects to an Ubuntu 22.04/24.04/26.04 VPS (fresh OR already running services) over an
-**embedded** SSH client (`golang.org/x/crypto/ssh` — no external `ssh`/`sshpass`/
-Docker/web UI) and applies the runbook's hardening + tuning sequence, coexisting with
-detected services on a brownfield box (see Brownfield coexistence below).
+## Development
 
-The spec is cached locally as `RUNBOOK.md` (gitignored, ~98 KB). Read it before
-changing any step's behavior — step files are direct translations of runbook blocks
-and the apply order is load-bearing.
+- `go.mod`: Go `1.27.1`; module `github.com/UberMorgott/morgward`.
+- Build: `go build -o morgward ./cmd/morgward`.
+- Check: `go vet ./...`, `go test ./...`; focused test: `go test ./internal/tui -run TestName -v`.
+- Format Go changes with `gofmt`; release commands and targets: [README](README.md#development).
 
-## Commands
+## Remote scripts and apt
 
-```sh
-go build -o morgward ./cmd/morgward   # or: make build
-go vet ./...                                  # make vet
-gofmt -w .                                    # make fmt
-go test ./...                                 # 548 tests / 15 packages
-go test ./internal/tui -run TestName -v       # single test
-make release                                  # cross-compile 5 targets into dist/
-./build.ps1                                    # same, PowerShell (Windows dev host)
-```
+- `sshx.Client.Sudo` delivers scripts to `bash` over stdin. Never use heredocs.
+  Use `putFile` or `AppendLineIfMissing` in `internal/steps/step.go` for content;
+  `pipeToBash(script)` runs nested scripts without predictable root-executed temp files.
+- Quote remote values with `detect.ShQuote`; `tui.shQuote` delegates to it.
+  `steps.AppendLineIfMissing` is shared with engine bootstrap; keep one implementation.
+- Build lock-acquiring apt commands from `aptGet` (`apt-get -o DPkg::Lock::Timeout=300`)
+  or `aptInstall(pkgs)`, including `clean`, `autoremove` and `purge`. Bare `apt-get -s`
+  simulations are exempt. Use `aptInstallOptional` only when absence is non-fatal.
+- Apt/dpkg scripts use `aptPrelude()`: `DEBIAN_FRONTEND=noninteractive`,
+  `NEEDRESTART_MODE=a`, `NEEDRESTART_SUSPEND=1`, `UCF_FORCE_CONFFOLD=1`, the needrestart
+  drop-in, and a per-boot index refresh. `AptUpdateMarker` is `/run/morgward-apt-updated`;
+  stamp only after success, swallow refresh failure so later steps retry.
+- PRE and A8 use `aptPreludeNoUpdate()` with their own unconditional refresh. PRE
+  aborts on refresh failure and stamps the marker. A8 runs update then full-upgrade.
+- Use `aptConfOpts` for package-changing calls: `--force-confdef`, `--force-confold`,
+  `Dpkg::Use-Pty=0`. Never use `stdbuf`; its `LD_PRELOAD` propagates into apt children.
+- Feature-dependent sysctls need `/proc/sys/...` existence gates before writing drop-ins.
+  Keep apply, audit and revert coverage aligned for each knob.
 
-Targets built/verified: linux+darwin × amd64+arm64, windows/amd64. Go `1.26.5`.
+## SSH access and compatibility
 
-## Architecture
+- There are no modes or `--mode`. Default `run` uses `A2SSH` for SSH crypto/session
+  hardening, without adding `AllowGroups`, overriding `PermitRootLogin` or locking root.
+  It explicitly enables `PasswordAuthentication` and `KbdInteractiveAuthentication`
+  through `conf00(false)` and enables the cloud-init password override.
+- `A2Safe` writes only the crypto/session `99-hardening.conf`, installs the admin key
+  and leaves password directives untouched. Keep its writer separate from `A2SSH`;
+  only `A2SSH` requests the root-to-admin executor handoff in `applyCryptoHardening`.
+- `build99` contains no access-policy directives, but `cryptoBlock` includes
+  `DisableForwarding yes`, `AllowAgentForwarding no` and `X11Forwarding no`.
+  Crypto-only does not mean all SSH behavior is unchanged or that lockout is impossible.
+- `A2Danger` is opt-in: `98-access.conf` sets `AllowGroups sshusers` and
+  `PermitRootLogin no`; `conf00(true)` disables password/keyboard-interactive auth;
+  cloud-init gets `ssh_pwauth: false`; root's password is locked after verification.
+  Brownfield key-user grants and timeout ownership: [BROWNFIELD](docs/BROWNFIELD.md#ssh).
+- Before the lockdown drop-in, `assertAdminLoginable` requires the admin to exist,
+  belong to `sshusers` and have non-empty `authorized_keys`. Resolve its home with
+  `getent passwd`, falling back to `/home/<admin>`; failures say to run PRE first.
+- `syntaxGate` runs `sshd -t` before host-key changes/restart and removes
+  `RmSSHDropIns` on rejection. `armSSHRevert` schedules drop-in removal, missing
+  ed25519-key recovery and SSH reload for 300 seconds; disarm after fresh admin login.
+- `A2Danger` must complete `SwitchUser(admin)` while `ssh-revert` is armed and before
+  `passwd -l root`. A failed handoff leaves the timer armed without locking root
+  itself. Only successful handoff (or an already non-root executor) permits disarm/lock.
+- `steps.RmSSHDropIns` lives in `internal/steps/a2_ssh.go`: `00-hardening.conf`,
+  `98-access.conf`, `99-hardening.conf`. Add new owned SSH drop-ins to this shared list
+  used by syntax rollback, the timer and explicit revert.
+- Supported release flags are `Is2204`, `Is2404`, `Is2604`. `detect.Run` probes
+  `sshd -V`, falling back to `ssh -V`; `SSHDAtLeast` is false when `SSHDMajor == 0`.
+  `cryptoBlock` accepts the release flag OR the probed version:
 
-> **Full architecture map + package/step index: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**
-> — read it first to navigate the code (execution flow, entry points, package map,
-> step catalog A1–A10, safety model, known-minor).
+| Directive | Release shortcut | Minimum probed sshd |
+|-----------|------------------|---------------------|
+| `RequiredRSASize 3072` | 24.04 / 26.04 | 9.1 |
+| `UnusedConnectionTimeout`, `ChannelTimeout` | 24.04 / 26.04 | 9.2; also the [ownership gate](docs/BROWNFIELD.md#ssh) |
+| `PerSourcePenalties` | 26.04 | 9.8 |
+| `mlkem768x25519-sha256` | 26.04 | 9.9 |
 
-**Single entrypoint for CLI *and* TUI:** `engine.Execute(ctx, cfg, cmd, ids, Hooks)`
-(`internal/engine/engine.go`) dispatches `run | detect | verify | step | audit | revert`.
-The CLI passes `context.Background()` + a zero `Hooks{}`; the TUI passes a **cancelable**
-ctx + `Sink`/`OnConnect`/`OnProgress` to stream the run. `prepare()` is the shared front
-half (dial → key bootstrap → detect → gates → `steps.Context`); steps live one-per-block in
-`internal/steps/` and apply in `orderedSteps()` order. A non-nil step error is
-**lockout-capable** and aborts the run. See `docs/ARCHITECTURE.md` for the rest. Touch one
-path → check the other.
+- Unconfirmed release and failed version probe use the conservative OpenSSH 8.9-safe set.
 
-## Critical gotchas
+## Transport and secrets
 
-- **Brownfield coexistence — steps adapt, don't refuse.** On a non-fresh box
-  (`!ctx.Facts.Greenfield`, run gated behind `--assume-yes`) the high-risk steps
-  PRESERVE running services instead of applying universal defaults blind. Driven by
-  `detect.Facts` (no new flag). Don't regress these: **A1** opens every detected
-  `ListenPortsTCP`/`ListenPortsUDP` and **leaves the FORWARD policy/chains UNTOUCHED**
-  on a brownfield box (docker re-asserts `-P FORWARD DROP` + its rules on boot; forcing
-  ACCEPT would be overridden or loosen a router's isolation) — never flush existing
-  chains/nat (docker DOCKER/DOCKER-USER + nat must survive). `Facts.Forwarding`
-  (= `IPForward||DockerSeen||WireguardSeen||NatRules`) drives **A5** only: emit
-  `rp_filter=2` (loose) when forwarding (strict `1` severs asymmetric WG/OpenVPN
-  routes). **A6.7** keeps pre-existing disk swap (gate the `swapoff`/fstab-comment
-  block behind `Greenfield` only); **A2** adds non-root `Facts.SSHKeyUsers` to
-  `sshusers` (grant-only `usermod -aG`, `|| true`, root excluded) before `AllowGroups
-  sshusers` so it can't lock out existing key users. verify/tweaks accept rp_filter=2
-  when `Forwarding` and never assert a FORWARD policy on brownfield. Greenfield path
-  stays byte-identical. Full map: `docs/BROWNFIELD.md`.
+- `sshx.Client` is not safe for concurrent caller operations. `monitor` uses its own
+  SSH client; the internal keepalive goroutine has separate lifecycle synchronization.
+- `transportLost(r)` means `r.RC == -1 || r.Err != nil`, not a remote command failure
+  or proof of lockout. A1 reconnects its executor after transport loss during the
+  persistence-package install before checking a fresh login.
+- A1, A2/A2-danger and A5 use `freshLoginVerify`: independent key login plus `true`,
+  one retry after five seconds; cancellation skips the retry wait.
+- `DialWithRetry` uses a 90-second default window and five-second backoff. A pin
+  mismatch fails immediately; `isNoMethodAvailable` (`attempted methods [none]`)
+  stops after the second failed attempt. Rejected credentials with an attempted
+  method, such as `[none publickey]`, retain provisioning retries.
+- `hostKeyCallback` pins the first accepted host key per `Client` (TOFU unless an
+  operator pin is supplied). Same-client reconnects, `UseKey`, `SwitchUser` and reboot
+  redials require identical key bytes or return `ErrHostKeyChanged`.
+  `pinnedHostKeyAlgos` prefers ed25519, which A2 preserves when deleting ECDSA keys.
+  Independent `freshLogin` and monitor clients use their own TOFU pins, not the engine's pin.
+- OS keepalive and `keepalive@openssh.com` run at `keepaliveInterval` (30 seconds).
+  Probes have a ten-second timeout; three consecutive misses close the connection
+  and unblock commands. `WaitForReboot` reports `ErrRebootAuthFailed` after five
+  consecutive authentication failures.
+- Reboot completion requires a non-empty `boot_id` different from `preBootID`.
+  The initial eight-second sleep is only a delay, never evidence of a reboot.
+- Generated ed25519 private keys stay in memory and reach CLI stdout through `OnKey`
+  or the TUI key screen, not the logger. `cfg.Password` is cleared after password
+  bootstrap switches to key auth. `SecretMarkerPrefix` lines are excluded from streaming.
+- `ui.SanitizeStreamLine` / `ui.StripControlAndANSI` sanitize remote log output for
+  CLI, file log and TUI: strip ANSI/C0 controls, collapse CR redraws, replace tabs
+  with spaces and preserve line breaks. Reuse these sanitizers.
 
-- **Brownfield round 2 — firewall-manager-aware + role-agnostic.** A1 branches on
-  `Facts.FirewallMgr` (`ufw`/`firewalld`/`nftables`/`iptables`/`none`) so it NEVER
-  imposes a conflicting second firewall layer: **`ufw`** active → `ufw allow` SSH +
-  every detected port (allow-only — never `deny`/`enable`/`disable`/default-policy
-  change); **`firewalld`/`nftables`** → DEFER, change nothing, return **`StatusSkip`**
-  (NOT an error — a full `run` continues; firewall is the operator's under their
-  manager); **`iptables`/`none`** → the proven round-1 `coexistRuleset` (INPUT DROP +
-  detected ports, FORWARD untouched). Keep classification CONSERVATIVE — if unsure
-  whether a box is native-nftables, fall through to `iptables` (a false "nftables" would
-  wrongly make us defer on a docker box). Detection stays **role-agnostic**: NO service
-  whitelist — observe & preserve every listening port by NUMBER (works for k8s, NAS,
-  routers, game servers, anything). `Facts.ListenServices` (`[]ListenService{Proto,Port,
-  Process}`) is surfacing only (inventory port→process table); the ruleset still keys off
-  `ListenPortsTCP/UDP`. iptables coexist opens ports LISTENING at apply time only — later
-  ephemeral ports (k8s NodePort, torrents) need a re-run of `step A1` or an explicit rule.
+## Revert contract
 
-- **Brownfield round 3 — `ManagesIPTables()` propagation.** The round-2 A1 branch now
-  propagates to every step/path that ASSUMES a morgward-owned iptables ruleset, via the
-  single predicate `detect.Facts.ManagesIPTables()` (`internal/detect/detect.go`):
-  `true` on Greenfield OR `FirewallMgr` ∈ `{iptables, none, ""}` (CONSERVATIVE — unknown
-  ⇒ managed); `false` only on explicit `ufw`/`firewalld`/`nftables`. Gate iptables-specific
-  assertions behind it, don't hard-code them. **A8** pre/post-reboot firewall gate:
-  `rules.v4`/`-P INPUT DROP` checks only when `ManagesIPTables`; on `ufw` substitute
-  `ufw status` *active* as the SSH-survives-reboot gate; on `firewalld`/`nftables` skip
-  the gate (operator owns persistence) — no more full-run ABORT on a ufw brownfield box.
-  **`verify.Run` now takes `*detect.Facts`** (engine passes `s.ctx.Facts`; nil ⇒ treated
-  as managed, byte-identical): `firewallChecks` rows are manager-aware — managed →
-  original iptables `Firewall order`/`SSH port open` (Lockout); `ufw` → `Firewall (ufw)
-  active` + `SSH port allowed (ufw)`; `firewalld`/`nftables` → two NA skip-with-reason
-  rows, **never Abort**. **revert A1** is facts-aware: on ufw/firewalld/nftables a
-  deliberate no-op `Skip` ("reverts only open access"); managed → the original flush.
-  **A10** inbound-drop `LOG` rule + `netfilter-persistent save` gated on `ManagesIPTables`
-  (else `Detail`: "inbound-drop LOG rule skipped: <mgr> manages the firewall (no second
-  layer)"). **tweaks** audit probes `a1.{input_drop,ssh_accept,rules_v4,rules_v6}` +
-  `a10.log_rule` gate behind the same `managesIPT` so a manager-owned box shows no false
-  "not applied". Greenfield/iptables output stays byte-identical (probes still lead the
-  registry in the same order). Verified-live: greenfield + ufw-brownfield full runs on
-  Ubuntu 26.04 passed.
+- `internal/engine/revert.go` applies best-effort per-ID undo; SSH/firewall reverts
+  must open access. Unknown IDs fail; unsupported IDs skip. A per-ID failure does
+  not abort the batch. This is targeted cleanup, not restoration of an original snapshot.
+- A2 removes owned SSH drop-ins and `99-disable-passwords.cfg`, restores
+  `50-cloud-init.conf` password auth from `no` to `yes`, attempts `passwd -u root`,
+  regenerates missing ed25519 host keys and reloads SSH. Root without a usable password
+  may remain locked. Use `revert A2` for the SSH family; split IDs have no revert script.
+- A6.7 apply tags only the fstab swap lines it disables with `# morgward-disabled-swap`.
+  Revert uncomments and strips only that marker before `swapon -a`; operator-commented
+  lines remain disabled. Keep both sed expressions on single logical lines.
+- A5 removes its drop-ins, reloads sysctls and explicitly resets live `kernel.panic=0`,
+  `kernel.panic_on_oops=0`, `kernel.io_uring_disabled=0` with best-effort writes.
+  `sysctl --system` alone cannot reset values whose defaults have no remaining file.
+- `revertDetail` must identify intentional leftovers: A5 may need reboot if live resets
+  fail; A6 leaves `fstrim.timer` enabled. Firewall-manager exceptions: [BROWNFIELD](docs/BROWNFIELD.md#firewall-consumers).
 
-- **apt-get lock contention.** Every lock-acquiring apt call carries
-  `-o DPkg::Lock::Timeout=300` so unattended-upgrades holding the dpkg lock on a
-  fresh-boot box waits 5 min instead of aborting the step. The flag lives in ONE place —
-  the `aptGet` const / `aptInstall(pkgs)` helper (`steps/step.go`). Build new apt commands
-  from those; never re-type the string or a bare `apt-get`. `clean`/`autoremove`/`purge`
-  count — they all take `/var/cache/apt/archives/lock`. The ONE exemption is
-  `apt-get -s` (simulation: the pending-upgrade probes in `detect.go`, A7, A8), which
-  acquires no lock and stays bare.
+## Self-update contract
 
-- **Supported range is 22.04 / 24.04 / 26.04 — gate sshd knobs on the PROBED version.**
-  `detect.Facts` carries `Is2204`/`Is2404`/`Is2604` **and** the real OpenSSH version
-  (`SSHDMajor`/`SSHDMinor`, from `sshd -V` falling back to `ssh -V`) behind
-  `Facts.SSHDAtLeast(major, minor)`. Every version-sensitive sshd directive gates on
-  *release flag OR probed version*, so a backport or an off-target release is handled
-  correctly and 22.04 (8.9p1) never gets an option `sshd -t` would reject — which aborts
-  A2: `RequiredRSASize` ⇒ 24.04/26.04 or ≥ 9.1; `UnusedConnectionTimeout` /
-  `ChannelTimeout` ⇒ 24.04/26.04 or ≥ 9.2; `PerSourcePenalties` ⇒ 26.04 or ≥ 9.8;
-  mlkem KEX ⇒ 26.04 or ≥ 9.9. `SSHDAtLeast` is **false when the probe failed**, so an
-  unknown version still degrades to the conservative 8.9-safe set (F20). Confirmed
-  24.04/26.04 output stays byte-identical. Same rule for sysctl: a key absent on a 5.15
-  kernel must be written behind a `test -e /proc/sys/…` gate, never blind — one unknown
-  key fails the whole `sysctl --system`.
-
-- **apt prelude contract — once-per-boot index refresh, and NEVER `stdbuf`.** Every
-  remote script that touches apt/dpkg starts with `aptPrelude()`, which (a) exports the
-  non-interactive env (`DEBIAN_FRONTEND`, `NEEDRESTART_MODE=a` **+
-  `NEEDRESTART_SUSPEND=1`**, `UCF_FORCE_CONFFOLD`), (b) lands the needrestart drop-in,
-  and (c) **refreshes the apt index ONCE PER BOOT** — marker
-  `/run/morgward-apt-updated` (`AptUpdateMarker`), stamped only on a SUCCESSFUL refresh
-  and otherwise swallowed (`|| true`, so it can't trip a caller's `set -e`). Without (c)
-  a fresh image's EMPTY index made any install that skipped PRE die with "Package
-  iptables-persistent is not available" (A1) / "Unable to locate package fail2ban" (A3).
-  PRE keeps its own unconditional refresh — the one place a failed refresh must ABORT —
-  and stamps the marker. `aptConfOpts` now also carries `-o Dpkg::Use-Pty=0`.
-  **`stdbuf` is banned**: it works via `LD_PRELOAD=libstdbuf.so`, which apt leaks into
-  every child it spawns (dpkg → maintainer postinst → update-initramfs); on 26.04
-  (rust-coreutils) those children can't resolve it and ld.so spams the whole run. A8's
-  `Dir::Bin::dpkg` wrapper existed only to contain that leak and is gone with it.
-
-- **A lost SSH transport is NOT a lockout (B3).** `transportLost(sshx.Result)`
-  (rc = -1, or `Err != nil`) tells a dropped transport from a command that ran and
-  exited non-zero. `freshLoginVerify` is the single second-session verify entry point
-  (A1 both paths, A2/A2-danger, A5) and retries the independent key login ONCE after 5s.
-  A1 additionally calls `Cli.Reconnect(ctx)` when its iptables-persistent install lost
-  the transport — an operator's stuck dpkg dialog used to kill the session and make A1
-  roll the firewall back reporting a lockout that never happened — and words that
-  failure as a transport failure. `sshx.Client.Reconnect` redials with the same identity
-  and keeps the in-run host-key pin. **`DialWithRetry` fails fast** after 2 attempts on
-  `attempted methods [none]` (`isNoMethodAvailable`: the server offers no method we hold
-  a credential for, e.g. password-only vs a key-only box) — every retry is a preauth
-  failure A3's fail2ban (maxretry 3) + PerSourcePenalties count against the OPERATOR's
-  own IP; a rejected key/password (`[none publickey]`) still retries as provisioning.
-
-- **`tweaks.Result.Err` — an unmeasurable probe is "?", never red (C2).** It is set when
-  the probe ITSELF could not run (the audit round-trip lost the transport, or a probe
-  emitted no `id<TAB>…` line). `Applied` stays false but the value is UNKNOWN, not
-  "unset": renderers must show "?" / "probe error: …", and `Tally` counts such rows as
-  neither applied nor applicable (exactly like `Informational`).
-
-- **New tweaks — one line each.** M01 `kernel.io_uring_disabled=1` (A5,
-  `60-morgward-iouring.conf`, only where the ≥6.6 key exists **AND
-  `ctx.Facts.Greenfield`** — a brownfield box may run io_uring consumers, so the whole
-  block is skipped there, not even removing an existing file; probe `a5.io_uring` and
-  the §V row report `na`/skip-with-reason instead of red). M02 `kernel.panic=10` +
-  `panic_on_oops=1` (A5, `60-morgward-panic.conf`). M03 ICMP rate limits added to A4's
-  `99-net-tune.conf` (`tcp_syncookies`/`tcp_max_syn_backlog` were already there — the
-  existing 8192 backlog is deliberately NOT lowered to the proposed 2048). M04
-  `nf_conntrack_max` sized by RAM behind `DockerSeen||NatRules`, skipped on a kubelet
-  box, never lowering an existing value, `hashsize=max/4` via `/etc/modprobe.d`. M05
-  `fstrim.timer` where `lsblk --discard` reports support (A6). M06 chrony installed on
-  22.04/24.04 (shipped on 26.04) with `/etc/chrony/conf.d/90-morgward.conf` — optional
-  install, `timedatectl` fallback in every branch (A6). M07 `UnusedConnectionTimeout
-  600` + `ChannelTimeout session:*=1800`, both **greenfield only** (A2 — OpenSSH does
-  not count forwarding listeners as open channels, so `UnusedConnectionTimeout` reaps
-  an idle `ssh -N -R` tunnel 600 s after connect; probe `a2.unused_timeout` reports
-  `na` on brownfield, `a2.channel_timeout` is not registered there). **Own footprint
-  counts:** a morgward-hardened box flips to brownfield by its OWN markers, so
-  `Facts.SSHTimeoutsSet` (99-hardening.conf already carries the directive) keeps M07 on
-  an A2 re-run and keeps both probes live; io_uring verify/audit likewise test
-  `60-morgward-iouring.conf` before reporting na — never let a re-run silently drop a
-  knob morgward itself applied. M13
-  systemd-coredump `Storage=none`/`ProcessSizeMax=0` drop-in where the package exists
-  (A5 — that package rewrites `core_pattern` on every upgrade, so the sysctl alone is
-  not enough). INFO-only probes, no apply: `a2.socket_activation` (M23),
-  `a5.apparmor_userns`, `a5.lockdown`, `a6.tmp_tmpfs`. Every new knob is idempotent via
-  `putFile`/`AppendLineIfMissing` (no heredocs), carries a probe under the SAME gate as
-  its apply, and is covered by the step's revert.
-
-- **§A1 stdin caveat — NEVER use heredocs in remote scripts.** The script itself is
-  piped to `bash` over stdin, so a heredoc would contend for that stdin. Deliver all
-  file content via nested base64: use `putFile` / `AppendLineIfMissing` in
-  `steps/step.go`, never `cat <<EOF`. To run a multi-line script body without landing
-  a file, use `pipeToBash(script)` (`steps/step.go`: `echo <b64> | base64 -d | bash`) —
-  A6.5 DNS calibration (`a65_dns.go`) uses it instead of a predictable `/tmp` path
-  (symlink/TOCTOU target for a local unprivileged user, since the script runs as root).
-  **One copy of each guard, exported:** `steps.AppendLineIfMissing` (the engine's revert
-  map calls it — the old `%q`-quoting duplicate is deleted), `steps.RmSSHDropIns` (the
-  single `rm -f` of every sshd drop-in this repo writes: add a drop-in ⇒ add it there or
-  a revert leaves it behind), and `detect.ShQuote` — the ONE shell-quoting function
-  (`tui.shQuote` is a delegate). Never hand-quote a remote path.
-
-- **TUI is Bubble Tea v2** (`charm.land/bubbletea/v2 v2.0.6` + `charm.land/bubbles/v2
-  v2.1.0` + `charm.land/lipgloss/v2 v2.0.3`). The module path is **`charm.land`**, NOT
-  `github.com/charmbracelet/*/v2` — the Go proxy REJECTS the github path for the v2 line.
-  v2 API actually used (`internal/tui/tui.go`): `View()` returns a `tea.View` (not a
-  string) and sets `AltScreen` / `MouseMode` / `WindowTitle` on the returned view EVERY
-  frame, and carries the terminal cursor as `tea.View.Cursor` (`*tea.Cursor` — the native
-  API; there is NO hand-spliced cursor block, no blink state and no DEC ?1004 focus
-  reporting any more. `terminalFrame()` returns frame + cursor from ONE `cursorSnapshot`,
-  so the cursor can never map against rows the frame didn't draw);
-  key events are `tea.KeyPressMsg` (NOT v1 `tea.KeyMsg`); mouse is `tea.MouseClickMsg`
-  (`msg.Mouse().X/.Y`, `tea.MouseLeft`) and `tea.MouseWheelMsg` (`tea.MouseWheelUp/Down`);
-  viewport is constructed `viewport.New(viewport.WithWidth(...), viewport.WithHeight(...))`
-  with `Width()` / `SetHeight()` / `ScrollUp` / `ScrollDown`; text width via `textinput.SetWidth`.
-  **`tea.SetWindowTitle` was REMOVED in v2** — the model stashes a title-kind enum (`titleK`)
-  and rebuilds the localized title per frame in `View()` (`windowTitle()`).
-  STILL TRUE: the model is **copied by value** every `Update` — never put a `strings.Builder`
-  (or other non-copyable) in the model struct; use a plain `string` (`m.content`).
-  **In-session re-run hygiene (v0.7.4):** the re-run paths (`dashStale` re-audit,
-  `launchApplyTweaks`, `startSteps`, `startRevert`) funnel into `launchEngine` WITHOUT
-  going through `goBack`, so listeners stay parked on reused channels. `launchEngine`
-  bumps `m.runGen` per run and every streaming listener (`listen`/`listenConn`/
-  `listenStats`/`listenProg`) captures its generation; `Update` DROPS any `genMsg` whose
-  `gen != m.runGen` and does not re-issue it (no interleaved progress across runs). The
-  `connMsg` handler calls `stopSampler()` (nil-safe + idempotent) before re-creating the
-  stats channel so monitor SSH connections don't leak. **After a MUTATING run** (step /
-  revert / run) the model sets `dashStale`; on returning to the Dashboard it re-runs an
-  `audit` and `captureAudit` repopulates the dash fields with post-apply state (stale
-  connect-time checkmarks fixed). **Dashboard tweaks reflect ONLY the "Применить твики"
-  bucket.** That button applies `tweakBucketIDs()` and EXCLUDES the security steps
-  A2/A2.5 (opt-in via the Security menu), yet A2 has non-informational probes
-  (`a2.conf00/conf99/ecdsa_absent`). So the Dashboard grid+counters force any
-  `isSecurityStep(r.Probe.Step)` (`wiki.go`) probe to satisfied — `dashRowSatisfied`
-  (`dashboard.go`) is the single source for the ✓ glyph (`dashAuditCellText` +
-  `dashAuditCell`) AND `captureAudit`'s `dashAuditApplied` tally, so glyph + count can't
-  drift and `можно применить` reaches 0 after applying every tweak. The probes stay
-  VISIBLE in the grid (NOT marked Informational). The Security screen keeps A2's TRUE
-  state — it reads `m.dashAuditRaw` (untouched real `Applied`), never the forced display
-  set; do NOT route the force-satisfied rule into `dashAuditRaw`.
-
-- **TUI render invariants — three things a refactor must not break.** (1) **The golden
-  frame is the contract.** `internal/tui/frames_golden_test.go` pins the byte-exact render
-  of all 8 `framedScrollView` screens (12 states) at 100x40 and 60x20 in
-  `testdata/frames.golden`. A rendering refactor must leave it byte-identical;
-  `UPDATE_GOLDEN=1 go test ./internal/tui` is for an INTENTIONAL layout change you then
-  eyeball in the diff — NEVER regenerate it to turn a red test green. (2) **`chromeViewH(fixed,
-  pinned)` (`render.go`) is the SINGLE chrome-row arithmetic.** Each screen keeps one named
-  wrapper (`matrixBodyViewH`, `filesListViewH`, …) that BOTH its render and its click
-  hit-tests call, so a target can't drift from the row drawn — never re-derive a row budget
-  locally. `phaseRun` counts too: `runView` hand-draws its frame (it predates
-  `framedScrollView`) but `vpHeight` sources its budget from `chromeViewH(2, 0)` — the two
-  fixed rows being the progress line + blank spacer. phaseRun is NOT in the golden, so
-  `TestVPHeightMatchesLegacyChrome` / `TestRunViewRowsMatchChromeBudget` pin it instead.
-  Same for scrolling: `scrollBy(d)` is the one entry point for every phase's
-  ↑↓/k/j and wheel. (3) **`snap.scrollback` stays FULL-LENGTH.** `cursorSnapshot` renders
-  only the visible window (the rest of the slice is `""`), but its length must keep equaling
-  `scrollbackLen` — the cursor's body-row math (`cursorBodyRow`) indexes into it. Shrinking
-  the slice to what's rendered silently moves the cursor.
-  **Terminal size:** on Windows a `WindowSizeMsg` carries the console SCREEN-BUFFER height
-  (conhost: 3000), not the viewport — `internal/termsize.TrueSize` re-reads the real
-  viewport and is the ONE funnel `m.w`/`m.h` may be set through (`WindowSizeMsg` case in
-  `Update`). It is the FILTER only; `resizeTick` is still the delivery mechanism (Windows
-  has no SIGWINCH, so bubbletea's `listenForResize` is a no-op there).
-
-- **No run state — there is no checkpoint machinery.** `internal/state` is DELETED (its
-  `Load` always returned an empty map, `Save` was a no-op, the fields were never read) and
-  `runStepList` has no `honorCheckpoint` parameter. Every run executes every selected step
-  and re-derives everything from `detect.Run`; the on-box configs are the only durable
-  record. Don't reintroduce a resume/skip path without a real requirement.
-
-- **FM local-open-and-sync (2c).** "Open" a remote file (Enter / double-click / menu Open
-  row / the Open action / the `O` op) is an async sftp-download to `openTempDir()`
-  (`os.TempDir()/morgward-open`, dest = `openLocalDest` = `crc32(remotePath)-basename` so
-  same-named files in different remote dirs never collide) → `openLocalFileFn` (build-tagged
-  `osOpenArgs` in `openlocal_{windows,darwin,unix}.go`, ARGS **never a shell string** — the
-  remote name can't be reinterpreted). A single **lazy** `*fsnotify.Watcher` lives on the
-  pointer `*fileSession`; its pump goroutine forwards local paths on `watchCh` and **derefs
-  NOTHING** on `*fileSession` (value-copy + sshx-concurrency invariants). All debounce
-  (`fmSaveDebounce` 600ms) + conflict-check + upload-back happen on the **MAIN LOOP**
-  (`update.go` `fmOpenDoneMsg`/`fmWatchEventMsg`/`fmWatchFlushMsg`); the upload-back goroutine
-  owns its OWN sftp client. Conflict = remote mtime moved since download → `errRemoteChanged`
-  (`sftpConflictErr`), surfaced as the localized `kFmConflict` notice (special-cased via
-  `errors.As` in the `fmXferDoneMsg` error branch, NOT the raw English) → press **`P`**
-  (`filesForcePush`) to overwrite. `of.remoteMtime` is **re-stamped** after each successful
-  sync (threaded via `fmXferDoneMsg.syncLocal`/`newMtime`, NOT matched by label) so the next
-  save doesn't false-conflict. `fileSession.close()` closes the watcher (ends the pump → it
-  `close()`s `watchCh` so `listenWatch` retires) and removes the temps. Tests stub the OS
-  opener via the `openLocalFileFn` seam so they never spawn a real editor.
-
-- **Stream sanitization lives in `internal/ui` (v0.7.4).** `ui.SanitizeStreamLine` /
-  `ui.StripControlAndANSI` strip ANSI escapes + C0 control chars (CR-redraw collapses to
-  last segment, tabs→space, newlines preserved) from untrusted remote output. Both the
-  CLI terminal print path AND the log file go through it (`ui.Logger`), and the TUI
-  delegates (`tui/render.go` `sanitizeStreamLine` → `ui.SanitizeStreamLine`) — so remote
-  ANSI/control injection can't corrupt either sink. One hardened stripper, don't
-  re-implement per surface.
-
-- **`sshx.Client` is not concurrency-safe.** `monitor` dials its **own** SSH session
-  for metrics rather than sharing the engine's client. **Transport liveness + pin
-  (v0.7.4):** each `Dial` does a manual TCP dial with OS keepalive
-  (`SetKeepAlivePeriod`) AND a protocol-level `keepalive@openssh.com` global request
-  every `keepaliveInterval` (30s); after `keepaliveMaxFails` (3) consecutive misses it
-  `Close()`s the client so a blocked `Run`/`sess.Wait` (hung command, dead NAT) unblocks
-  with a transport error instead of wedging the run forever. **In-run TOFU host-key pin:**
-  the FIRST successful handshake pins the host key (`hostKeyCallback`); every later redial
-  by the same `Client` (reboot, `SwitchUser`, `UseKey`, second session) must present a
-  byte-identical key or it's refused with `ErrHostKeyChanged` ("possible MITM").
-  `HostKeyAlgorithms` is **ed25519-first** (`pinnedHostKeyAlgos`) on purpose — A2 removes
-  the box's ECDSA host key, so pinning ed25519 (which A2 preserves) keeps the pin valid
-  across the A8 reboot. **`WaitForReboot`** returns `ErrRebootAuthFailed` after
-  `rebootAuthFailMax` (5) CONSECUTIVE auth rejections (box reachable but our creds
-  rejected — distinct from the generic "never reconnected / may be bricked" timeout).
-
-- **Modes removed — default `run` is crypto-only and never locks access.** There is
-  NO `--mode` / `config.Mode` / soft / strict any more. A `run` applies SSH **crypto**
-  hardening only and PRESERVES the image-default access policy: A2SSH does NOT write
-  `AllowGroups sshusers`, does NOT override `PermitRootLogin`, keeps
-  `PasswordAuthentication yes`, and never locks root. Whatever root/password login the
-  box already had survives a `run`. `build99(ctx)` emits crypto + session knobs only
-  (NO AllowGroups / PermitRootLogin). The access lockdown
-  (`AllowGroups sshusers` + `PermitRootLogin no` + `passwd -l root`, SSH key-only) is
-  the **opt-in `A2-danger` step / TUI security menu** ONLY — A2Danger keeps its own
-  `preserveKeyUsers`→sshusers grant. Don't regress: a `run` must leave a brownfield
-  operator able to log in exactly as before. The former strict-only §A12 OS-hardening
-  (kernel-module blacklist + `/dev/shm` remount) was REMOVED with strict — gone, not
-  relocated.
-
-- **A8 restores running services it reboots (brownfield).** A8's reboot bounces a
-  brownfield box; services without auto-start (docker `restart: no`, systemd units
-  active-but-not-enabled) would stay down. Gated on `!Greenfield`, A8 snapshots the
-  running set (docker `ps -q` if `DockerSeen` + active non-enabled `.service` units)
-  **before** the reboot and after reconnect `docker start` / `systemctl start`s the
-  ones that didn't return. Uses **`docker start`** (same container, no recreate) —
-  NEVER `docker compose up` (recreate surfaces latent operator-config bugs, e.g. a
-  `postgres:18` PGDATA-layout guard). Restore failure is surfaced, NEVER `StatusFail`
-  (a down operator service must not abort the run or trip ssh-revert). Greenfield path
-  is byte-identical.
-
-- **Self-update is ours now (`internal/selfupdate`), not `go-selfupdate`.** The library
-  was dropped because its unconditional `golang.org/x/crypto/openpgp` import
-  (`validate.go:17`) propagated **GO-2026-5932** — an advisory with `Fixed in: N/A`, so no
-  bump ever clears it — and it linked **16 modules / 53 packages** (Gitea+GitLab+GitHub
-  SDKs, OAuth2, httpsig, xz) for features morgward never used. Upstream's fix
-  (creativeprojects/go-selfupdate#58) is open, unmerged. Ours is `Latest(ctx, slug)` →
-  `rel.GreaterThan(cur)` → `rel.Apply(ctx, exe)`; both the CLI (`applyUpdate`) and the TUI
-  strip (`checkUpdateCmd`) go through it. Don't regress: (1) **`AssetName()` must match the
-  release pipeline** — `Makefile`/`build.ps1` emit `dist/<repo>-<goos>-<goarch>[.exe]`;
-  rename one without the other and every update becomes "no release asset found for this
-  OS/arch" (`TestAssetNameMatchesReleasePipeline` pins it). (2) **`checksums.txt` is the ONLY
-  authenticity gate (F01)** — a release lacking it is an ERROR at detect time, an asset it
-  doesn't list or whose SHA-256 differs is refused BEFORE anything on disk is touched; there
-  is no signature fallback. (3) **`selfupdate.OldPath(exe)` is the one name** for the binary
-  parked aside during the swap — `cleanupOldBinary` (`cmd/morgward/main.go`) sweeps exactly
-  it at every launch. It is byte-identical to go-selfupdate's `.<base>.old`, so leftovers
-  from pre-migration builds still get swept; don't "improve" the name. (4) `GreaterThan`
-  fails **closed** on an unparsable version (the library panicked via `semver.MustParse`) —
-  the anti-downgrade gate (F08) lives in `applyUpdate`, keep it there.
-
-- **Secrets:** read from env `VPS_PASSWORD` / `VPS_HOST` when flags omitted; password
-  is cleared after key auth works and never written to the log file.
-
-- **Version drift** (see also the supported-range bullet above): detect 24.04 vs 26.04 and branch — `mlkem768x25519-sha256` KEX +
-  PerSourcePenalties only on 26.04; forwarding/CVE knobs on 24.04. **Conservative
-  fallback (F20):** `cryptoBlock` gates the OpenSSH-10-only tokens strictly on a
-  *confirmed* `Is2604`; a glitched os-release probe (both `Is2404`/`Is2604` false)
-  falls back to the 24.04 set (valid on 26.04 too) rather than emitting mlkem KEX that
-  `syntaxGate`'s `sshd -t` would reject — a transient detection miss degrades safely
-  instead of aborting an otherwise-valid run. **`RequiredRSASize 3072` (OpenSSH 9.1+)**
-  is gated the same way — emitted only on `Is2404 || Is2604` (both ship >= 9.1). The
-  both-false fallback now targets the OLDEST realistic sshd (22.04 jammy / 8.9p1, which
-  lacks `RequiredRSASize`) so pointing morgward at an off-target <24.04 box no longer
-  aborts A2 with `sshd -t`: Bad configuration option: RequiredRSASize. Everything else
-  in `cryptoBlock` is <= OpenSSH 8.5 (incl. `sntrup761`, `PubkeyAcceptedAlgorithms`,
-  `sk-*`), valid on 8.9. Confirmed-24.04/26.04 output stays byte-identical.
-
-- **A2-danger precondition guard (F04):** before writing the `AllowGroups sshusers` +
-  `PermitRootLogin no` lockdown drop-in, `A2Danger.Run` calls `assertAdminLoginable` —
-  the admin must be in `sshusers` **and** have a non-empty `authorized_keys`, else it
-  returns `StatusFail` "run the PRE step first". This refuses up front when PRE never
-  ran (user/group/key live only in `Precond`), instead of leaning on the 300s
-  ssh-revert timer to heal a hard lockout. `step A2-danger` on a box where PRE never
-  ran now fails fast.
-
-- **Handoff before lock (F12):** `A2Danger.Run` does the `SwitchUser` handoff while the
-  ssh-revert fail-safe is still armed and root is unlocked; only after a *proven*
-  handoff does it `disarmSSHRevert` + `passwd -l root`. A failed handoff self-heals via
-  the 300s timer with root still usable (message says the box self-restores in <300s),
-  rather than leaving it admin-only with the timer already disarmed.
-
-- **Reverts are faithful, not partial.** `internal/engine/revert.go`:
-  - **A2 (F07):** besides dropping the sshd drop-ins, the revert `rm`s cloud-init
-    `99-disable-passwords.cfg`, restores `50-cloud-init.conf` `PasswordAuthentication`
-    (no→yes), and `passwd -u root` (best-effort `|| true` — on a no-root-password image
-    it stays locked, the image default). Every added action only *opens* access, so the
-    lockout-safety invariant holds; no more "reverted OK" while root is still locked.
-  - **A6.7 (F06):** the A6.7 apply tags each disk-swap fstab line it comments with a
-    trailing `# morgward-disabled-swap` marker; the revert uncomments + strips **only**
-    marker-tagged lines before `swapon -a`, so it never re-enables swap the operator
-    deliberately disabled before morgward ran. Both seds stay single-logical-line (no
-    heredoc).
-  - **A5 live knobs:** `sysctl --system` cannot restore `kernel.panic` /
-    `panic_on_oops` (no distro file names them, so the applied live values would
-    survive the drop-in removal), so the revert resets them explicitly with
-    `sysctl -w kernel.panic=0 kernel.panic_on_oops=0 || true`. Same for
-    `kernel.io_uring_disabled`: it is **not** a one-way latch (that is
-    `kernel.unprivileged_bpf_disabled`) — its handler is a plain
-    `proc_dointvec_minmax` over 0..2 — so the revert writes
-    `sysctl -w kernel.io_uring_disabled=0 || true` too.
-  - **Deliberately incomplete reverts must say what stayed** via `revertDetail`
-    (`revert.go`, falls back to plain `"reverted"`). Today: **A5** (live kernel knobs
-    reset, reboot only as the fallback) and **A6** — the A6 revert leaves `fstrim.timer` ENABLED on purpose:
-    it is Ubuntu's own baseline on discard-capable storage, so disabling it would
-    leave the box worse than morgward found it.
-
-## Known minor
-
-> Cosmetic known-limitations list lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-> (§7). The item below is a load-bearing correctness note, kept here.
-
-- **`WaitForReboot` 8s sleep is courtesy-only (F13).** The fixed 8s pre-poll sleep in
-  `sshx.WaitForReboot` just avoids racing the still-running pre-reboot sshd; it is
-  **not** the correctness guard. The authoritative reconnect signal is `boot_id`
-  *inequality* (`bid != preBootID`) — the loop only returns once a connection reports a
-  *different* boot_id, so a too-short sleep can't make it act on the pre-reboot kernel.
-  Keep boot_id inequality as the gate; don't trust first-reconnect on the strength of
-  the sleep alone.
+- `internal/selfupdate`: `Latest(ctx, slug)` → `GreaterThan(current)` → `Apply(ctx, exe)`.
+  CLI `applyUpdate` and TUI `checkUpdateCmd` share it; `applyUpdate` enforces the
+  anti-downgrade gate. `GreaterThan` fails closed on unparsable versions.
+- `AssetName(slug)` must match `dist/<repo>-<goos>-<goarch>[.exe]` from the release
+  scripts; `TestAssetNameMatchesReleasePipeline` pins that contract.
+- `checksums.txt` is the required SHA-256 integrity check, not a signature verifier.
+  `Latest` errors if a matching platform asset lacks it; no platform asset means no update.
+  Missing checksum entries or mismatched hashes abort `Apply` before disk writes.
+- `OldPath(exe)` is `<dir>/.<base>.old`, shared by the swap and `cleanupOldBinary`
+  at startup. Preserve the name. A failed replacement rename attempts to restore it.
