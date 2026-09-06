@@ -461,6 +461,14 @@ func (c *Client) stopKeepalive() {
 // server rejected every auth method we offered (no shared method). The x/crypto
 // ssh package surfaces this only as a text error, so we match on its stable
 // phrasing ("unable to authenticate" / "no supported methods remain").
+// isNoMethodAvailable is the subset of isNoMutualAuth where the client could try
+// nothing but "none" — x/crypto reports `attempted methods [none]` when none of
+// the server's offered methods matches a credential we hold. A rejected key or
+// password reads `[none publickey]` / `[none password]` and is NOT this case.
+func isNoMethodAvailable(err error) bool {
+	return isNoMutualAuth(err) && strings.Contains(err.Error(), "attempted methods [none]")
+}
+
 func isNoMutualAuth(err error) bool {
 	if err == nil {
 		return false
@@ -506,6 +514,14 @@ func DialWithRetry(ctx context.Context, host string, port int, user, password st
 		// retrying cannot make a wrong/forged key become right, so fail immediately.
 		if errors.Is(err, ErrHostKeyMismatch) {
 			return nil, err
+		}
+		// The server offers NO method we hold a credential for (password-only client
+		// vs a key-only box): waiting can't fix that, and every retry is a preauth
+		// failure that A3's fail2ban jail (maxretry=3) and OpenSSH PerSourcePenalties
+		// count against the operator's OWN IP. One retry covers a still-provisioning
+		// sshd; then fail fast, staying under the ban threshold.
+		if attempt >= 2 && isNoMethodAvailable(err) {
+			break
 		}
 		if !time.Now().Add(retryBackoff).Before(deadline) {
 			break // next attempt would land past the window — stop now.

@@ -74,6 +74,28 @@ func TestIsNoMutualAuth(t *testing.T) {
 	}
 }
 
+// TestIsNoMethodAvailable pins the fail-fast classifier DialWithRetry uses to stop
+// hammering a key-only box with password-only credentials (each retry is a preauth
+// failure fail2ban counts against the operator's own IP). A rejected key/password
+// still reads as retryable provisioning.
+func TestIsNoMethodAvailable(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none], no supported methods remain"), true},
+		{errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain"), false},
+		{errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain"), false},
+		{errors.New("i/o timeout"), false},
+		{nil, false},
+	}
+	for _, tc := range cases {
+		if got := isNoMethodAvailable(tc.err); got != tc.want {
+			t.Errorf("isNoMethodAvailable(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}
+
 // TestRunProbe covers the bounded keepalive probe (FA-0021): a timely result is
 // returned verbatim; a probe that outlives the timeout is reported as a miss
 // (errKeepaliveTimeout) rather than blocking; closing stop short-circuits to a miss.
