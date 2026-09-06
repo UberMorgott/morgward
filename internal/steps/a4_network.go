@@ -219,8 +219,9 @@ func (a A4Network) Run(ctx *Context) (Status, string, error) {
 	const base = "BBR+fq active, 16 MiB buffers, virtio I/O=none"
 
 	// Throughput is INFORMATIONAL — it never gates keep/revert (BBR vs CUBIC is
-	// statistically identical on a clean link, and providers hard-cap bandwidth,
-	// so any delta is noise). If we have no comparable pair, keep and say so.
+	// statistically identical on a clean link, and providers hard-cap bandwidth;
+	// two 4-sample medians from one apt mirror can't separate a real delta from
+	// mirror/neighbour noise). If we have no comparable pair, keep and say so.
 	if preMedian <= 0 || postMedian <= 0 {
 		ctx.Log.Detail("throughput: not measured (mirror unreachable)")
 		return StatusOK, base + "; throughput not measured", nil
@@ -232,7 +233,7 @@ func (a A4Network) Run(ctx *Context) (Status, string, error) {
 	// the speed; this is never a revert trigger now, so Reverted stays false.
 	ctx.Bench = &BenchResult{PreMBs: preMBs, PostMBs: postMBs, Ratio: ratio, OK: true}
 
-	bench := fmt.Sprintf("median %.1f→%.1f MB/s (%.0f→%.0f Mbit/s)",
+	bench := fmt.Sprintf("download median %.1f→%.1f MB/s (%.0f→%.0f Mbit/s, informational)",
 		preMBs, postMBs, mbitFromMBs(preMBs), mbitFromMBs(postMBs))
 	ctx.Log.Detail("throughput: %s", bench)
 	return StatusOK, base + "; " + bench, nil
