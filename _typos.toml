@@ -1,0 +1,14 @@
+# typos false positives. A word mapped to itself is declared correct.
+[default.extend-words]
+# Both spellings are English.
+unparseable = "unparseable"
+# The prefix in "mis-keyed".
+mis = "mis"
+
+# Whole identifiers that typos would otherwise split by case.
+[default.extend-identifiers]
+# Plural acronyms: "PNGs", iptables "ACCEPTs".
+PNGs = "PNGs"
+ACCEPTs = "ACCEPTs"
+# terminfo capability name (kend=\EOF).
+kend = "kend"

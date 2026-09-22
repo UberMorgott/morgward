@@ -118,7 +118,7 @@ linters:
       # would undo any fix.
       - 'vendor/'
       # - '^cmd/scratch/'
-    rules:
+    rules: []
       # ---------------------------------------------------------------------
       # ADOPTING THIS ON AN EXISTING CODEBASE
       #
