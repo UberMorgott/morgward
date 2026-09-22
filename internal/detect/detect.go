@@ -44,6 +44,7 @@ type Facts struct {
 	DockerSeen  bool
 	Greenfield  bool
 	Listeners   []string // raw ss lines for public-facing sockets
+	ListenersOK bool     // the ss read succeeded; false means Listeners is unknown, not empty
 	Inventory   string   // full §0.5 inventory dump (written to /root/vps-inventory.md)
 
 	// --- Brownfield coexistence facts (drive the service-preserving step paths) ---
@@ -210,8 +211,9 @@ func Run(c *sshx.Client) *Facts {
 
 	// Listening sockets, excluding loopback binds and sshd itself. The SAME output
 	// also feeds the coexistence port sets (A1 opens these on the brownfield path).
-	ss := c.Sudo(`ss -tulpnH 2>/dev/null`).Stdout
-	f.ListenPortsTCP, f.ListenPortsUDP, f.ListenServices, f.Listeners = parseListeners(ss)
+	ssRes := c.Sudo(`ss -tulpnH 2>/dev/null`)
+	f.ListenersOK = ssRes.OK()
+	f.ListenPortsTCP, f.ListenPortsUDP, f.ListenServices, f.Listeners = parseListeners(ssRes.Stdout)
 
 	// Universal origin tag per service (provenance by cgroup + docker ps cross-ref).
 	// Surfacing-only and best-effort — never touches the ruleset/coexistence fields

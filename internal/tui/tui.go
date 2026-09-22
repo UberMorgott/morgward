@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"github.com/UberMorgott/morgward/internal/detect"
 	"github.com/UberMorgott/morgward/internal/engine"
+	"github.com/UberMorgott/morgward/internal/findings"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/selfupdate"
 	"github.com/UberMorgott/morgward/internal/sshx"
@@ -272,8 +273,9 @@ type model struct {
 	dashAuditResults []tweaks.Result // display set: informational probes filtered out
 	dashAuditRaw     []tweaks.Result // unfiltered set; populateSecurityState reads this
 	dashFacts        *detect.Facts
-	dashScroll       int  // audit list scroll offset (clamped like sumScroll)
-	dashApplyConfirm bool // true while the A8 reboot-warning confirm is shown
+	dashFindings     *findings.Report // nil until an audit lands; read-only afterwards
+	dashScroll       int              // audit list scroll offset (clamped like sumScroll)
+	dashApplyConfirm bool             // true while the A8 reboot-warning confirm is shown
 	// dashStale is set when a MUTATING run (step/revert/run) completes — the box
 	// changed, so the audit checkmarks captured at connect time are now out of date.
 	// A plain bool, copy-safe under the value-copied v2 model. When a Dashboard-entry

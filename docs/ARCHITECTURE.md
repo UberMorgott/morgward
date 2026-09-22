@@ -45,6 +45,7 @@
 | `internal/steps/` | `Step`, `Context`, `Status`, apply scripts and shared shell helpers |
 | `internal/verify/` | Effective-state matrix; `Run`, `Result`, `StatusUnknown`, `firewallChecks` |
 | `internal/tweaks/` | `Registry`, `Probe`, `Run`, `Result`, `Tally`; privileged batch audit |
+| `internal/findings/` | `Collect`, `Report`, `Finding`; read-only observations with no apply/revert |
 | `internal/tui/` | Bubble Tea UI, dashboard, terminal and file workspace |
 | `internal/monitor/`, `internal/stats/` | Live sampler; best-effort before/after `Capture` |
 | `internal/termsize/`, `internal/ui/` | `TrueSize`; logger and remote-output sanitizers |
@@ -83,6 +84,27 @@ Canonical `orderedSteps()` order; files under `internal/steps/`. [Coexistence](B
   not an unapplied failure. `Tally` excludes both errors and `Informational` rows.
 - Matrix transport errors become `StatusUnknown` for non-lockout rows; lockout checks
   still fail closed. Firewall-specific checks: [BROWNFIELD](BROWNFIELD.md#firewall-consumers).
+
+## Findings
+
+- Findings are observations morgward never fixes; they are not tweaks and have no
+  `Probe`, apply, revert, `Tally` or `tweakBucketIDs` entry. Only `Audit` runs
+  `findings.Collect`; the result is `Summary.Findings` (`Report{Items, Errors}`).
+- A check that cannot run lands in `Report.Errors`; an empty `Items` alone is never
+  "clean". `db_bind` reads `Facts.Listeners` and errors when `Facts.ListenersOK` is false.
+- `db_bind` flags DB ports (tcp 3306/5432/6379/27017/9200/11211, udp 11211) whose
+  local address is unspecified (`0.0.0.0`, `*`, `[::]`, `::`); wording is "listens
+  on all interfaces", not proof of internet reachability. Interface-scoped binds are skipped.
+- The other checks share one `cli.Sudo(findings.Script)` round-trip. Protocol:
+  `F<TAB>check<TAB>value` per finding and `R<TAB>check<TAB>rc` per check; a missing
+  `R` or `rc != 0` is a check error. Values pass through `ui.StripControlAndANSI`.
+- Checks: non-root UID 0 (`/etc/passwd`); empty `/etc/shadow` password field, names
+  only; `NOPASSWD` in non-comment lines of `/etc/sudoers` and `/etc/sudoers.d/*`
+  (sudo-ignored names skipped), excluding only PRE's exact
+  `<admin> ALL=(ALL) NOPASSWD:ALL` in `90-<admin>`; docker group members, supplementary
+  and primary GID; `/run/reboot-required` as `info`.
+- CLI prints the `FINDINGS` log block (`logFindings`); the TUI renders the same report
+  below the Dashboard audit grid (`dashFindingsLines`), not clickable.
 
 ## TUI contracts
 

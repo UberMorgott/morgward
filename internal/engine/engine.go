@@ -14,6 +14,7 @@ import (
 
 	"github.com/UberMorgott/morgward/internal/config"
 	"github.com/UberMorgott/morgward/internal/detect"
+	"github.com/UberMorgott/morgward/internal/findings"
 	"github.com/UberMorgott/morgward/internal/monitor"
 	"github.com/UberMorgott/morgward/internal/sshx"
 	"github.com/UberMorgott/morgward/internal/stats"
@@ -133,6 +134,10 @@ type Summary struct {
 	// (verify) or the Dashboard live audit (audit); the CLI ignores it (its verify
 	// output stays the §V matrix only).
 	Tweaks []tweaks.Result
+
+	// Findings carries the read-only security observations morgward does not fix
+	// (audit path only). Report.Errors lists checks that could not run.
+	Findings findings.Report
 
 	// Facts is the read-only §0.5/§2 discovery snapshot captured during prepare().
 	// Filled by Audit so the Dashboard can render the server card (OS/kernel/IPv6/
@@ -596,8 +601,8 @@ func DetectOnly(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks
 // creation, no step application (prepare is called with readOnly=true). The
 // tweak results stream to the TUI via OnProgress (one per Result; cosmetic
 // streaming of a single tweaks.Run batch, not real concurrency), and the final
-// Done carries Summary{Facts, Tweaks} so the Dashboard can render the server
-// card + live audit grid.
+// Done carries Summary{Facts, Tweaks, Findings} so the Dashboard can render the
+// server card, live audit grid and findings section.
 func Audit(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) error {
 	start := time.Now()
 	s, cleanup, err := prepare(ctx, cfg, log, true, true, h)
@@ -618,8 +623,29 @@ func Audit(ctx context.Context, cfg *config.Config, log *ui.Logger, h Hooks) err
 			})
 		}
 	}
-	emitDone(h, Summary{Elapsed: time.Since(start), Tweaks: tw, Facts: s.ctx.Facts})
+	fr := findings.Collect(s.cli, s.ctx.Facts, cfg.AdminUser)
+	logFindings(s.log, fr)
+	emitDone(h, Summary{Elapsed: time.Since(start), Tweaks: tw, Facts: s.ctx.Facts, Findings: fr})
 	return nil
+}
+
+// logFindings writes the findings block to the CLI/log; the TUI renders the same
+// Summary.Findings on the Dashboard.
+func logFindings(log *ui.Logger, r findings.Report) {
+	log.Banner("FINDINGS")
+	for _, f := range r.Items {
+		if f.Severity == findings.SevInfo {
+			log.Info("%s: %s — %s", f.ID, f.Subject, f.Detail)
+		} else {
+			log.Warn("%s: %s — %s", f.ID, f.Subject, f.Detail)
+		}
+	}
+	for _, e := range r.Errors {
+		log.Warn("check %s failed: %s", e.Check, e.Err)
+	}
+	if len(r.Items) == 0 && len(r.Errors) == 0 {
+		log.OK("no findings")
+	}
 }
 
 // applyResultMarkers derives the change tally from step result details: the

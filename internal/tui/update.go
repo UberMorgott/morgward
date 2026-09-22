@@ -1059,6 +1059,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.dashAuditResults = nil
 	m.dashAuditRaw = nil
 	m.dashFacts = nil
+	m.dashFindings = nil
 	m.dashScroll = 0
 	m.dashApplyConfirm = false
 	m.dashStale = false
@@ -1277,6 +1278,8 @@ func (m model) formConfig() (*config.Config, error) {
 // Applied verdict — the Security screen reads it for the real access posture.
 func (m *model) captureAudit(sum engine.Summary) {
 	m.dashFacts = sum.Facts
+	fr := sum.Findings
+	m.dashFindings = &fr
 	m.dashAuditRaw = sum.Tweaks
 	// Informational access-policy probes are shown on the Security screen, not in the
 	// tweaks audit grid — drop them from the display set.

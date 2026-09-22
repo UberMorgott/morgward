@@ -9,6 +9,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/UberMorgott/morgward/internal/detect"
+	"github.com/UberMorgott/morgward/internal/findings"
 	"github.com/UberMorgott/morgward/internal/tweaks"
 )
 
@@ -288,7 +289,34 @@ func (m model) dashStatusLine(innerW int) string {
 // to results[cols*r .. cols*r+cols-1] → Probe.ID → wiki detail. dashAuditGridLines is
 // the single source of the column geometry so render and hit-test cannot drift.
 func (m model) dashBodyLines(innerW int) []string {
-	return m.dashAuditGridLines(innerW)
+	// Findings follow the grid, so grid row indices (and the hit-test) are unchanged.
+	return append(m.dashAuditGridLines(innerW), m.dashFindingsLines(innerW)...)
+}
+
+// dashFindingsLines renders the read-only findings section below the audit grid:
+// header, one row per finding ("!" warn / "i" info), one per failed check ("?"),
+// or a "none" line. Findings have no apply/revert and no wiki click target. Nil
+// until an audit lands, so the section is absent before then.
+func (m model) dashFindingsLines(innerW int) []string {
+	r := m.dashFindings
+	if r == nil {
+		return nil
+	}
+	lines := []string{"", sumHeadStyle.Render(t(m.lang, kDashFindingsTitle))}
+	for _, f := range r.Items {
+		glyph := dashNoticeStyle.Render("!")
+		if f.Severity == findings.SevInfo {
+			glyph = monDimStyle.Render("i")
+		}
+		lines = append(lines, truncDisplay("  "+glyph+" "+f.Subject+" — "+f.Detail, innerW))
+	}
+	for _, e := range r.Errors {
+		lines = append(lines, truncDisplay("  ? "+fmt.Sprintf(t(m.lang, kDashFindingsCheckErr), e.Check, e.Err), innerW))
+	}
+	if len(r.Items) == 0 && len(r.Errors) == 0 {
+		lines = append(lines, "  "+labelStyle.Render(t(m.lang, kDashFindingsNone)))
+	}
+	return lines
 }
 
 // dashScrollViewH is the height (rows) of the scrollable audit-grid region: the shared

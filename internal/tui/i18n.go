@@ -219,6 +219,11 @@ const (
 	kDashServicesTitle // services right-column header: "Сервисы" / "Services"
 	kDashServicesMore  // "… +%d ещё" / "… +%d more" — overflow line when capped
 
+	// --- read-only findings section below the audit grid ------------------
+	kDashFindingsTitle    // "Находки" / "Findings"
+	kDashFindingsNone     // no findings and every check ran
+	kDashFindingsCheckErr // failed check: "проверка %s не удалась: %s"
+
 	// --- security menu (phaseSecurity, P4) -------------------------------
 	kSecMenuTitle      // box title: "Безопасность и доступ" / "Security and access"
 	kSecRootLogin      // access-card label: "Вход root" / "Root login"
@@ -490,6 +495,10 @@ var tr = map[stringKey][2]string{
 
 	kDashServicesTitle: {"Сервисы", "Services"},
 	kDashServicesMore:  {"… +%d ещё", "… +%d more"},
+
+	kDashFindingsTitle:    {"Находки (только чтение)", "Findings (read-only)"},
+	kDashFindingsNone:     {"находок нет", "no findings"},
+	kDashFindingsCheckErr: {"проверка %s не удалась: %s", "check %s failed: %s"},
 
 	kSecMenuTitle:      {" Безопасность и доступ ", " Security and access "},
 	kSecRootLogin:      {"Вход root", "Root login"},
