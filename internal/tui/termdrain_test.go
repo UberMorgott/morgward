@@ -140,20 +140,64 @@ func TestEmuDrainSurvivesReflow(t *testing.T) {
 // until the drain reads it. A drain that has ALREADY exited never will, and the
 // writer parks forever — one leaked goroutine per reflow. d.done makes that case
 // detectable, so no write is issued for a dead drain.
+//
+// The check is scoped to goroutines THIS test goroutine spawned from retireEmuDrain, read
+// from a full stack dump right after the call. A `go` statement registers the goroutine
+// before it returns, so a wake-up writer is visible immediately (no sleep), and the
+// process-wide runtime.NumGoroutine — which other tests' lingering goroutines move — is
+// not consulted.
 func TestRetireEmuDrainSkipsDeadDrain(t *testing.T) {
 	emu := newTermEmulator(80, 24)
 	d := newEmuDrain()
 	close(d.done) // the drain already returned (Read errored / earlier retire reaped it)
 
-	time.Sleep(20 * time.Millisecond) // let unrelated goroutines settle
-	before := runtime.NumGoroutine()
 	retireEmuDrain(emu, d)
-	time.Sleep(50 * time.Millisecond) // a would-be wake-up goroutine would be parked by now
 
-	if after := runtime.NumGoroutine(); after > before {
-		t.Fatalf("retiring a dead drain leaked %d goroutine(s) on the unbuffered reply pipe", after-before)
+	if n := wakeWritersFromHere(); n != 0 {
+		t.Fatalf("retiring a dead drain spawned %d wake-up writer(s) on the unbuffered reply pipe", n)
 	}
 	if !d.retired.Load() {
 		t.Error("retireEmuDrain must still mark the drain retired")
 	}
+}
+
+// TestRetireEmuDrainWakesLiveDrain is the positive control for wakeWritersFromHere: a
+// drain that has NOT exited gets exactly one wake-up writer, so the detector above can
+// actually see the goroutine it asserts is absent.
+func TestRetireEmuDrainWakesLiveDrain(t *testing.T) {
+	emu := newTermEmulator(80, 24)
+	d := newEmuDrain()
+
+	retireEmuDrain(emu, d)
+	if n := wakeWritersFromHere(); n != 1 {
+		t.Fatalf("retiring a live drain spawned %d wake-up writer(s), want 1", n)
+	}
+
+	// Act as the parked drain: take the wake-up answer so the writer returns.
+	buf := make([]byte, 64)
+	if _, err := emu.Read(buf); err != nil {
+		t.Fatalf("draining the wake-up answer: %v", err)
+	}
+}
+
+// wakeWritersFromHere counts live goroutines that the calling goroutine created inside
+// retireEmuDrain, from a full runtime.Stack dump ("created by <fn> in goroutine <id>").
+func wakeWritersFromHere() int {
+	self := make([]byte, 64)
+	self = self[:runtime.Stack(self, false)]
+	m := regexp.MustCompile(`^goroutine (\d+) `).FindSubmatch(self)
+	if m == nil {
+		panic("cannot parse own goroutine id from " + string(self))
+	}
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	created := regexp.MustCompile(`(?m)^created by \S+\.retireEmuDrain in goroutine ` + string(m[1]) + `$`)
+	return len(created.FindAll(buf, -1))
 }
