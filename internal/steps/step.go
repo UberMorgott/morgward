@@ -148,6 +148,17 @@ const AptQuiesceWaitSec = 600
 // aptLockFiles are the four apt/dpkg lock files apt-get and unattended-upgrade take.
 const aptLockFiles = "/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock"
 
+// aptUURegex matches the unattended-upgrade MAIN process by full argv
+// ("/usr/bin/python3 /usr/bin/unattended-upgrade [opts]"), excluding the persistent
+// "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown
+// --wait-for-signal" helper (unattended-upgrades.service), whose comm is the same
+// truncated "unattended-upgr". Anchored on an argv[0] containing python3, so it can
+// never match a pgrep/pkill/bash command line that merely carries the pattern text.
+const aptUURegex = `^[^ ]*python3[^ ]* /usr/bin/unattended-upgrade( |$)`
+
+// aptToolComms are the exact process names (pgrep -x) of apt front-ends and dpkg.
+const aptToolComms = "apt|apt-get|aptitude|dpkg"
+
 // aptQuiesce parks Ubuntu's apt automation for the duration of ONE script so the
 // script's own apt-get never races it for the dpkg lock. Root cause it fixes: on a
 // fresh boot apt-daily-upgrade.timer (Persistent=true, missed run) fires immediately
@@ -161,12 +172,17 @@ const aptLockFiles = "/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/ap
 //     same script cannot blank it; the script's exit status is preserved). Runtime-
 //     only: nothing enabled/disabled/masked, so there is nothing for revert to undo,
 //     and operator-disabled timers stay off.
-//  2. `systemctl stop --no-block` the two services: SIGTERM, which unattended-upgrade
-//     handles by finishing the CURRENT package and exiting cleanly. --no-block because
-//     apt-daily-upgrade.service is KillMode=process with a 900s TimeoutStopSec.
-//  3. Bounded wait (AptQuiesceWaitSec) for remaining lock holders (fuser on the lock
-//     files, plus pgrep for apt/dpkg/unattended-upgr), one status line per 30s
-//     instead of apt's per-second "Waiting for cache lock" redraws.
+//  2. `systemctl stop --no-block` the two services (--no-block: apt-daily-upgrade
+//     .service has TimeoutStopSec=900). Its KillMode=process means systemd SIGTERMs
+//     only the apt.systemd.daily shell, so the unattended-upgrade child is SIGTERMed
+//     directly (aptUURegex); it then stops after its current commit (MinimalSteps)
+//     instead of running the whole upgrade.
+//  3. Bounded wait (AptQuiesceWaitSec) for remaining lock holders: fuser on the lock
+//     files, pgrep -x on apt tool comms, and the unattended-upgrade main process.
+//     NOT `pgrep -x unattended-upgr`: that truncated comm also matches the always-on
+//     unattended-upgrade-shutdown --wait-for-signal helper, which would make every
+//     script wait the full cap. One status line per 30s instead of apt's per-second
+//     "Waiting for cache lock" redraws.
 //  4. If the lock is free and `dpkg --audit` reports an interrupted run, finish it
 //     with `dpkg --configure -a` (conffile-safe) so the caller's apt does not abort.
 //
@@ -181,7 +197,9 @@ var aptQuiesce = "MW_APT_TIMERS=\"\"\n" +
 	"  trap \"systemctl start$MW_APT_TIMERS >/dev/null 2>&1 || true\" EXIT\n" +
 	"fi\n" +
 	"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true\n" +
-	"mw_apt_holders() { { fuser " + aptLockFiles + " 2>/dev/null; pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' 2>/dev/null; } | tr -s ' \\t' '\\n' | grep -E '^[0-9]+$' | sort -un | tr '\\n' ' '; }\n" +
+	"MW_UU_RE='" + aptUURegex + "'\n" +
+	"pkill -TERM -f \"$MW_UU_RE\" 2>/dev/null || true\n" +
+	"mw_apt_holders() { { fuser " + aptLockFiles + " 2>/dev/null; pgrep -x '" + aptToolComms + "' 2>/dev/null; pgrep -f \"$MW_UU_RE\" 2>/dev/null; } | tr -s ' \\t' '\\n' | grep -E '^[0-9]+$' | sort -un | tr '\\n' ' '; }\n" +
 	"mw_w=0\n" +
 	"mw_h=$(mw_apt_holders)\n" +
 	"while [ -n \"$mw_h\" ] && [ \"$mw_w\" -lt " + fmt.Sprint(AptQuiesceWaitSec) + " ]; do\n" +

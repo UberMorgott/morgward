@@ -129,7 +129,10 @@ func TestAptQuiesceContract(t *testing.T) {
 		"trap \"systemctl start$MW_APT_TIMERS",
 		"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service",
 		"fuser " + aptLockFiles,
-		"pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr'",
+		"pgrep -x '" + aptToolComms + "'",
+		"MW_UU_RE='" + aptUURegex + "'",
+		"pkill -TERM -f \"$MW_UU_RE\"",
+		"pgrep -f \"$MW_UU_RE\"",
 		"-lt 600 ]",
 		"$((mw_w % 30)) -eq 0",
 		"dpkg --audit",
@@ -140,6 +143,10 @@ func TestAptQuiesceContract(t *testing.T) {
 		}
 	}
 	// Runtime-only: nothing persistent for revert to undo.
+	// The truncated comm also names the always-on shutdown helper: never match on it.
+	if strings.Contains(aptQuiesce, "unattended-upgr'") || strings.Contains(aptQuiesce, "|unattended-upgr") {
+		t.Errorf("aptQuiesce must not match unattended-upgrade by its truncated comm:\n%s", aptQuiesce)
+	}
 	for _, bad := range []string{"systemctl disable", "systemctl mask", "systemctl enable", "<<", "stdbuf"} {
 		if strings.Contains(aptQuiesce, bad) {
 			t.Errorf("aptQuiesce must not contain %q:\n%s", bad, aptQuiesce)

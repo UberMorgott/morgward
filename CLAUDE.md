@@ -50,7 +50,9 @@ gh issue create --repo UberMorgott/quality-gate --title "<what broke>" --body "<
   `NEEDRESTART_MODE=a`, `NEEDRESTART_SUSPEND=1`, `UCF_FORCE_CONFFOLD=1`, the needrestart
   drop-in, `aptQuiesce`, and a per-boot index refresh. `aptQuiesce` runs before any
   lock-taking apt: stops active `apt-daily{,-upgrade}.timer` (restarted via EXIT trap;
-  runtime-only, no revert), `systemctl stop --no-block` both services, waits up to
+  runtime-only, no revert), `systemctl stop --no-block` both services, SIGTERMs the
+  unattended-upgrade main process by argv (`aptUURegex`; KillMode=process; never the
+  `unattended-upgrade-shutdown` helper, same truncated comm), waits up to
   `AptQuiesceWaitSec` (600s) for lock holders with one status line per 30s, then
   `dpkg --configure -a` if `dpkg --audit` reports an interrupted run. `AptUpdateMarker` is `/run/morgward-apt-updated`;
   stamp only after success, swallow refresh failure so later steps retry.

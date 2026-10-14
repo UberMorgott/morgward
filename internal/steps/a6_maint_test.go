@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -40,21 +41,35 @@ func TestTimeSyncScriptShellSyntax(t *testing.T) {
 // lock holder that clears after two probes, an interrupted dpkg run, and a script
 // that exits 7. The timers must be stopped then restarted on EXIT, the exit status
 // preserved, one status line printed (not one per probe), and dpkg finished.
-func TestAptQuiesceBehavior(t *testing.T) {
-	bash, _ := exec.LookPath("bash")
-	if bash == "" {
-		t.Skip("no bash")
-	}
+// Fake process table rows: pid|comm|cmdline. The shutdown helper runs on every
+// Ubuntu box (unattended-upgrades.service) and shares the truncated comm.
+const (
+	procShutdownHelper = "900|unattended-upgr|/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal\n"
+	procUUMain         = "3152|unattended-upgr|/usr/bin/python3 /usr/bin/unattended-upgrade\n"
+)
+
+// runAptQuiesce runs aptQuiesce + a body that exits 7 under real bash, with
+// systemctl/fuser/pgrep/pkill/ps/sleep/dpkg stubbed as shell functions. pgrep/pkill
+// apply the script's REAL patterns to the fake process table (-x on comm, -f on
+// cmdline, like procps); pkill removes what it signals. fuser reports PID 4242 as a
+// lock holder for the first fuserHolds probes. dpkg --audit reports an interrupted run.
+func runAptQuiesce(t *testing.T, bash, procs string, fuserHolds int) string {
+	t.Helper()
 	stubs := "exec 3>&1\n" +
-		"systemctl() { echo \"CALL systemctl $*\" >&3; [ \"$1\" = is-active ] && return 0; return 0; }\n" +
-		"fuser() { n=$(cat cnt 2>/dev/null || echo 0); echo $((n+1)) > cnt; [ \"$n\" -lt 2 ] && echo ' 4242'; return 0; }\n" +
-		"pgrep() { return 1; }\n" +
-		"ps() { echo '4242 unattended-upgr'; }\n" +
-		"sleep() { :; }\n" +
+		"systemctl() { echo \"CALL systemctl $*\" >&3; return 0; }\n" +
+		"mw_match() { while IFS='|' read -r p c a; do if [ \"$1\" = -x ]; then f=$c; else f=$a; fi; if [ \"$1\" = -x ]; then printf '%s\\n' \"$f\" | grep -Eqx \"$2\" && echo \"$p\"; else printf '%s\\n' \"$f\" | grep -Eq \"$2\" && echo \"$p\"; fi; done < procs; return 0; }\n" +
+		"pgrep() { mw_match \"$@\"; }\n" +
+		"pkill() { s=$1; shift; for p in $(mw_match \"$@\"); do echo \"KILL $s $p\" >&3; grep -v \"^$p|\" procs > procs.n || true; mv procs.n procs; done; return 0; }\n" +
+		"fuser() { n=$(cat cnt 2>/dev/null || echo 0); echo $((n+1)) > cnt; [ \"$n\" -lt " + strconv.Itoa(fuserHolds) + " ] && echo ' 4242'; return 0; }\n" +
+		"ps() { echo '4242 dpkg'; }\n" +
+		"sleep() { echo 'CALL sleep' >&3; }\n" +
 		// Git-for-Windows bash resolves bare `sort` to Windows sort.exe.
 		"sort() { /usr/bin/sort \"$@\"; }\n" +
 		"dpkg() { echo \"CALL dpkg $*\" >&3; [ \"$1\" = --audit ] && echo 'half-configured'; return 0; }\n"
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "procs"), []byte(procs), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(t.Context(), bash, "-s") // #nosec G204 -- bash from LookPath, script is ours
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stubs + "set -e\n" + aptQuiesce + "echo BODY\nexit 7\n")
@@ -63,7 +78,48 @@ func TestAptQuiesceBehavior(t *testing.T) {
 	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
 		t.Fatalf("exit status must be preserved through the EXIT trap (want 7): %v\n%s", err, out)
 	}
-	o := string(out)
+	return string(out)
+}
+
+// The always-on shutdown helper with free locks must cause NO wait and must not be
+// signalled, and dpkg recovery still runs (regression: `pgrep -x unattended-upgr`
+// matched the helper, so every apt script waited the full cap and skipped recovery).
+// A running unattended-upgrade main process gets SIGTERM (KillMode=process means
+// systemctl stop alone never reaches it).
+func TestAptQuiesceUnattendedUpgradeTargeting(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	for name, tc := range map[string]struct {
+		procs    string
+		wantKill bool
+	}{
+		"helper only, locks free": {procShutdownHelper, false},
+		"u-u running":             {procShutdownHelper + procUUMain, true},
+	} {
+		o := runAptQuiesce(t, bash, tc.procs, 0)
+		if strings.Contains(o, "CALL sleep") || strings.Contains(o, "waiting for apt automation") {
+			t.Errorf("%s: must not wait with free locks:\n%s", name, o)
+		}
+		if strings.Contains(o, "KILL -TERM 900") {
+			t.Errorf("%s: shutdown helper must never be signalled:\n%s", name, o)
+		}
+		if got := strings.Contains(o, "KILL -TERM 3152"); got != tc.wantKill {
+			t.Errorf("%s: SIGTERM to unattended-upgrade main = %v, want %v:\n%s", name, got, tc.wantKill, o)
+		}
+		if !strings.Contains(o, "CALL dpkg --force-confdef --force-confold --configure -a") {
+			t.Errorf("%s: dpkg recovery must run once the lock is free:\n%s", name, o)
+		}
+	}
+}
+
+func TestAptQuiesceBehavior(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	o := runAptQuiesce(t, bash, procShutdownHelper, 2)
 	for _, want := range []string{
 		"CALL systemctl stop apt-daily.timer apt-daily-upgrade.timer",
 		"CALL systemctl stop --no-block apt-daily.service apt-daily-upgrade.service",
