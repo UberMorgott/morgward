@@ -130,8 +130,9 @@ func TestAptQuiesceContract(t *testing.T) {
 		"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service",
 		"fuser " + aptLockFiles,
 		"pgrep -x '" + aptToolComms + "'",
-		"MW_UU_RE='" + aptUURegex + "'",
-		"pkill -TERM -f \"$MW_UU_RE\"",
+		"MW_UU_RE='" + aptAutomationRegex + "'",
+		"kill -TERM \"$mw_p\"",
+		"  mw_apt_term\n  mw_h=$(mw_apt_holders)", // re-signal inside the wait loop
 		"pgrep -f \"$MW_UU_RE\"",
 		"-lt 600 ]",
 		"$((mw_w % 30)) -eq 0",

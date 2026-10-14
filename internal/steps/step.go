@@ -148,13 +148,19 @@ const AptQuiesceWaitSec = 600
 // aptLockFiles are the four apt/dpkg lock files apt-get and unattended-upgrade take.
 const aptLockFiles = "/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock"
 
-// aptUURegex matches the unattended-upgrade MAIN process by full argv
-// ("/usr/bin/python3 /usr/bin/unattended-upgrade [opts]"), excluding the persistent
-// "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown
-// --wait-for-signal" helper (unattended-upgrades.service), whose comm is the same
-// truncated "unattended-upgr". Anchored on an argv[0] containing python3, so it can
-// never match a pgrep/pkill/bash command line that merely carries the pattern text.
-const aptUURegex = `^[^ ]*python3[^ ]* /usr/bin/unattended-upgrade( |$)`
+// aptAutomationRegex matches, by full argv, the two apt-automation processes that
+// survive `systemctl stop apt-daily-upgrade.service` (KillMode=process):
+//   - the unattended-upgrade MAIN process ("/usr/bin/python3 /usr/bin/unattended-upgrade
+//     [opts]"), but NOT the persistent "/usr/bin/python3 /usr/share/unattended-upgrades/
+//     unattended-upgrade-shutdown --wait-for-signal" helper (unattended-upgrades.service),
+//     whose comm is the same truncated "unattended-upgr";
+//   - the "/bin/sh /usr/lib/apt/apt.systemd.daily lock_is_held ..." child (no trap in the
+//     script, so SIGTERM just ends it) — otherwise it spawns unattended-upgrade AFTER
+//     our first signal pass.
+//
+// Anchored on argv[0], so it never matches a pgrep/bash command line that merely
+// carries the pattern text.
+const aptAutomationRegex = `^([^ ]*python3[^ ]* /usr/bin/unattended-upgrade|[^ ]*sh /usr/lib/apt/apt\.systemd\.daily)( |$)`
 
 // aptToolComms are the exact process names (pgrep -x) of apt front-ends and dpkg.
 const aptToolComms = "apt|apt-get|aptitude|dpkg"
@@ -174,9 +180,10 @@ const aptToolComms = "apt|apt-get|aptitude|dpkg"
 //     and operator-disabled timers stay off.
 //  2. `systemctl stop --no-block` the two services (--no-block: apt-daily-upgrade
 //     .service has TimeoutStopSec=900). Its KillMode=process means systemd SIGTERMs
-//     only the apt.systemd.daily shell, so the unattended-upgrade child is SIGTERMed
-//     directly (aptUURegex); it then stops after its current commit (MinimalSteps)
-//     instead of running the whole upgrade.
+//     only the outer apt.systemd.daily shell; its lock_is_held child and the
+//     unattended-upgrade it spawns are SIGTERMed directly (aptAutomationRegex), each
+//     PID once, re-checked on every wait iteration so a u-u spawned after the first
+//     pass is still caught. u-u then stops after its current commit (MinimalSteps).
 //  3. Bounded wait (AptQuiesceWaitSec) for remaining lock holders: fuser on the lock
 //     files, pgrep -x on apt tool comms, and the unattended-upgrade main process.
 //     NOT `pgrep -x unattended-upgr`: that truncated comm also matches the always-on
@@ -197,8 +204,10 @@ var aptQuiesce = "MW_APT_TIMERS=\"\"\n" +
 	"  trap \"systemctl start$MW_APT_TIMERS >/dev/null 2>&1 || true\" EXIT\n" +
 	"fi\n" +
 	"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true\n" +
-	"MW_UU_RE='" + aptUURegex + "'\n" +
-	"pkill -TERM -f \"$MW_UU_RE\" 2>/dev/null || true\n" +
+	"MW_UU_RE='" + aptAutomationRegex + "'\n" +
+	"mw_sig=\"\"\n" +
+	"mw_apt_term() { for mw_p in $(pgrep -f \"$MW_UU_RE\" 2>/dev/null); do case \" $mw_sig \" in *\" $mw_p \"*) ;; *) kill -TERM \"$mw_p\" 2>/dev/null || true; mw_sig=\"$mw_sig $mw_p\" ;; esac; done; }\n" +
+	"mw_apt_term\n" +
 	"mw_apt_holders() { { fuser " + aptLockFiles + " 2>/dev/null; pgrep -x '" + aptToolComms + "' 2>/dev/null; pgrep -f \"$MW_UU_RE\" 2>/dev/null; } | tr -s ' \\t' '\\n' | grep -E '^[0-9]+$' | sort -un | tr '\\n' ' '; }\n" +
 	"mw_w=0\n" +
 	"mw_h=$(mw_apt_holders)\n" +
@@ -206,6 +215,7 @@ var aptQuiesce = "MW_APT_TIMERS=\"\"\n" +
 	"  if [ $((mw_w % 30)) -eq 0 ]; then echo \"morgward: waiting for apt automation to release the dpkg lock (${mw_w}s): $(ps -o pid=,comm= -p \"$(echo $mw_h | tr ' ' ',')\" 2>/dev/null | tr -s ' \\n' ' ')\"; fi\n" +
 	"  sleep 5\n" +
 	"  mw_w=$((mw_w + 5))\n" +
+	"  mw_apt_term\n" +
 	"  mw_h=$(mw_apt_holders)\n" +
 	"done\n" +
 	"if [ -z \"$mw_h\" ] && [ -n \"$(dpkg --audit 2>/dev/null)\" ]; then\n" +
