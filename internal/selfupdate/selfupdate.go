@@ -77,8 +77,8 @@ func (r *Release) GreaterThan(current string) bool { return compareVer(r.version
 // output names: `dist/<repo>-<goos>-<goarch>[.exe]`.
 func AssetName(slug string) string {
 	repo := slug
-	if i := strings.LastIndex(slug, "/"); i >= 0 {
-		repo = slug[i+1:]
+	if _, after, ok := strings.CutLast(slug, "/"); ok {
+		repo = after
 	}
 	name := repo + "-" + runtime.GOOS + "-" + runtime.GOARCH
 	if runtime.GOOS == "windows" {

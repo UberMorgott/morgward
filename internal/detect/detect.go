@@ -504,8 +504,8 @@ func classifyCgroupOrigin(cgroupLine string) string {
 	}
 	// Reduce "N:controllers:/path" (v1) or "0::/path" (v2) to just the path part.
 	path := line
-	if i := strings.LastIndex(line, ":"); i >= 0 {
-		path = line[i+1:]
+	if _, after, ok := strings.CutLast(line, ":"); ok {
+		path = after
 	}
 	low := strings.ToLower(path)
 
@@ -580,11 +580,10 @@ func dockerPortNames(psOut string) map[int]string {
 			}
 			hostPart := mapping[:arrow] // e.g. "0.0.0.0:8000-8001" or ":::443" or "[::]:443"
 			// Host published port(s) are after the LAST ':'.
-			colon := strings.LastIndex(hostPart, ":")
-			if colon < 0 {
+			_, portTok, ok := strings.CutLast(hostPart, ":")
+			if !ok {
 				continue
 			}
-			portTok := hostPart[colon+1:]
 			for _, p := range expandPortRange(portTok) {
 				if _, exists := m[p]; !exists {
 					m[p] = name

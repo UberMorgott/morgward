@@ -292,6 +292,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.scrollBy(-wheelStep)
 		case tea.MouseWheelDown:
 			m = m.scrollBy(wheelStep)
+		case tea.MouseNone, tea.MouseLeft, tea.MouseMiddle, tea.MouseRight,
+			tea.MouseWheelLeft, tea.MouseWheelRight, tea.MouseBackward,
+			tea.MouseForward, tea.MouseButton10, tea.MouseButton11:
+			// Only vertical wheel scrolls the panes; other buttons are no-ops here.
 		}
 		return m, nil
 
