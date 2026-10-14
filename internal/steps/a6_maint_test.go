@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,53 @@ func TestTimeSyncScriptShellSyntax(t *testing.T) {
 		if out, err := exec.CommandContext(t.Context(), bash, "-n", p).CombinedOutput(); err != nil {
 			t.Errorf("%s: bash -n rejected the script: %v\n%s\n---\n%s", name, err, out, s)
 		}
+	}
+}
+
+// aptQuiesce run for real (where bash exists) against shell-function stubs: a
+// lock holder that clears after two probes, an interrupted dpkg run, and a script
+// that exits 7. The timers must be stopped then restarted on EXIT, the exit status
+// preserved, one status line printed (not one per probe), and dpkg finished.
+func TestAptQuiesceBehavior(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	stubs := "exec 3>&1\n" +
+		"systemctl() { echo \"CALL systemctl $*\" >&3; [ \"$1\" = is-active ] && return 0; return 0; }\n" +
+		"fuser() { n=$(cat cnt 2>/dev/null || echo 0); echo $((n+1)) > cnt; [ \"$n\" -lt 2 ] && echo ' 4242'; return 0; }\n" +
+		"pgrep() { return 1; }\n" +
+		"ps() { echo '4242 unattended-upgr'; }\n" +
+		"sleep() { :; }\n" +
+		// Git-for-Windows bash resolves bare `sort` to Windows sort.exe.
+		"sort() { /usr/bin/sort \"$@\"; }\n" +
+		"dpkg() { echo \"CALL dpkg $*\" >&3; [ \"$1\" = --audit ] && echo 'half-configured'; return 0; }\n"
+	dir := t.TempDir()
+	cmd := exec.CommandContext(t.Context(), bash, "-s") // #nosec G204 -- bash from LookPath, script is ours
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stubs + "set -e\n" + aptQuiesce + "echo BODY\nexit 7\n")
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
+		t.Fatalf("exit status must be preserved through the EXIT trap (want 7): %v\n%s", err, out)
+	}
+	o := string(out)
+	for _, want := range []string{
+		"CALL systemctl stop apt-daily.timer apt-daily-upgrade.timer",
+		"CALL systemctl stop --no-block apt-daily.service apt-daily-upgrade.service",
+		"CALL dpkg --force-confdef --force-confold --configure -a",
+		"BODY",
+		"CALL systemctl start apt-daily.timer apt-daily-upgrade.timer",
+	} {
+		if !strings.Contains(o, want) {
+			t.Errorf("missing %q in:\n%s", want, o)
+		}
+	}
+	if n := strings.Count(o, "waiting for apt automation"); n != 1 {
+		t.Errorf("want exactly 1 status line, got %d:\n%s", n, o)
+	}
+	if strings.Index(o, "BODY") > strings.Index(o, "CALL systemctl start") {
+		t.Errorf("timers must restart only on EXIT, after the script body:\n%s", o)
 	}
 }
 

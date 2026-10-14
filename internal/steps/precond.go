@@ -22,7 +22,7 @@ func (Precond) Run(ctx *Context) (Status, string, error) {
 	// then no-ops). It therefore takes the prelude WITHOUT aptUpdateOnce: the full
 	// prelude would refresh the index a second time for nothing.
 	ctx.Log.Detail("apt-get update (apt index gate)…")
-	upd := ctx.Cli.Sudo(aptPreludeNoUpdate() + aptGet + " update\n")
+	upd := ctx.Cli.Sudo(preAptUpdateScript())
 	if upd.RC != 0 {
 		return StatusFail, "apt-get update failed: " + firstLine(upd.Stderr), fmt.Errorf("apt index refresh failed")
 	}
@@ -82,6 +82,12 @@ unset ADMIN_PW`, admin, sshx.SecretMarkerPrefix)
 	}
 
 	return StatusOK, fmt.Sprintf("admin user %q ready, sshusers group set, apt index fresh%s", admin, pwNote), nil
+}
+
+// preAptUpdateScript is PRE's hard-gate index refresh: the no-update prelude
+// (which quiesces boot-time apt automation first) plus an unconditional update.
+func preAptUpdateScript() string {
+	return aptPreludeNoUpdate() + aptGet + " update\n"
 }
 
 // putAuthorizedKey writes the key line into the user's authorized_keys via base64.

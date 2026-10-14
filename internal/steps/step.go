@@ -136,8 +136,64 @@ func aptPreludeNoUpdate() string {
 		"export NEEDRESTART_SUSPEND=1\n" +
 		"export UCF_FORCE_CONFFOLD=1\n" +
 		"mkdir -p /etc/needrestart/conf.d\n" +
-		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644")
+		putFile("/etc/needrestart/conf.d/99-morgward.conf", needrestartConf, "0644") +
+		aptQuiesce
 }
+
+// AptQuiesceWaitSec caps how long aptQuiesce waits for a lock holder (normally
+// unattended-upgrade finishing its current package after SIGTERM) before handing
+// over to apt's own DPkg::Lock::Timeout.
+const AptQuiesceWaitSec = 600
+
+// aptLockFiles are the four apt/dpkg lock files apt-get and unattended-upgrade take.
+const aptLockFiles = "/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock"
+
+// aptQuiesce parks Ubuntu's apt automation for the duration of ONE script so the
+// script's own apt-get never races it for the dpkg lock. Root cause it fixes: on a
+// fresh boot apt-daily-upgrade.timer (Persistent=true, missed run) fires immediately
+// and unattended-upgrade holds /var/lib/dpkg/lock-frontend for longer than
+// DPkg::Lock::Timeout=300 on a slow box, so A8's full-upgrade died with "Unable to
+// acquire the dpkg frontend lock" (and apt-daily.timer's 12h RandomizedDelaySec can
+// re-fire mid-run at any time).
+//
+//  1. Stop apt-daily{,-upgrade}.timer ONLY if active, and restart exactly those on
+//     script EXIT (bash EXIT trap, list expanded when set so a second prelude in the
+//     same script cannot blank it; the script's exit status is preserved). Runtime-
+//     only: nothing enabled/disabled/masked, so there is nothing for revert to undo,
+//     and operator-disabled timers stay off.
+//  2. `systemctl stop --no-block` the two services: SIGTERM, which unattended-upgrade
+//     handles by finishing the CURRENT package and exiting cleanly. --no-block because
+//     apt-daily-upgrade.service is KillMode=process with a 900s TimeoutStopSec.
+//  3. Bounded wait (AptQuiesceWaitSec) for remaining lock holders (fuser on the lock
+//     files, plus pgrep for apt/dpkg/unattended-upgr), one status line per 30s
+//     instead of apt's per-second "Waiting for cache lock" redraws.
+//  4. If the lock is free and `dpkg --audit` reports an interrupted run, finish it
+//     with `dpkg --configure -a` (conffile-safe) so the caller's apt does not abort.
+//
+// Every command is guarded so a caller's `set -e` can never trip on it. Timeout is
+// not fatal: the caller's apt-get still waits DPkg::Lock::Timeout on its own.
+var aptQuiesce = "MW_APT_TIMERS=\"\"\n" +
+	"for mw_t in apt-daily.timer apt-daily-upgrade.timer; do\n" +
+	"  if systemctl is-active --quiet \"$mw_t\" 2>/dev/null; then MW_APT_TIMERS=\"$MW_APT_TIMERS $mw_t\"; fi\n" +
+	"done\n" +
+	"if [ -n \"$MW_APT_TIMERS\" ]; then\n" +
+	"  systemctl stop $MW_APT_TIMERS >/dev/null 2>&1 || true\n" +
+	"  trap \"systemctl start$MW_APT_TIMERS >/dev/null 2>&1 || true\" EXIT\n" +
+	"fi\n" +
+	"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true\n" +
+	"mw_apt_holders() { { fuser " + aptLockFiles + " 2>/dev/null; pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' 2>/dev/null; } | tr -s ' \\t' '\\n' | grep -E '^[0-9]+$' | sort -un | tr '\\n' ' '; }\n" +
+	"mw_w=0\n" +
+	"mw_h=$(mw_apt_holders)\n" +
+	"while [ -n \"$mw_h\" ] && [ \"$mw_w\" -lt " + fmt.Sprint(AptQuiesceWaitSec) + " ]; do\n" +
+	"  if [ $((mw_w % 30)) -eq 0 ]; then echo \"morgward: waiting for apt automation to release the dpkg lock (${mw_w}s): $(ps -o pid=,comm= -p \"$(echo $mw_h | tr ' ' ',')\" 2>/dev/null | tr -s ' \\n' ' ')\"; fi\n" +
+	"  sleep 5\n" +
+	"  mw_w=$((mw_w + 5))\n" +
+	"  mw_h=$(mw_apt_holders)\n" +
+	"done\n" +
+	"if [ -z \"$mw_h\" ] && [ -n \"$(dpkg --audit 2>/dev/null)\" ]; then\n" +
+	"  echo 'morgward: finishing an interrupted dpkg run (dpkg --configure -a)'\n" +
+	"  dpkg --force-confdef --force-confold --configure -a >/dev/null 2>&1 || true\n" +
+	"fi\n"
 
 // aptConfOpts stops dpkg from ever prompting about a modified conffile (keep the
 // installed file, take the package default where there is no local change) and

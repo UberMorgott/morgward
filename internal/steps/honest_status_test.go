@@ -117,6 +117,63 @@ func TestAptPreludeContract(t *testing.T) {
 	}
 }
 
+// Boot-time apt-daily-upgrade (unattended-upgrade) outliving DPkg::Lock::Timeout
+// killed A8's full-upgrade on a fresh box. Every apt prelude must park apt
+// automation (runtime-only, restored on EXIT) and wait for lock holders BEFORE any
+// lock-taking apt-get, and finish an interrupted dpkg run.
+func TestAptQuiesceContract(t *testing.T) {
+	for _, want := range []string{
+		"systemctl is-active --quiet \"$mw_t\"",
+		"apt-daily.timer apt-daily-upgrade.timer",
+		"systemctl stop $MW_APT_TIMERS",
+		"trap \"systemctl start$MW_APT_TIMERS",
+		"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service",
+		"fuser " + aptLockFiles,
+		"pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr'",
+		"-lt 600 ]",
+		"$((mw_w % 30)) -eq 0",
+		"dpkg --audit",
+		"dpkg --force-confdef --force-confold --configure -a",
+	} {
+		if !strings.Contains(aptQuiesce, want) {
+			t.Errorf("aptQuiesce must contain %q:\n%s", want, aptQuiesce)
+		}
+	}
+	// Runtime-only: nothing persistent for revert to undo.
+	for _, bad := range []string{"systemctl disable", "systemctl mask", "systemctl enable", "<<", "stdbuf"} {
+		if strings.Contains(aptQuiesce, bad) {
+			t.Errorf("aptQuiesce must not contain %q:\n%s", bad, aptQuiesce)
+		}
+	}
+	// Both preludes quiesce, and BEFORE any lock-taking apt-get.
+	for name, p := range map[string]string{"aptPrelude": aptPrelude(), "aptPreludeNoUpdate": aptPreludeNoUpdate()} {
+		q := strings.Index(p, aptQuiesce)
+		if q < 0 {
+			t.Fatalf("%s must include aptQuiesce:\n%s", name, p)
+		}
+		if a := strings.Index(p, aptGet); a >= 0 && a < q {
+			t.Errorf("%s runs apt-get before quiescing apt automation:\n%s", name, p)
+		}
+		if strings.Index(p, "DEBIAN_FRONTEND=noninteractive") > q {
+			t.Errorf("%s must export the non-interactive env before dpkg --configure -a:\n%s", name, p)
+		}
+	}
+}
+
+// The exact scripts PRE and A8 send: quiesce precedes their lock-taking apt-get.
+func TestPreAndA8QuiesceBeforeApt(t *testing.T) {
+	for name, s := range map[string]string{"PRE": preAptUpdateScript(), "A8": a8UpgradeScript()} {
+		q := strings.Index(s, aptQuiesce)
+		a := strings.Index(s, aptGet)
+		if q < 0 || a < 0 || q > a {
+			t.Errorf("%s: quiesce (at %d) must precede the first %q (at %d):\n%s", name, q, aptGet, a, s)
+		}
+	}
+	if !strings.Contains(a8UpgradeScript(), aptGet+" full-upgrade -y"+aptConfOpts) {
+		t.Errorf("A8 script lost its full-upgrade line:\n%s", a8UpgradeScript())
+	}
+}
+
 // A lost SSH transport (rc=-1 / a transport error) must be told apart from a
 // command that ran and exited non-zero — the two lead to different verdicts when a
 // step follows a long command with a reachability verify (B3).

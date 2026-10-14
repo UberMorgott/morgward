@@ -11,6 +11,14 @@ import (
 	"github.com/UberMorgott/morgward/internal/detect"
 )
 
+// a8UpgradeScript is A8's upgrade script: the no-update prelude (which quiesces
+// boot-time apt-daily/unattended-upgrades before taking the dpkg lock), then an
+// explicit index refresh and the full-upgrade.
+func a8UpgradeScript() string {
+	return aptPreludeNoUpdate() + aptGet + " update\n" +
+		aptGet + " full-upgrade -y" + aptConfOpts
+}
+
 // A8Upgrade implements §A8: full upgrade then reboot, sequenced right after A1.
 // Pre-gates the reboot (no armed timer, firewall persisted + SSH port in the
 // persisted ruleset), then anchors reconnection on a boot_id change.
@@ -70,8 +78,7 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	// aptPreludeNoUpdate: A8 always refreshes the index explicitly right below, so
 	// the prelude's once-per-boot update would only double the (silent, up to 300s
 	// lock-wait) round-trip.
-	up := ctx.Cli.Sudo(aptPreludeNoUpdate() + aptGet + ` update
-` + aptGet + ` full-upgrade -y` + aptConfOpts)
+	up := ctx.Cli.Sudo(a8UpgradeScript())
 	if up.RC != 0 {
 		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
 	}
