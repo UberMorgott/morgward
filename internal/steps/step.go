@@ -182,7 +182,7 @@ const aptToolComms = "apt|apt-get|aptitude|dpkg"
 //     .service has TimeoutStopSec=900). Its KillMode=process means systemd SIGTERMs
 //     only the outer apt.systemd.daily shell; its lock_is_held child and the
 //     unattended-upgrade it spawns are SIGTERMed directly (aptAutomationRegex), each
-//     PID once, re-checked on every wait iteration so a u-u spawned after the first
+//     process (PID + /proc starttime, so a reused PID counts as new) once, re-checked on every wait iteration so a u-u spawned after the first
 //     pass is still caught. u-u then stops after its current commit (MinimalSteps).
 //  3. Bounded wait (AptQuiesceWaitSec) for remaining lock holders: fuser on the lock
 //     files, pgrep -x on apt tool comms, and the unattended-upgrade main process.
@@ -206,7 +206,10 @@ var aptQuiesce = "MW_APT_TIMERS=\"\"\n" +
 	"systemctl stop --no-block apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true\n" +
 	"MW_UU_RE='" + aptAutomationRegex + "'\n" +
 	"mw_sig=\"\"\n" +
-	"mw_apt_term() { for mw_p in $(pgrep -f \"$MW_UU_RE\" 2>/dev/null); do case \" $mw_sig \" in *\" $mw_p \"*) ;; *) kill -TERM \"$mw_p\" 2>/dev/null || true; mw_sig=\"$mw_sig $mw_p\" ;; esac; done; }\n" +
+	": \"${MW_PROC:=/proc}\"\n" +
+	// Dedupe key = PID + starttime (stat field 22 = 20th field after the LAST ") ",
+	// since comm may contain spaces/parens), so a reused PID is signalled again.
+	"mw_apt_term() { for mw_p in $(pgrep -f \"$MW_UU_RE\" 2>/dev/null); do mw_k=\"$mw_p:$(sed 's/.*) //' \"$MW_PROC/$mw_p/stat\" 2>/dev/null | cut -d' ' -f20)\"; case \" $mw_sig \" in *\" $mw_k \"*) ;; *) kill -TERM \"$mw_p\" 2>/dev/null || true; mw_sig=\"$mw_sig $mw_k\" ;; esac; done; }\n" +
 	"mw_apt_term\n" +
 	"mw_apt_holders() { { fuser " + aptLockFiles + " 2>/dev/null; pgrep -x '" + aptToolComms + "' 2>/dev/null; pgrep -f \"$MW_UU_RE\" 2>/dev/null; } | tr -s ' \\t' '\\n' | grep -E '^[0-9]+$' | sort -un | tr '\\n' ' '; }\n" +
 	"mw_w=0\n" +

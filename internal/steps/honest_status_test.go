@@ -132,6 +132,8 @@ func TestAptQuiesceContract(t *testing.T) {
 		"pgrep -x '" + aptToolComms + "'",
 		"MW_UU_RE='" + aptAutomationRegex + "'",
 		"kill -TERM \"$mw_p\"",
+		"mw_k=\"$mw_p:$(sed 's/.*) //' \"$MW_PROC/$mw_p/stat\" 2>/dev/null | cut -d' ' -f20)\"",
+		": \"${MW_PROC:=/proc}\"",
 		"  mw_apt_term\n  mw_h=$(mw_apt_holders)", // re-signal inside the wait loop
 		"pgrep -f \"$MW_UU_RE\"",
 		"-lt 600 ]",

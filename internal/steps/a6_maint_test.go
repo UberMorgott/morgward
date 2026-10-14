@@ -50,16 +50,20 @@ const (
 // the script's REAL patterns to the fake process table (-x on comm, -f on cmdline,
 // like procps); kill removes what it signals. fuser reports PID 4242 as a lock holder
 // for the first fuserHolds probes, and on its FIRST probe (after the initial signal
-// pass) adds lateProcs — a process spawned after that pass. dpkg --audit reports an
+// pass) adds lateProcs — a process spawned after that pass — which exits on its own
+// at probe fuserHolds if nothing killed it. dpkg --audit reports an
 // interrupted run.
-func runAptQuiesce(t *testing.T, bash, procs, lateProcs string, fuserHolds int) string {
+// Every fake PID gets a /proc-style stat (starttime 100, comm with spaces and parens
+// to exercise the after-last-")" parse) under MW_PROC; lateStats overrides starttimes
+// together with lateProcs (a reused PID).
+func runAptQuiesce(t *testing.T, bash, procs, lateProcs string, fuserHolds int, lateStats map[string]int) string {
 	t.Helper()
 	stubs := "exec 3>&1\n" +
 		"systemctl() { echo \"CALL systemctl $*\" >&3; return 0; }\n" +
 		"mw_match() { while IFS='|' read -r p c a; do if [ \"$1\" = -x ]; then f=$c; else f=$a; fi; if [ \"$1\" = -x ]; then printf '%s\\n' \"$f\" | grep -Eqx \"$2\" && echo \"$p\"; else printf '%s\\n' \"$f\" | grep -Eq \"$2\" && echo \"$p\"; fi; done < procs; return 0; }\n" +
 		"pgrep() { mw_match \"$@\"; }\n" +
 		"kill() { echo \"KILL $1 $2\" >&3; grep -v \"^$2|\" procs > procs.n || true; mv procs.n procs; return 0; }\n" +
-		"fuser() { n=$(cat cnt 2>/dev/null || echo 0); echo $((n+1)) > cnt; [ \"$n\" -eq 0 ] && cat late >> procs; [ \"$n\" -lt " + strconv.Itoa(fuserHolds) + " ] && echo ' 4242'; return 0; }\n" +
+		"fuser() { n=$(cat cnt 2>/dev/null || echo 0); echo $((n+1)) > cnt; [ \"$n\" -eq 0 ] && cat late >> procs && cp -r latestat/. proc/; [ \"$n\" -eq " + strconv.Itoa(fuserHolds) + " ] && { grep -vxFf late procs > procs.n || true; mv procs.n procs; }; [ \"$n\" -lt " + strconv.Itoa(fuserHolds) + " ] && echo ' 4242'; return 0; }\n" +
 		"ps() { echo '4242 dpkg'; }\n" +
 		"sleep() { echo 'CALL sleep' >&3; }\n" +
 		// Git-for-Windows bash resolves bare `sort` to Windows sort.exe.
@@ -71,9 +75,31 @@ func runAptQuiesce(t *testing.T, bash, procs, lateProcs string, fuserHolds int) 
 			t.Fatal(err)
 		}
 	}
+	writeStat := func(root, pid string, start int) {
+		d := filepath.Join(dir, root, pid)
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		// Fields 3..21 = state + 18 zeros, field 22 = starttime.
+		stat := pid + " (a) b (x)) S " + strings.Repeat("0 ", 18) + strconv.Itoa(start) + " 0 0\n"
+		if err := os.WriteFile(filepath.Join(d, "stat"), []byte(stat), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "latestat"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(procs+lateProcs, "\n") {
+		if pid, _, ok := strings.Cut(line, "|"); ok {
+			writeStat("proc", pid, 100)
+		}
+	}
+	for pid, start := range lateStats {
+		writeStat("latestat", pid, start)
+	}
 	cmd := exec.CommandContext(t.Context(), bash, "-s") // #nosec G204 -- bash from LookPath, script is ours
 	cmd.Dir = dir
-	cmd.Stdin = strings.NewReader(stubs + "set -e\n" + aptQuiesce + "echo BODY\nexit 7\n")
+	cmd.Stdin = strings.NewReader(stubs + "MW_PROC=proc\nset -e\n" + aptQuiesce + "echo BODY\nexit 7\n")
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
@@ -99,7 +125,7 @@ func TestAptQuiesceUnattendedUpgradeTargeting(t *testing.T) {
 		"helper only, locks free": {procShutdownHelper, false},
 		"u-u running":             {procShutdownHelper + procUUMain, true},
 	} {
-		o := runAptQuiesce(t, bash, tc.procs, "", 0)
+		o := runAptQuiesce(t, bash, tc.procs, "", 0, nil)
 		if strings.Contains(o, "CALL sleep") || strings.Contains(o, "waiting for apt automation") {
 			t.Errorf("%s: must not wait with free locks:\n%s", name, o)
 		}
@@ -124,7 +150,7 @@ func TestAptQuiesceResignalsLateUnattendedUpgrade(t *testing.T) {
 	if bash == "" {
 		t.Skip("no bash")
 	}
-	o := runAptQuiesce(t, bash, procShutdownHelper+procDailyChild, procUUMain, 2)
+	o := runAptQuiesce(t, bash, procShutdownHelper+procDailyChild, procUUMain, 2, nil)
 	for _, want := range []string{"KILL -TERM 777", "KILL -TERM 3152", "CALL dpkg --force-confdef --force-confold --configure -a"} {
 		if !strings.Contains(o, want) {
 			t.Errorf("missing %q in:\n%s", want, o)
@@ -138,6 +164,25 @@ func TestAptQuiesceResignalsLateUnattendedUpgrade(t *testing.T) {
 	}
 }
 
+// The signal dedupe key is PID + starttime: when the signalled apt.systemd.daily
+// child's PID 777 is reused by a NEW unattended-upgrade (different starttime) it is
+// signalled again; the same PID + starttime is signalled only once.
+func TestAptQuiesceSignalDedupeByStarttime(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	reused := "777|unattended-upgr|/usr/bin/python3 /usr/bin/unattended-upgrade\n"
+	if o := runAptQuiesce(t, bash, procShutdownHelper+procDailyChild, reused, 2, map[string]int{"777": 200}); strings.Count(o, "KILL -TERM 777") != 2 {
+		t.Errorf("reused PID with a new starttime must be signalled again (want 2 SIGTERMs):\n%s", o)
+	}
+	// Same PID + starttime: the stub kill removes the process, so re-add it as a
+	// survivor via lateProcs with the SAME starttime — it must not be re-signalled.
+	if o := runAptQuiesce(t, bash, procShutdownHelper+procDailyChild, reused, 2, nil); strings.Count(o, "KILL -TERM 777") != 1 {
+		t.Errorf("same PID + starttime must be signalled only once:\n%s", o)
+	}
+}
+
 // aptQuiesce run for real against stubs: a lock holder that clears after two
 // probes, an interrupted dpkg run, and a script that exits 7. The timers must be
 // stopped then restarted on EXIT, the exit status preserved, one status line printed
@@ -147,7 +192,7 @@ func TestAptQuiesceBehavior(t *testing.T) {
 	if bash == "" {
 		t.Skip("no bash")
 	}
-	o := runAptQuiesce(t, bash, procShutdownHelper, "", 2)
+	o := runAptQuiesce(t, bash, procShutdownHelper, "", 2, nil)
 	for _, want := range []string{
 		"CALL systemctl stop apt-daily.timer apt-daily-upgrade.timer",
 		"CALL systemctl stop --no-block apt-daily.service apt-daily-upgrade.service",
