@@ -17,38 +17,7 @@ vm.page-cluster = 0
 `
 
 func (a A67Memory) Run(ctx *Context) (Status, string, error) {
-	// Greenfield disables any pre-existing disk swap so zram runs alone. On a
-	// brownfield/in-use box the operator may rely on disk swap, and zram (default
-	// priority 100) is used first regardless, so the recommended zram-high + disk-low
-	// layout is kept intact — we skip the swapoff entirely.
-	disableDiskSwap := ""
-	if ctx.Facts.Greenfield {
-		disableDiskSwap = `# Disable disk swap if present (don't run zram alongside disk swap).
-# Tag each line we comment with a morgward marker so the A6.7 revert re-enables
-# ONLY swap morgward disabled — never swap the operator turned off themselves.
-if swapon --show=NAME --noheadings | grep -vq zram; then
-  swapoff -a 2>/dev/null || true
-  sed -i -E '/^[[:space:]]*#/!{/[[:space:]]swap[[:space:]]/{s/[[:space:]]*$/ # morgward-disabled-swap/;s/^/#/}}' /etc/fstab 2>/dev/null || true
-fi
-`
-	}
-
-	// systemd-zram-generator is REQUIRED (it is what this step is for); earlyoom is a
-	// nice-to-have. Installed on separate lines so a missing/renamed earlyoom cannot
-	// take the zram install down with it — and so the failure message can name which
-	// of the two actually did not land.
-	script := aptPrelude() +
-		aptInstall("systemd-zram-generator") +
-		aptInstallOptional("earlyoom") +
-		putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +
-		putFile("/etc/sysctl.d/99-zram.conf", zramSysctl, "0644") +
-		disableDiskSwap +
-		`systemctl daemon-reload
-systemctl start systemd-zram-setup@zram0.service 2>/dev/null || true
-systemctl enable --now earlyoom >/dev/null 2>&1 || true
-sysctl --system >/dev/null 2>&1
-`
-	if r := ctx.Cli.Sudo(script); r.RC != 0 {
+	if r := ctx.Cli.Sudo(memScript(ctx.Facts.Greenfield)); r.RC != 0 {
 		ctx.Log.Warn("memory setup rc=%d (verifying anyway)", r.RC)
 	}
 	zram := ctx.Cli.Sudo("swapon --show 2>/dev/null | grep -q zram && echo yes").Out()
@@ -62,6 +31,42 @@ sysctl --system >/dev/null 2>&1
 		detail += " (disk swap preserved: brownfield)"
 	}
 	return StatusOK, detail, nil
+}
+
+// memScript is the A6.7 apply script.
+func memScript(greenfield bool) string {
+	// Greenfield disables any pre-existing disk swap so zram runs alone. On a
+	// brownfield/in-use box the operator may rely on disk swap, and zram (default
+	// priority 100) is used first regardless, so the recommended zram-high + disk-low
+	// layout is kept intact — we skip the swapoff entirely.
+	disableDiskSwap := ""
+	if greenfield {
+		disableDiskSwap = `# Disable disk swap if present (don't run zram alongside disk swap).
+# Tag each line we comment with a morgward marker so the A6.7 revert re-enables
+# ONLY swap morgward disabled — never swap the operator turned off themselves.
+# Only once the generator is installed: a failed install must not leave NO swap.
+if ` + pkgInstalledCheck("systemd-zram-generator") + ` >/dev/null && swapon --show=NAME --noheadings | grep -vq zram; then
+  swapoff -a 2>/dev/null || true
+  sed -i -E '/^[[:space:]]*#/!{/[[:space:]]swap[[:space:]]/{s/[[:space:]]*$/ # morgward-disabled-swap/;s/^/#/}}' /etc/fstab 2>/dev/null || true
+fi
+`
+	}
+
+	// systemd-zram-generator is REQUIRED (it is what this step is for); earlyoom is a
+	// nice-to-have. Installed on separate lines so a missing/renamed earlyoom cannot
+	// take the zram install down with it — and so the failure message can name which
+	// of the two actually did not land.
+	return aptPrelude() +
+		aptInstall("systemd-zram-generator") +
+		aptInstallOptional("earlyoom") +
+		putFile("/etc/systemd/zram-generator.conf", zramConf, "0644") +
+		putFile("/etc/sysctl.d/99-zram.conf", zramSysctl, "0644") +
+		disableDiskSwap +
+		`systemctl daemon-reload
+systemctl start systemd-zram-setup@zram0.service 2>/dev/null || true
+systemctl enable --now earlyoom >/dev/null 2>&1 || true
+sysctl --system >/dev/null 2>&1
+`
 }
 
 // memVerdictDetail names WHAT did not come up, instead of a generic "not active".
