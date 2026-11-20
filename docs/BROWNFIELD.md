@@ -61,8 +61,9 @@ of manager: SSH allowance with INPUT/FORWARD DROP, mirrored for IPv6. Brownfield
 - Brownfield `coexistRuleset` leaves FORWARD policy/chains and existing Docker/NAT
   chains untouched; it never flushes them. Existing INPUT rules and their order remain.
 - The managed path snapshots both families and arms a 300-second `fw-rollback` timer.
-  After fresh login it disarms and saves with `netfilter-persistent`; missing SSH
-  persistence is an error. The ufw and deferred paths do not use this timer.
+  After fresh login it saves with `netfilter-persistent` and disarms only when the
+  save succeeded and both `rules.v4` and `rules.v6` open SSH; otherwise it fails with
+  the timer still armed (fail-open). The ufw and deferred paths do not use this timer.
 - The managed skip guard checks INPUT DROP plus SSH and every detected service port
   in both live IPv4 rules and `rules.v4`; a newly detected port prevents skipping.
 

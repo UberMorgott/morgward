@@ -177,26 +177,24 @@ echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debco
 		return StatusFail, "second-session verify FAILED, firewall rolled back: " + err.Error(), fmt.Errorf("firewall locked out the session")
 	}
 
-	// 5. Disarm timer + persist.
-	ctx.Cli.Sudo(disarmTimer("fw-rollback") + "netfilter-persistent save >/dev/null 2>&1\n")
-
-	// Confirm disarmed + persisted opens the SSH port.
-	timers := ctx.Cli.Sudo("systemctl list-timers --all 2>/dev/null | grep fw-rollback || true").Out()
-	pchk := ctx.Cli.Sudo(fmt.Sprintf(`grep -Eq -- '--dport %d( |$)' /etc/iptables/rules.v4 && echo ok`, port)).Out()
-	if timers != "" {
-		ctx.Log.Warn("fw-rollback timer still listed after disarm")
-	}
-	if pchk != "ok" {
+	// 5. Persist + verify the persisted files, and only THEN disarm. A failed save or
+	// a rules file without the SSH port leaves fw-rollback ARMED: it restores the
+	// pre-A1 ruleset within 300s, so the box fails open rather than booting into a
+	// ruleset nobody verified.
+	if r := ctx.Cli.Sudo(a1PersistScript(port)); r.RC != 0 {
 		// Name the ACTUAL cause instead of a generic "not persisted": when the package
-		// is genuinely absent, `netfilter-persistent save` never ran, so rules.v4 does
+		// is genuinely absent, `netfilter-persistent save` cannot run, so rules.v4 does
 		// not exist and A8's pre-reboot gate would later abort with a far more cryptic
 		// message. Say it here, at the step that owns it.
-		detail := "firewall not persisted with SSH port open in rules.v4"
+		detail := "firewall not persisted with SSH port open (" + firstLine(r.Stderr) + ")"
 		if persistInstallFailed && ctx.Cli.Sudo(pkgInstalledCheck("iptables-persistent")).Out() != "yes" {
-			detail = "iptables-persistent could not be installed (no install candidate for this release, or the apt/dpkg lock was held) — " +
-				"firewall rules are LIVE but would NOT survive a reboot"
+			detail = "iptables-persistent could not be installed (no install candidate for this release, or the apt/dpkg lock was held)"
 		}
-		return StatusFail, detail, fmt.Errorf("persistence incomplete")
+		return StatusFail, detail + " — fw-rollback left ARMED: the pre-A1 ruleset is restored within 300s", fmt.Errorf("persistence incomplete")
+	}
+	ctx.Cli.Sudo(disarmTimer("fw-rollback"))
+	if timers := ctx.Cli.Sudo("systemctl list-timers --all 2>/dev/null | grep fw-rollback || true").Out(); timers != "" {
+		ctx.Log.Warn("fw-rollback timer still listed after disarm")
 	}
 
 	if ctx.Facts.Greenfield {
@@ -206,6 +204,18 @@ echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debco
 	return StatusOK, fmt.Sprintf(
 		"coexist: INPUT DROP, SSH :%d + %d service port(s) kept open, FORWARD preserved, v6 mirrored, persisted",
 		port, nPorts), nil
+}
+
+// a1PersistScript saves the live ruleset and proves BOTH persisted files open the SSH
+// port (A1 always applies the v6 mirror). Exits non-zero, with the cause on stderr, on
+// a failed save or a missing port; it never disarms anything — the caller does that
+// only after this succeeds.
+func a1PersistScript(port int) string {
+	s := "netfilter-persistent save >/dev/null || { echo 'netfilter-persistent save failed' >&2; exit 1; }\n"
+	for _, f := range []string{"/etc/iptables/rules.v4", "/etc/iptables/rules.v6"} {
+		s += fmt.Sprintf("grep -Eq -- '--dport %[1]d( |$)' %[2]s || { echo '%[2]s lacks SSH port %[1]d' >&2; exit 1; }\n", port, f)
+	}
+	return s
 }
 
 // runUFW is the brownfield path for a box whose firewall is managed by ufw. ufw

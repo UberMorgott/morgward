@@ -56,6 +56,54 @@ func TestRulesetIdempotentOnRerun(t *testing.T) {
 	}
 }
 
+// A1 used to disarm fw-rollback before `netfilter-persistent save` and ignore its rc.
+// The persist script must fail on a failed save and on either rules file lacking the
+// SSH port (anchored: 2222 does not satisfy 22), so Run keeps the timer armed.
+func TestA1PersistScript(t *testing.T) {
+	want := "netfilter-persistent save >/dev/null || { echo 'netfilter-persistent save failed' >&2; exit 1; }\n" +
+		"grep -Eq -- '--dport 22( |$)' /etc/iptables/rules.v4 || { echo '/etc/iptables/rules.v4 lacks SSH port 22' >&2; exit 1; }\n" +
+		"grep -Eq -- '--dport 22( |$)' /etc/iptables/rules.v6 || { echo '/etc/iptables/rules.v6 lacks SSH port 22' >&2; exit 1; }\n"
+	if got := a1PersistScript(22); got != want {
+		t.Fatalf("a1PersistScript(22):\ngot  %q\nwant %q", got, want)
+	}
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	rule := "-A INPUT -p tcp -m tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT\n"
+	for name, tc := range map[string]struct {
+		saveRC   string
+		v4, v6   string
+		wantFail bool
+	}{
+		"ok":          {"0", rule, rule, false},
+		"save failed": {"1", rule, rule, true},
+		"v4 missing":  {"0", "", rule, true},
+		"v6 missing":  {"0", rule, "", true},
+		"2222 only":   {"0", strings.Replace(rule, "22 ", "2222 ", 1), rule, true},
+	} {
+		dir := t.TempDir()
+		v4, v6 := filepath.Join(dir, "rules.v4"), filepath.Join(dir, "rules.v6")
+		for p, c := range map[string]string{v4: tc.v4, v6: tc.v6} {
+			if c != "" {
+				if err := os.WriteFile(p, []byte(c), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		s := strings.NewReplacer("/etc/iptables/rules.v4", filepath.ToSlash(v4), "/etc/iptables/rules.v6", filepath.ToSlash(v6)).Replace(a1PersistScript(22))
+		p := filepath.Join(dir, "s.sh")
+		if err := os.WriteFile(p, []byte("netfilter-persistent() { return "+tc.saveRC+"; }\n"+s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		out, err := exec.CommandContext(t.Context(), bash, p).CombinedOutput()
+		if (err != nil) != tc.wantFail {
+			t.Errorf("%s: err=%v, wantFail=%v\n%s", name, err, tc.wantFail, out)
+		}
+	}
+}
+
 // TestAllPortsOpenAndPersistedGreenfield: greenfield only needs SSH :cfg.Port in
 // both the live ruleset and rules.v4 — service ports are irrelevant.
 func TestAllPortsOpenAndPersistedGreenfield(t *testing.T) {
