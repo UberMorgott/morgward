@@ -209,6 +209,24 @@ func TestTransportLost(t *testing.T) {
 	}
 }
 
+// A3 probed only fail2ban; a missing python3-systemd (mandatory for the systemd
+// backend) then failed the install instead of healing/skipping with its name.
+func TestA3CandidateProbeCoversPython3Systemd(t *testing.T) {
+	if a3Packages != "fail2ban python3-systemd" {
+		t.Fatalf("a3Packages = %q", a3Packages)
+	}
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	stub := "apt-cache() { case $2 in fail2ban) echo '  Candidate: 1.1';; python3-systemd) echo '  Candidate: (none)';; esac; }\n"
+	// #nosec G204 -- bash comes from exec.LookPath and the script is ours
+	out, err := exec.CommandContext(t.Context(), bash, "-c", stub+aptCandidateProbeScript(a3Packages)).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "python3-systemd" {
+		t.Errorf("missing = %q (err %v), want python3-systemd", out, err)
+	}
+}
+
 // A6.5 installs dig through the shared apt path (prelude + candidate heal + lock
 // timeout), only when dig is missing, bind9-dnsutils first, dnsutils as optional
 // fallback; neither install failing may fail the script (defaults take over).

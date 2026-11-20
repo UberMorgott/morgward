@@ -266,7 +266,7 @@ const aptEnableUniverse = ": \"${MW_APT_ETC:=/etc/apt}\"\n" +
 // no-op when every candidate exists.
 func aptEnsureCandidates(pkgs string) string {
 	refresh := aptGet + " update >/dev/null && : > " + AptUpdateMarker + " || true\n"
-	return "mw_nc_probe() { mw_nc=\"\"; for mw_pk in " + pkgs + "; do case \"$(LC_ALL=C apt-cache policy \"$mw_pk\" 2>/dev/null | awk '/Candidate:/{print $2}')\" in ''|'(none)') mw_nc=\"$mw_nc $mw_pk\" ;; esac; done; }\n" +
+	return aptCandidateProbe(pkgs) +
 		"mw_nc_probe\n" +
 		"if [ -n \"$mw_nc\" ]; then\n" +
 		"echo \"morgward: no install candidate for$mw_nc - refreshing the apt index\"\n" +
@@ -278,6 +278,12 @@ func aptEnsureCandidates(pkgs string) string {
 		aptEnableUniverse +
 		refresh +
 		"fi\n"
+}
+
+// aptCandidateProbe defines mw_nc_probe, which sets $mw_nc to the space-prefixed list
+// of pkgs that have no install candidate (unknown, or "Candidate: (none)").
+func aptCandidateProbe(pkgs string) string {
+	return "mw_nc_probe() { mw_nc=\"\"; for mw_pk in " + pkgs + "; do case \"$(LC_ALL=C apt-cache policy \"$mw_pk\" 2>/dev/null | awk '/Candidate:/{print $2}')\" in ''|'(none)') mw_nc=\"$mw_nc $mw_pk\" ;; esac; done; }\n"
 }
 
 // aptInstallOptional is aptInstall for a package whose absence must NOT fail the
