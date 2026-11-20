@@ -13,9 +13,10 @@ import (
 
 // a8UpgradeScript is A8's upgrade script: the no-update prelude (which quiesces
 // boot-time apt-daily/unattended-upgrades before taking the dpkg lock), then an
-// explicit index refresh and the full-upgrade.
+// explicit index refresh and the full-upgrade. `&&`: a failed refresh must fail the
+// step (rc of the script), not be masked by a full-upgrade against a stale index.
 func a8UpgradeScript() string {
-	return aptPreludeNoUpdate() + aptGet + " update\n" +
+	return aptPreludeNoUpdate() + aptGet + " update &&\n" +
 		aptGet + " full-upgrade -y" + aptConfOpts
 }
 
@@ -80,7 +81,7 @@ printf 'GATE v4=%%s v6=%%s dport=%%s\n' "$V4" "$V6" "$DP"`, port)
 	// lock-wait) round-trip.
 	up := ctx.Cli.Sudo(a8UpgradeScript())
 	if up.RC != 0 {
-		return StatusFail, "full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
+		return StatusFail, "apt-get update/full-upgrade failed: " + firstLine(up.Stderr), fmt.Errorf("upgrade failed")
 	}
 
 	// Count what the REAL run changed, from apt's own summary line. A pre-run

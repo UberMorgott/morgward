@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,31 @@ func TestFieldsParsing(t *testing.T) {
 	}
 	if fields("   \n\t ") != nil {
 		t.Errorf("fields(blank) must be nil")
+	}
+}
+
+// A failed `apt-get update` used to be masked by a succeeding full-upgrade (the
+// script's rc is its last command). Run the post-prelude tail with apt-get stubbed.
+func TestA8UpdateFailureFailsScript(t *testing.T) {
+	s := a8UpgradeScript()
+	tail, ok := strings.CutPrefix(s, aptPreludeNoUpdate())
+	if !ok || tail != aptGet+" update &&\n"+aptGet+" full-upgrade -y"+aptConfOpts {
+		t.Fatalf("A8 tail: %q", tail)
+	}
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	for _, updRC := range []string{"0", "100"} {
+		stub := "apt-get() { echo \"$3\"; [ \"$3\" = update ] && return " + updRC + "; return 0; }\n"
+		// #nosec G204 -- bash comes from exec.LookPath and the script is ours
+		out, err := exec.CommandContext(t.Context(), bash, "-c", stub+tail).CombinedOutput()
+		if updRC == "0" && (err != nil || string(out) != "update\nfull-upgrade\n") {
+			t.Errorf("update ok: err=%v out=%q", err, out)
+		}
+		if updRC != "0" && (err == nil || strings.Contains(string(out), "full-upgrade")) {
+			t.Errorf("update failed: must fail without full-upgrade, err=%v out=%q", err, out)
+		}
 	}
 }
 
