@@ -158,16 +158,19 @@ func runShellSession(ctx context.Context, sess ptySession, sio ShellIO, resize <
 
 	// Wait for the remote shell in the background so ctx cancel can race it: on
 	// cancel we close the session (unblocking Wait) and return ctx.Err.
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- sess.Wait() }()
+	// The error travels via a variable published by close(waited), so reaping the
+	// goroutine on cancel is a plain struct{} receive with nothing to discard.
+	var waitErr error
+	waited := make(chan struct{})
+	go func() { waitErr = sess.Wait(); close(waited) }()
 
 	select {
 	case <-ctx.Done():
 		_ = sess.Close() // unblock Wait
-		<-waitErr        // reap the goroutine
+		<-waited         // reap the goroutine
 		return ctx.Err()
-	case err := <-waitErr:
-		return classifyShellExit(err)
+	case <-waited:
+		return classifyShellExit(waitErr)
 	}
 }
 
