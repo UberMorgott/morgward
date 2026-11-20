@@ -256,6 +256,22 @@ func TestAptInstallRetriesFetchFailureOnce(t *testing.T) {
 	}
 }
 
+// gnuSedBash returns bash, skipping when bash or GNU sed is missing: aptEnableUniverse
+// targets Ubuntu's GNU sed (`sed -i -E`, one-line `{…!s…}`), which BSD sed (macOS)
+// parses differently.
+func gnuSedBash(t *testing.T) string {
+	t.Helper()
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	// #nosec G204 -- bash comes from exec.LookPath and the script is ours
+	if exec.CommandContext(t.Context(), bash, "-c", "sed --version 2>/dev/null | grep -q GNU").Run() != nil {
+		t.Skip("no GNU sed")
+	}
+	return bash
+}
+
 // A3 probed only fail2ban; a missing python3-systemd (mandatory for the systemd
 // backend) then failed the install instead of healing/skipping with its name.
 func TestA3CandidateProbeCoversPython3Systemd(t *testing.T) {
@@ -343,10 +359,7 @@ func TestAptInstallEnsuresCandidates(t *testing.T) {
 // forced refresh alone (sources untouched); only a candidate still missing after it
 // enables universe; a present candidate costs no refresh at all.
 func TestAptEnsureCandidatesBehavior(t *testing.T) {
-	bash, _ := exec.LookPath("bash")
-	if bash == "" {
-		t.Skip("no bash")
-	}
+	bash := gnuSedBash(t)
 	// needUpdates = how many `apt-get update` calls until the candidate appears.
 	run := func(needUpdates int) (out, sources string) {
 		dir := t.TempDir()
@@ -394,10 +407,7 @@ func TestAptEnsureCandidatesBehavior(t *testing.T) {
 // Ubuntu deb822 stanzas and legacy ubuntu `deb` lines, idempotently, and leaves
 // comments, deb-src-less third-party lines and already-complete entries alone.
 func TestAptEnableUniverseBehavior(t *testing.T) {
-	bash, _ := exec.LookPath("bash")
-	if bash == "" {
-		t.Skip("no bash")
-	}
+	bash := gnuSedBash(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "sources.list.d"), 0o750); err != nil {
 		t.Fatal(err)
