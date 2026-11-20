@@ -32,15 +32,6 @@ const dnsCalibrateScript = `#!/usr/bin/env bash
 CONF=/etc/systemd/resolved.conf.d/99-morgward-dns.conf
 mkdir -p /etc/systemd/resolved.conf.d
 
-# Ensure dig is available. The package holding it was RENAMED: bind9-dnsutils is
-# the real package, "dnsutils" only a transitional stub that may be gone on a newer
-# release — so try the real name first and fall back to the old one. If dig is still
-# missing we fall back to hardcoded defaults rather than failing the step.
-if ! command -v dig >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a UCF_FORCE_CONFFOLD=1 ` + aptGet + ` install -y -q` + aptConfOpts + ` bind9-dnsutils >/dev/null 2>&1 ||
-  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a UCF_FORCE_CONFFOLD=1 ` + aptGet + ` install -y -q` + aptConfOpts + ` dnsutils >/dev/null 2>&1 || true
-fi
-
 write_conf() {
   # $1 = "DNS line value". Written with printf (no heredoc) to stay quoting-safe.
   printf '%s\n' "[Resolve]" "DNS=$1" "FallbackDNS=1.1.1.1 8.8.8.8" "DNSOverTLS=opportunistic" "DNSSEC=allow-downgrade" "Cache=yes" > "$CONF"
@@ -172,10 +163,23 @@ fi
 exit 0
 `
 
+// dnsDigInstallScript installs dig through the shared apt path when it is missing.
+// The package was RENAMED: bind9-dnsutils is the real one, "dnsutils" a transitional
+// stub that may be gone on a newer release — so try the real name first, then the
+// old one as optional. Still no dig ⇒ the calibration script uses hardcoded defaults.
+func dnsDigInstallScript() string {
+	return "if ! command -v dig >/dev/null 2>&1; then\n" + aptPrelude() +
+		strings.TrimSuffix(aptInstall("bind9-dnsutils"), "\n") + " || {\n" +
+		aptInstallOptional("dnsutils") + "}\nfi\n"
+}
+
 func (A65DNS) Run(ctx *Context) (Status, string, error) {
 	if active := ctx.Cli.Run("systemctl is-active systemd-resolved").Out(); active != "active" {
 		return StatusSkip, "systemd-resolved not active (different resolver)", nil
 	}
+
+	// Best-effort: without dig the calibration script falls back to defaults.
+	ctx.Cli.Sudo(dnsDigInstallScript())
 
 	// Execute the calibration script by piping its base64-decoded body straight
 	// into bash — landing NO file on disk. A fixed /tmp path would be a

@@ -209,14 +209,38 @@ func TestTransportLost(t *testing.T) {
 	}
 }
 
-func TestDNSScriptTriesBothDnsutilsNames(t *testing.T) {
-	i := strings.Index(dnsCalibrateScript, "bind9-dnsutils")
-	j := strings.Index(dnsCalibrateScript, " dnsutils")
-	if i < 0 || j < 0 {
-		t.Fatalf("both package names must be attempted (bind9-dnsutils=%d dnsutils=%d)", i, j)
+// A6.5 installs dig through the shared apt path (prelude + candidate heal + lock
+// timeout), only when dig is missing, bind9-dnsutils first, dnsutils as optional
+// fallback; neither install failing may fail the script (defaults take over).
+func TestDNSDigInstallScript(t *testing.T) {
+	s := dnsDigInstallScript()
+	if !strings.HasPrefix(s, "if ! command -v dig >/dev/null 2>&1; then\n"+aptPrelude()) || !strings.HasSuffix(s, "fi\n") {
+		t.Fatalf("install must be gated on a missing dig and start with aptPrelude:\n%s", s)
 	}
-	if i > j {
-		t.Error("the real package bind9-dnsutils must be tried before the transitional stub")
+	if strings.Contains(dnsCalibrateScript, "apt-get") {
+		t.Error("the calibration script must not carry its own apt-get path")
+	}
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	body := s[strings.Index(s, "mw_nc_probe() {") : len(s)-len("fi\n")]
+	for name, tc := range map[string]struct{ failRe, want string }{
+		"real name works": {"^$", "bind9-dnsutils\n"},
+		"fallback":        {"bind9-dnsutils", "bind9-dnsutils\ndnsutils\n"},
+		"neither":         {".", "bind9-dnsutils\ndnsutils\n"},
+	} {
+		stub := "apt-cache() { echo '  Candidate: 1.0'; }\n" +
+			"apt-get() { echo \"${@: -1}\" >&2; echo \"${@: -1}\" | grep -Eq '" + tc.failRe + "' && return 100; return 0; }\n"
+		p := filepath.Join(t.TempDir(), "s.sh")
+		if err := os.WriteFile(p, []byte("set -e\n"+stub+body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		out, err := exec.CommandContext(t.Context(), bash, p).CombinedOutput()
+		if err != nil || string(out) != tc.want {
+			t.Errorf("%s: err=%v out=%q want %q", name, err, out, tc.want)
+		}
 	}
 }
 
