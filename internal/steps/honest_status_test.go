@@ -209,6 +209,53 @@ func TestTransportLost(t *testing.T) {
 	}
 }
 
+// aptInstall run for real with apt-get stubbed: a stale-index fetch failure (404 /
+// "Unable to fetch some archives") refreshes once and retries once; any other
+// failure is returned as-is with no retry; success needs no refresh.
+func TestAptInstallRetriesFetchFailureOnce(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	for name, tc := range map[string]struct {
+		firstErr  string // stderr of the first failing install ("" = success)
+		secondRC  string
+		wantCalls string
+		wantFail  bool
+	}{
+		"ok":              {"", "0", "install ", false},
+		"404 then ok":     {"E: Failed to fetch http://x/pool/a.deb  404  Not Found [IP: 1.2.3.4 80]", "0", "install update install ", false},
+		"unable then bad": {"E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?", "100", "install update install ", true},
+		"other error":     {"E: Sub-process /usr/bin/dpkg returned an error code (1)", "0", "install ", true},
+	} {
+		dir := t.TempDir()
+		marker := filepath.ToSlash(filepath.Join(dir, "marker"))
+		calls := filepath.ToSlash(filepath.Join(dir, "calls"))
+		// The first install runs inside $(…), a subshell: count calls in the file.
+		stub := "apt-get() { printf '%s ' \"$3\" >> '" + calls + "'; [ \"$3\" = update ] && return 0; mw_n=$(grep -o install '" + calls + "' | wc -l)\n" +
+			"  if [ $mw_n -eq 1 ] && [ -n '" + tc.firstErr + "' ]; then echo '" + tc.firstErr + "' >&2; return 100; fi\n" +
+			"  [ $mw_n -eq 1 ] && return 0; return " + tc.secondRC + "; }\n" +
+			"apt-cache() { echo '  Candidate: 1.0'; }\n"
+		p := filepath.Join(dir, "s.sh")
+		s := strings.ReplaceAll(aptInstall("pkg"), AptUpdateMarker, marker)
+		if err := os.WriteFile(p, []byte("set -e\n"+stub+s+"echo DONE\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		out, err := exec.CommandContext(t.Context(), bash, p).CombinedOutput()
+		if (err != nil) != tc.wantFail || strings.Contains(string(out), "DONE") == tc.wantFail {
+			t.Errorf("%s: err=%v wantFail=%v\n%s", name, err, tc.wantFail, out)
+		}
+		if tc.firstErr != "" && !strings.Contains(string(out), tc.firstErr) {
+			t.Errorf("%s: captured stderr must be re-emitted:\n%s", name, out)
+		}
+		b, _ := os.ReadFile(filepath.FromSlash(calls)) // #nosec G304 -- t.TempDir file we wrote
+		if string(b) != tc.wantCalls {
+			t.Errorf("%s: apt-get calls %q, want %q", name, b, tc.wantCalls)
+		}
+	}
+}
+
 // A3 probed only fail2ban; a missing python3-systemd (mandatory for the systemd
 // backend) then failed the install instead of healing/skipping with its name.
 func TestA3CandidateProbeCoversPython3Systemd(t *testing.T) {

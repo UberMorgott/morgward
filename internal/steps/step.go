@@ -241,9 +241,31 @@ const aptConfOpts = ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="-
 // (rust-coreutils/uutils) those children cannot resolve libstdbuf.so and ld.so spams
 // "object '…/libstdbuf.so' from LD_PRELOAD cannot be preloaded … ignored" for the
 // whole install. Dpkg::Use-Pty=0 in aptConfOpts covers the output shape instead.
+//
+// The install itself runs through aptInstallRetry; the LAST line is the single
+// `mw_apt_install <pkgs>` call so callers can append `|| …` to it.
 func aptInstall(pkgs string) string {
-	return aptEnsureCandidates(pkgs) + aptGet + " install -y" + aptConfOpts + " " + pkgs + "\n"
+	return aptEnsureCandidates(pkgs) + aptInstallRetry + "mw_apt_install " + pkgs + "\n"
 }
+
+// aptInstallRetry defines mw_apt_install: install, and when it fails because the
+// archives a stale index points at are gone ("404 Not Found" / "Unable to fetch some
+// archives" — the mirror moved on since the per-boot refresh), refresh the index once
+// and retry the install once. stdout streams live; stderr is captured to match the
+// error and then re-emitted on stderr. Returns the final install rc; never trips the
+// caller's `set -e` inside the function.
+const aptInstallRetry = "mw_apt_install() {\n" +
+	"  mw_rc=0\n" +
+	"  { mw_err=$(" + aptGet + " install -y" + aptConfOpts + " \"$@\" 2>&1 1>&3 3>&-) || mw_rc=$?; } 3>&1\n" +
+	"  [ -z \"$mw_err\" ] || printf '%s\\n' \"$mw_err\" >&2\n" +
+	"  if [ \"$mw_rc\" -ne 0 ] && printf '%s\\n' \"$mw_err\" | grep -Eq 'Unable to fetch some archives|404 +Not Found'; then\n" +
+	"    echo 'morgward: package download failed against a stale apt index - refreshing and retrying once'\n" +
+	"    " + aptGet + " update >/dev/null && : > " + AptUpdateMarker + " || true\n" +
+	"    mw_rc=0\n" +
+	"    " + aptGet + " install -y" + aptConfOpts + " \"$@\" || mw_rc=$?\n" +
+	"  fi\n" +
+	"  return $mw_rc\n" +
+	"}\n"
 
 // aptEnableUniverse adds the `universe` component to the Ubuntu archive entries that
 // carry `main` but not `universe`: every `Components:` line of the deb822
