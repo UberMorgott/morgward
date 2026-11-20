@@ -27,7 +27,12 @@ func (Precond) Run(ctx *Context) (Status, string, error) {
 		return StatusFail, "apt-get update failed: " + firstLine(upd.Stderr), fmt.Errorf("apt index refresh failed")
 	}
 	ctx.Cli.Sudo(": > " + AptUpdateMarker)
-	if cand := ctx.Cli.Run("apt-cache policy iptables-persistent | awk '/Candidate/{print $2}'").Out(); cand == "" || cand == "(none)" {
+	candCmd := "apt-cache policy iptables-persistent | awk '/Candidate/{print $2}'"
+	if cand := ctx.Cli.Run(candCmd).Out(); cand == "" || cand == "(none)" {
+		// iptables-persistent is in `universe`; heal an image shipped without it.
+		ctx.Cli.Sudo(aptPreludeNoUpdate() + aptEnsureCandidates("iptables-persistent"))
+	}
+	if cand := ctx.Cli.Run(candCmd).Out(); cand == "" || cand == "(none)" {
 		return StatusFail, "iptables-persistent has no install candidate", fmt.Errorf("apt index empty")
 	}
 

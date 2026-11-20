@@ -242,7 +242,42 @@ const aptConfOpts = ` -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="-
 // "object '…/libstdbuf.so' from LD_PRELOAD cannot be preloaded … ignored" for the
 // whole install. Dpkg::Use-Pty=0 in aptConfOpts covers the output shape instead.
 func aptInstall(pkgs string) string {
-	return aptGet + " install -y" + aptConfOpts + " " + pkgs + "\n"
+	return aptEnsureCandidates(pkgs) + aptGet + " install -y" + aptConfOpts + " " + pkgs + "\n"
+}
+
+// aptEnableUniverse adds the `universe` component to the Ubuntu archive entries that
+// carry `main` but not `universe`: every `Components:` line of the deb822
+// ubuntu.sources (24.04+) and every active `deb` line naming an ubuntu mirror in the
+// legacy sources.list (22.04). Third-party lists under sources.list.d are never
+// touched (appending a component they lack would break their `apt-get update`), and
+// a Debian box has neither match, so it is a no-op there. Idempotent; best-effort.
+// MW_APT_ETC exists only so tests can point it at a fixture tree.
+const aptEnableUniverse = ": \"${MW_APT_ETC:=/etc/apt}\"\n" +
+	"if [ -f \"$MW_APT_ETC/sources.list.d/ubuntu.sources\" ]; then sed -i -E '/^Components:.*[[:space:]]main([[:space:]]|$)/{/[[:space:]]universe([[:space:]]|$)/!s/[[:space:]]*$/ universe/}' \"$MW_APT_ETC/sources.list.d/ubuntu.sources\" || true; fi\n" +
+	"if [ -f \"$MW_APT_ETC/sources.list\" ]; then sed -i -E '/^deb[[:space:]].*ubuntu.*[[:space:]]main([[:space:]]|$)/{/[[:space:]]universe([[:space:]]|$)/!s/[[:space:]]main([[:space:]]|$)/ main universe\\1/}' \"$MW_APT_ETC/sources.list\" || true; fi\n"
+
+// aptEnsureCandidates is the self-heal every aptInstall runs first. A package with
+// no install candidate means the index is missing/stale (the per-boot marker from an
+// earlier run in this boot suppresses aptUpdateOnce) or the image ships without
+// `universe` (minimal provider images: "Package 'iptables-persistent' has no
+// installation candidate"). Heal in two stages: force a refresh past the marker;
+// only if a candidate is still missing, enable universe and refresh again. Then the
+// install line decides. Refresh errors stay visible (stderr); never trips `set -e`;
+// no-op when every candidate exists.
+func aptEnsureCandidates(pkgs string) string {
+	refresh := aptGet + " update >/dev/null && : > " + AptUpdateMarker + " || true\n"
+	return "mw_nc_probe() { mw_nc=\"\"; for mw_pk in " + pkgs + "; do case \"$(LC_ALL=C apt-cache policy \"$mw_pk\" 2>/dev/null | awk '/Candidate:/{print $2}')\" in ''|'(none)') mw_nc=\"$mw_nc $mw_pk\" ;; esac; done; }\n" +
+		"mw_nc_probe\n" +
+		"if [ -n \"$mw_nc\" ]; then\n" +
+		"echo \"morgward: no install candidate for$mw_nc - refreshing the apt index\"\n" +
+		refresh +
+		"mw_nc_probe\n" +
+		"fi\n" +
+		"if [ -n \"$mw_nc\" ]; then\n" +
+		"echo \"morgward: still no install candidate for$mw_nc - enabling universe and refreshing\"\n" +
+		aptEnableUniverse +
+		refresh +
+		"fi\n"
 }
 
 // aptInstallOptional is aptInstall for a package whose absence must NOT fail the

@@ -109,6 +109,11 @@ func (a A1Firewall) Run(ctx *Context) (Status, string, error) {
 		return StatusSkip, "firewall already closed with SSH open and persisted", nil
 	}
 
+	// 0. Heal a missing iptables-persistent candidate (stale index / no universe) and
+	// wait out apt automation BEFORE arming: index-only, nothing installed, so the
+	// slow apt work cannot eat the 300s fail-safe window.
+	ctx.Cli.Sudo(aptPrelude() + aptEnsureCandidates("iptables-persistent"))
+
 	// 1. Snapshot + rollback script + arm the 300s fail-safe timer.
 	arm := fmt.Sprintf(`set -e
 iptables-save  > /root/iptables-backup.v4

@@ -2,6 +2,10 @@ package steps
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -213,6 +217,138 @@ func TestDNSScriptTriesBothDnsutilsNames(t *testing.T) {
 	}
 	if i > j {
 		t.Error("the real package bind9-dnsutils must be tried before the transitional stub")
+	}
+}
+
+// A stamped per-boot marker or an image without `universe` left A1's install with
+// "no installation candidate". Every install must first heal that (enable universe,
+// force a refresh that re-stamps the marker), never trip `set -e`, and still end in
+// the install line itself.
+func TestAptInstallEnsuresCandidates(t *testing.T) {
+	s := aptInstall("iptables-persistent")
+	g := strings.Index(s, "LC_ALL=C apt-cache policy \"$mw_pk\"")
+	u := strings.Index(s, aptGet+" update >/dev/null && : > "+AptUpdateMarker+" || true")
+	i := strings.Index(s, aptGet+" install -y")
+	if g < 0 || u < 0 || i < 0 || g > u || u > i {
+		t.Fatalf("install must probe candidates, then refresh, then install:\n%s", s)
+	}
+	if !strings.Contains(s, aptEnableUniverse) || strings.Contains(s, "add-apt-repository") {
+		t.Errorf("must enable universe via the shared sed fragment (no software-properties dependency):\n%s", s)
+	}
+	if !strings.HasSuffix(s, " iptables-persistent\n") {
+		t.Errorf("install line must stay last: %q", s)
+	}
+	if bash, _ := exec.LookPath("bash"); bash != "" {
+		p := filepath.Join(t.TempDir(), "s.sh")
+		if err := os.WriteFile(p, []byte("set -e\n"+aptPrelude()+s+aptInstallOptional("earlyoom")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		if out, err := exec.CommandContext(t.Context(), bash, "-n", p).CombinedOutput(); err != nil {
+			t.Errorf("bash -n rejected the install script: %v\n%s", err, out)
+		}
+	}
+}
+
+// aptEnsureCandidates run for real with apt stubbed: a stale index is healed by a
+// forced refresh alone (sources untouched); only a candidate still missing after it
+// enables universe; a present candidate costs no refresh at all.
+func TestAptEnsureCandidatesBehavior(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	// needUpdates = how many `apt-get update` calls until the candidate appears.
+	run := func(needUpdates int) (out, sources string) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "sources.list.d"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		src := filepath.Join(dir, "sources.list.d", "ubuntu.sources")
+		if err := os.WriteFile(src, []byte("Components: main restricted\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stub := "MW_APT_ETC='" + filepath.ToSlash(dir) + "'\nmw_upd=0\n" +
+			"apt-get() { echo \"CALL apt-get $*\" >&2; mw_upd=$((mw_upd + 1)); }\n" +
+			"apt-cache() { if [ \"$mw_upd\" -ge " + strconv.Itoa(needUpdates) + " ]; then echo '  Candidate: 1.0'; else echo '  Candidate: (none)'; fi; }\n"
+		p := filepath.Join(t.TempDir(), "s.sh")
+		if err := os.WriteFile(p, []byte("set -e\n"+stub+aptEnsureCandidates("iptables-persistent")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		o, err := exec.CommandContext(t.Context(), bash, p).CombinedOutput()
+		if err != nil {
+			t.Fatalf("script failed: %v\n%s", err, o)
+		}
+		b, err := os.ReadFile(src) // #nosec G304 -- t.TempDir file we wrote
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(o), string(b)
+	}
+	cases := []struct {
+		need, updates int
+		universe      bool
+	}{{0, 0, false}, {1, 1, false}, {2, 2, true}}
+	for _, c := range cases {
+		o, s := run(c.need)
+		if n := strings.Count(o, "CALL apt-get"); n != c.updates {
+			t.Errorf("need=%d: want %d refreshes, got %d:\n%s", c.need, c.updates, n, o)
+		}
+		if got := strings.Contains(s, "universe"); got != c.universe {
+			t.Errorf("need=%d: universe enabled=%v, want %v (sources %q)", c.need, got, c.universe, s)
+		}
+	}
+}
+
+// aptEnableUniverse run for real against fixture sources: adds universe to the
+// Ubuntu deb822 stanzas and legacy ubuntu `deb` lines, idempotently, and leaves
+// comments, deb-src-less third-party lines and already-complete entries alone.
+func TestAptEnableUniverseBehavior(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sources.list.d"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	deb822 := "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates\nComponents: main restricted\n\n" +
+		"Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main restricted universe\n"
+	legacy := "# deb http://archive.ubuntu.com/ubuntu jammy main restricted\n" +
+		"deb http://archive.ubuntu.com/ubuntu jammy main restricted\n" +
+		"deb [arch=amd64] http://mirror.example.com/ubuntu jammy-security main\n" +
+		"deb https://download.docker.com/linux/debian bookworm stable main\n"
+	write := func(p, s string) {
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "sources.list.d", "ubuntu.sources"), deb822)
+	write(filepath.Join(dir, "sources.list"), legacy)
+	script := filepath.Join(t.TempDir(), "s.sh")
+	write(script, "MW_APT_ETC='"+filepath.ToSlash(dir)+"'\n"+aptEnableUniverse+aptEnableUniverse)
+	// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+	if out, err := exec.CommandContext(t.Context(), bash, script).CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	read := func(p string) string {
+		b, err := os.ReadFile(p) // #nosec G304 -- t.TempDir file we wrote
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if got, want := read(filepath.Join(dir, "sources.list.d", "ubuntu.sources")),
+		strings.Replace(deb822, "Components: main restricted\n", "Components: main restricted universe\n", 1); got != want {
+		t.Errorf("deb822:\ngot  %q\nwant %q", got, want)
+	}
+	wantLegacy := "# deb http://archive.ubuntu.com/ubuntu jammy main restricted\n" +
+		"deb http://archive.ubuntu.com/ubuntu jammy main universe restricted\n" +
+		"deb [arch=amd64] http://mirror.example.com/ubuntu jammy-security main universe\n" +
+		"deb https://download.docker.com/linux/debian bookworm stable main\n"
+	if got := read(filepath.Join(dir, "sources.list")); got != wantLegacy {
+		t.Errorf("legacy:\ngot  %q\nwant %q", got, wantLegacy)
 	}
 }
 
