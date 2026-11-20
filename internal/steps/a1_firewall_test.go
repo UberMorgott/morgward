@@ -1,11 +1,60 @@
 package steps
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/UberMorgott/morgward/internal/detect"
 )
+
+// A1 aborted after its rules went live (persistence failed), so every re-run used
+// to append the whole INPUT set again. Run the ruleset twice under real bash with
+// iptables/ip6tables stubbed as a rule store: the second run must add nothing.
+func TestRulesetIdempotentOnRerun(t *testing.T) {
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	store := filepath.ToSlash(filepath.Join(dir, "rules"))
+	stub := "touch '" + store + "'\n" +
+		"mw_ipt() { fam=$1; shift; op=$1; shift; case $op in -C) grep -qxF \"$fam $*\" '" + store + "' ;; -A) echo \"$fam $*\" >> '" + store + "' ;; esac; }\n" +
+		"iptables() { mw_ipt v4 \"$@\"; }\nip6tables() { mw_ipt v6 \"$@\"; }\n"
+	for name, rs := range map[string]string{
+		"greenfield": greenfieldRuleset(22),
+		"coexist":    coexistRuleset(2222, []int{80, 2222}, []int{53}),
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "rules"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "s.sh")
+		if err := os.WriteFile(p, []byte(stub+rs+rs), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// #nosec G204 -- bash comes from exec.LookPath and the arg is a temp file we wrote
+		if out, err := exec.CommandContext(t.Context(), bash, p).CombinedOutput(); err != nil {
+			t.Fatalf("%s: script failed: %v\n%s", name, err, out)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "rules")) // #nosec G304 -- t.TempDir file we wrote
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		seen := map[string]bool{}
+		for _, l := range lines {
+			if seen[l] {
+				t.Errorf("%s: duplicate rule after re-run: %q", name, l)
+			}
+			seen[l] = true
+		}
+		if !seen["v4 INPUT -p tcp --dport "+map[string]string{"greenfield": "22", "coexist": "2222"}[name]+" -m conntrack --ctstate NEW -j ACCEPT"] {
+			t.Errorf("%s: SSH accept missing from store:\n%s", name, b)
+		}
+	}
+}
 
 // TestAllPortsOpenAndPersistedGreenfield: greenfield only needs SSH :cfg.Port in
 // both the live ruleset and rules.v4 — service ports are irrelevant.
@@ -236,24 +285,25 @@ func TestDportOpen(t *testing.T) {
 // A1's generated ruleset is lockout-capable and CLAUDE.md pins the greenfield
 // path as byte-identical. These two goldens are the enforcement: they are the
 // EXACT scripts the builders emitted before the v4/v6 families were folded into
-// one loop, comment text included. Any future edit that changes so much as a
+// one loop, comment text included, plus the deliberate `-C … ||` re-run guard on
+// every append (TestRulesetIdempotentOnRerun). Any future edit that changes so much as a
 // comment fails here. Do not "fix" a golden to match new output — the golden is
 // the contract; make the builder match it.
 
 const goldenGreenfieldRuleset = `set -e
 # --- IPv4 ---
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -A INPUT -i lo -j ACCEPT
+iptables -C INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -C INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
 # --- IPv6 mirror (ICMPv6 NDP before INVALID drop) ---
-ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
-ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
-ip6tables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+for t in 1 2 3 4 133 134 135 136; do ip6tables -C INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
+ip6tables -C INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
+ip6tables -C INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
 ip6tables -P INPUT DROP
 ip6tables -P FORWARD DROP
 `
@@ -262,25 +312,25 @@ ip6tables -P FORWARD DROP
 // the dedup path is exercised mid-list), two UDP ports, and NO -P FORWARD line.
 const goldenCoexistRuleset = `set -e
 # --- IPv4 (coexistence) ---
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT
-iptables -A INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT
-iptables -A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT
-iptables -A INPUT -p udp --dport 51820 -j ACCEPT
-iptables -A INPUT -p udp --dport 53 -j ACCEPT
+iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -A INPUT -i lo -j ACCEPT
+iptables -C INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -C INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT
+iptables -C INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT
+iptables -C INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT
+iptables -C INPUT -p udp --dport 51820 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 53 -j ACCEPT
 iptables -P INPUT DROP
 # --- IPv6 mirror (coexistence) ---
-ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
-ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
-ip6tables -A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT
-ip6tables -A INPUT -p udp --dport 51820 -j ACCEPT
-ip6tables -A INPUT -p udp --dport 53 -j ACCEPT
+ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+for t in 1 2 3 4 133 134 135 136; do ip6tables -C INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
+ip6tables -C INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
+ip6tables -C INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 2222 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -C INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -C INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 8080 -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -C INPUT -p udp --dport 51820 -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p udp --dport 51820 -j ACCEPT
+ip6tables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p udp --dport 53 -j ACCEPT
 ip6tables -P INPUT DROP
 `
 

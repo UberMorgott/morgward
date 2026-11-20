@@ -345,21 +345,27 @@ var ipFamilies = []ipFamily{
 		bin:           "iptables",
 		header:        "# --- IPv4 ---",
 		coexistHeader: "# --- IPv4 (coexistence) ---",
-		prologue: `iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-`,
+		prologue: appendOnce("iptables", "-i lo -j ACCEPT") +
+			appendOnce("iptables", "-m conntrack --ctstate INVALID -j DROP") +
+			appendOnce("iptables", "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"),
 	},
 	{
 		bin:           "ip6tables",
 		header:        "# --- IPv6 mirror (ICMPv6 NDP before INVALID drop) ---",
 		coexistHeader: "# --- IPv6 mirror (coexistence) ---",
-		prologue: `ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for t in 1 2 3 4 133 134 135 136; do ip6tables -A INPUT -p ipv6-icmp --icmpv6-type $t -j ACCEPT; done
-ip6tables -A INPUT -m conntrack --ctstate INVALID -j DROP
-`,
+		prologue: appendOnce("ip6tables", "-i lo -j ACCEPT") +
+			appendOnce("ip6tables", "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT") +
+			"for t in 1 2 3 4 133 134 135 136; do " +
+			strings.TrimSuffix(appendOnce("ip6tables", "-p ipv6-icmp --icmpv6-type $t -j ACCEPT"), "\n") + "; done\n" +
+			appendOnce("ip6tables", "-m conntrack --ctstate INVALID -j DROP"),
 	},
+}
+
+// appendOnce appends an INPUT rule only when an identical one is not already there
+// (`-C` checks existence), so re-running A1 after a failed/aborted run, whose rules
+// stay live, never stacks duplicate copies. Same pattern as RUNBOOK's -C guards.
+func appendOnce(bin, spec string) string {
+	return fmt.Sprintf("%[1]s -C INPUT %[2]s 2>/dev/null || %[1]s -A INPUT %[2]s\n", bin, spec)
 }
 
 // inputRuleset emits the shared INPUT lockdown for both families: base hygiene,
@@ -378,18 +384,18 @@ func inputRuleset(port int, tcp, udp []int, greenfield bool) string {
 		}
 		b.WriteString(header + "\n")
 		b.WriteString(f.prologue)
-		fmt.Fprintf(&b, "%s -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", f.bin, port)
+		b.WriteString(appendOnce(f.bin, fmt.Sprintf("-p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT", port)))
 		for _, p := range tcp {
 			if p == port {
 				continue // SSH port already opened above
 			}
-			fmt.Fprintf(&b, "%s -A INPUT -p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT\n", f.bin, p)
+			b.WriteString(appendOnce(f.bin, fmt.Sprintf("-p tcp --dport %d -m conntrack --ctstate NEW -j ACCEPT", p)))
 		}
 		for _, p := range udp {
 			if p == port {
 				continue
 			}
-			fmt.Fprintf(&b, "%s -A INPUT -p udp --dport %d -j ACCEPT\n", f.bin, p)
+			b.WriteString(appendOnce(f.bin, fmt.Sprintf("-p udp --dport %d -j ACCEPT", p)))
 		}
 		fmt.Fprintf(&b, "%s -P INPUT DROP\n", f.bin)
 		if greenfield {
