@@ -1,7 +1,9 @@
 package steps
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -103,6 +105,29 @@ func TestA8UpdateFailureFailsScript(t *testing.T) {
 		}
 		if updRC != "0" && (err == nil || strings.Contains(string(out), "full-upgrade")) {
 			t.Errorf("update failed: must fail without full-upgrade, err=%v out=%q", err, out)
+		}
+	}
+}
+
+// PRE stamps the per-boot marker in the same script, only after a successful
+// refresh, and the script rc stays the refresh's rc (PRE's hard gate).
+func TestPreAptUpdateStampsMarkerOnlyOnSuccess(t *testing.T) {
+	tail, ok := strings.CutPrefix(preAptUpdateScript(), aptPreludeNoUpdate())
+	if !ok || tail != aptGet+" update && : > "+AptUpdateMarker+"\n" {
+		t.Fatalf("PRE tail: %q", tail)
+	}
+	bash, _ := exec.LookPath("bash")
+	if bash == "" {
+		t.Skip("no bash")
+	}
+	for _, rc := range []string{"0", "100"} {
+		marker := filepath.ToSlash(filepath.Join(t.TempDir(), "marker"))
+		stub := "apt-get() { return " + rc + "; }\n"
+		// #nosec G204 -- bash comes from exec.LookPath and the script is ours
+		_, err := exec.CommandContext(t.Context(), bash, "-c", stub+strings.ReplaceAll(tail, AptUpdateMarker, marker)).CombinedOutput()
+		_, statErr := os.Stat(filepath.FromSlash(marker))
+		if (err == nil) != (rc == "0") || (statErr == nil) != (rc == "0") {
+			t.Errorf("update rc=%s: script err=%v, marker stat err=%v", rc, err, statErr)
 		}
 	}
 }

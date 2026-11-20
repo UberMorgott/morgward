@@ -26,14 +26,13 @@ func (Precond) Run(ctx *Context) (Status, string, error) {
 	if upd.RC != 0 {
 		return StatusFail, "apt-get update failed: " + firstLine(upd.Stderr), fmt.Errorf("apt index refresh failed")
 	}
-	ctx.Cli.Sudo(": > " + AptUpdateMarker)
-	candCmd := "apt-cache policy iptables-persistent | awk '/Candidate/{print $2}'"
-	if cand := ctx.Cli.Run(candCmd).Out(); cand == "" || cand == "(none)" {
+	if missingCandidates(ctx, "iptables-persistent") != "" {
 		// iptables-persistent is in `universe`; heal an image shipped without it.
 		ctx.Cli.Sudo(aptPreludeNoUpdate() + aptEnsureCandidates("iptables-persistent"))
-	}
-	if cand := ctx.Cli.Run(candCmd).Out(); cand == "" || cand == "(none)" {
-		return StatusFail, "iptables-persistent has no install candidate", fmt.Errorf("apt index empty")
+		if missingCandidates(ctx, "iptables-persistent") != "" {
+			return StatusFail, "iptables-persistent has no install candidate even after an index refresh and enabling universe",
+				fmt.Errorf("iptables-persistent has no install candidate")
+		}
 	}
 
 	admin := ctx.Cfg.AdminUser
@@ -90,9 +89,10 @@ unset ADMIN_PW`, admin, sshx.SecretMarkerPrefix)
 }
 
 // preAptUpdateScript is PRE's hard-gate index refresh: the no-update prelude
-// (which quiesces boot-time apt automation first) plus an unconditional update.
+// (which quiesces boot-time apt automation first) plus an unconditional update that
+// stamps AptUpdateMarker only when it succeeded; the script rc is the update's.
 func preAptUpdateScript() string {
-	return aptPreludeNoUpdate() + aptGet + " update\n"
+	return aptPreludeNoUpdate() + aptGet + " update && : > " + AptUpdateMarker + "\n"
 }
 
 // putAuthorizedKey writes the key line into the user's authorized_keys via base64.
