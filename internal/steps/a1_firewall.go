@@ -211,11 +211,9 @@ echo 'iptables-persistent iptables-persistent/autosave_v6 boolean false' | debco
 // a failed save or a missing port; it never disarms anything — the caller does that
 // only after this succeeds.
 func a1PersistScript(port int) string {
-	s := "netfilter-persistent save >/dev/null || { echo 'netfilter-persistent save failed' >&2; exit 1; }\n"
-	for _, f := range []string{"/etc/iptables/rules.v4", "/etc/iptables/rules.v6"} {
-		s += fmt.Sprintf("grep -Eq -- '--dport %[1]d( |$)' %[2]s || { echo '%[2]s lacks SSH port %[1]d' >&2; exit 1; }\n", port, f)
-	}
-	return s
+	chk := "grep -Eq -- '--dport %[1]d( |$)' %[2]s || { echo '%[2]s lacks SSH port %[1]d' >&2; exit 1; }\n"
+	return "netfilter-persistent save >/dev/null || { echo 'netfilter-persistent save failed' >&2; exit 1; }\n" +
+		fmt.Sprintf(chk, port, "/etc/iptables/rules.v4") + fmt.Sprintf(chk, port, "/etc/iptables/rules.v6")
 }
 
 // runUFW is the brownfield path for a box whose firewall is managed by ufw. ufw
